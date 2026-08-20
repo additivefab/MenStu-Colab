@@ -194,6 +194,7 @@ export default function Dashboard() {
     month: "long",
     day: "numeric",
     weekday: "short",
+    timeZone: "Asia/Shanghai",
   }).format(new Date());
 
   if (!loading && authGate) {
