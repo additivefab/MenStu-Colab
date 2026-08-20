@@ -1,0 +1,2 @@
+CREATE INDEX `idx_progress_student_submitted` ON `progress_entries` (`student_id`,`submitted_at`);--> statement-breakpoint
+CREATE INDEX `idx_progress_status` ON `progress_entries` (`status`,`submitted_at`);
