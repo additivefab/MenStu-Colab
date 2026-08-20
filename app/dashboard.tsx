@@ -156,8 +156,8 @@ export default function Dashboard() {
         </nav>
         <div className="privacy-note"><span>AI 数据边界已启用</span><small>代码与保密项目仅限本地模型</small></div>
         <div className="sidebar-foot">
-          <div className="avatar">导</div>
-          <div><strong>主导师</strong><span>管理员 · 最终确认人</span></div>
+          <div className="avatar">于</div>
+          <div><strong>于兴华</strong><span>主导师 · 管理员</span></div>
         </div>
       </aside>
 
