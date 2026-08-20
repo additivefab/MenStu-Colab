@@ -76,8 +76,33 @@ export async function ensureDatabase() {
       reviewer_note TEXT NOT NULL DEFAULT '',
       reviewed_at TEXT
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS app_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feishu_open_id TEXT NOT NULL UNIQUE,
+      feishu_union_id TEXT NOT NULL DEFAULT '',
+      feishu_user_id TEXT NOT NULL DEFAULT '',
+      display_name TEXT NOT NULL,
+      avatar_url TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL DEFAULT '',
+      role TEXT NOT NULL DEFAULT 'pending',
+      student_id TEXT REFERENCES students(id),
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_login_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS app_sessions (
+      token_hash TEXT PRIMARY KEY,
+      app_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_student_submitted ON progress_entries(student_id, submitted_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_status ON progress_entries(status, submitted_at DESC)"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_feishu_open_id ON app_users(feishu_open_id)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_users_role ON app_users(role)"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_student_id_unique ON app_users(student_id)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_sessions_user ON app_sessions(app_user_id)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_sessions_expires ON app_sessions(expires_at)"),
   ]);
 
   const count = await d1.prepare("SELECT COUNT(*) AS count FROM students").first<{ count: number }>();

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const students = sqliteTable("students", {
   id: text("id").primaryKey(),
@@ -39,5 +39,46 @@ export const progressEntries = sqliteTable(
   (table) => [
     index("idx_progress_student_submitted").on(table.studentId, table.submittedAt),
     index("idx_progress_status").on(table.status, table.submittedAt),
+  ],
+);
+
+export const appUsers = sqliteTable(
+  "app_users",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    feishuOpenId: text("feishu_open_id").notNull(),
+    feishuUnionId: text("feishu_union_id").notNull().default(""),
+    feishuUserId: text("feishu_user_id").notNull().default(""),
+    displayName: text("display_name").notNull(),
+    avatarUrl: text("avatar_url").notNull().default(""),
+    email: text("email").notNull().default(""),
+    role: text("role", { enum: ["admin", "student", "pending"] })
+      .notNull()
+      .default("pending"),
+    studentId: text("student_id").references(() => students.id),
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    lastLoginAt: text("last_login_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_app_users_feishu_open_id").on(table.feishuOpenId),
+    index("idx_app_users_role").on(table.role),
+    uniqueIndex("idx_app_users_student_id_unique").on(table.studentId),
+  ],
+);
+
+export const appSessions = sqliteTable(
+  "app_sessions",
+  {
+    tokenHash: text("token_hash").primaryKey(),
+    appUserId: integer("app_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    expiresAt: text("expires_at").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_app_sessions_user").on(table.appUserId),
+    index("idx_app_sessions_expires").on(table.expiresAt),
   ],
 );

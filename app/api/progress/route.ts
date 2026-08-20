@@ -1,9 +1,15 @@
 import { ensureDatabase, getD1 } from "../../../lib/database";
+import { assertSameOrigin, requireAppUser } from "../../../lib/feishu-auth";
 
 const allowedKinds = new Set(["文献", "实验", "算法", "数据", "论文", "复现", "项目"]);
 
 export async function POST(request: Request) {
   try {
+    if (!assertSameOrigin(request)) {
+      return Response.json({ error: "请求来源无效" }, { status: 403 });
+    }
+    const auth = await requireAppUser(request, ["admin", "student"]);
+    if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = (await request.json()) as Record<string, unknown>;
     const studentId = String(body.studentId ?? "").trim();
@@ -19,6 +25,9 @@ export async function POST(request: Request) {
     }
     if (kind === "文献" && !literatureRef) {
       return Response.json({ error: "文献进展需要填写论文题目或 DOI" }, { status: 400 });
+    }
+    if (auth.user.role === "student" && auth.user.studentId !== studentId) {
+      return Response.json({ error: "学生账号只能提交自己的进展" }, { status: 403 });
     }
 
     const d1 = getD1();

@@ -2,6 +2,23 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
+declare global {
+  interface Window {
+    h5sdk?: {
+      ready(callback: () => void): void;
+      error(callback: (error: unknown) => void): void;
+    };
+    tt?: {
+      requestAccess(options: {
+        appID: string;
+        scopeList: string[];
+        success(result: { code: string }): void;
+        fail(error: unknown): void;
+      }): void;
+    };
+  }
+}
+
 type RiskLevel = "正常" | "黄色" | "橙色" | "红色";
 type Student = {
   id: string;
@@ -31,6 +48,12 @@ type PendingEntry = {
 };
 
 type DashboardData = {
+  viewer: {
+    name: string;
+    avatarUrl: string;
+    role: "admin" | "student";
+    studentId: string | null;
+  };
   students: Student[];
   pending: PendingEntry[];
   metrics: {
@@ -41,6 +64,11 @@ type DashboardData = {
     attention: number;
     riskCounts: Record<string, number>;
   };
+};
+
+type AuthGate = {
+  kind: "required" | "pending" | "setup";
+  message: string;
 };
 
 const navItems = [
@@ -76,13 +104,27 @@ export default function Dashboard() {
   const [feishuOpen, setFeishuOpen] = useState(false);
   const [reviewBusy, setReviewBusy] = useState<number | null>(null);
   const [toast, setToast] = useState("");
+  const [authGate, setAuthGate] = useState<AuthGate | null>(null);
 
   const loadDashboard = useCallback(async () => {
     try {
       setError("");
       const response = await fetch("/api/dashboard", { cache: "no-store" });
-      const payload = (await response.json()) as DashboardData & { error?: string };
+      const payload = (await response.json()) as DashboardData & { code?: string; error?: string };
+      if (response.status === 401) {
+        setAuthGate({ kind: "required", message: payload.error || "请使用飞书登录" });
+        return;
+      }
+      if (response.status === 403 && payload.code === "FEISHU_ACCOUNT_PENDING") {
+        setAuthGate({ kind: "pending", message: payload.error || "账号等待导师分配角色" });
+        return;
+      }
+      if (response.status === 503 && payload.code === "FEISHU_NOT_CONFIGURED") {
+        setAuthGate({ kind: "setup", message: payload.error || "飞书应用尚未配置" });
+        return;
+      }
       if (!response.ok) throw new Error(payload.error || "加载失败");
+      setAuthGate(null);
       setData(payload);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "加载失败");
@@ -132,12 +174,35 @@ export default function Dashboard() {
     }
   }
 
+  async function sendReminder(student: Student) {
+    try {
+      const response = await fetch("/api/feishu/reminders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentId: student.id }),
+      });
+      const result = (await response.json()) as { error?: string; message?: string };
+      if (!response.ok) throw new Error(result.error || "提醒发送失败");
+      setToast(result.message || "飞书提醒已发送");
+    } catch (reminderError) {
+      setToast(reminderError instanceof Error ? reminderError.message : "提醒发送失败");
+    }
+  }
+
   const today = new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
     month: "long",
     day: "numeric",
     weekday: "short",
   }).format(new Date());
+
+  if (!loading && authGate) {
+    return <FeishuAccessGate gate={authGate} onAuthenticated={loadDashboard} />;
+  }
+
+  const visibleNavItems = data?.viewer.role === "student"
+    ? navItems.filter((item) => ["overview", "students", "meetings"].includes(item.id))
+    : navItems;
 
   return (
     <main className="app-shell">
@@ -147,7 +212,7 @@ export default function Dashboard() {
           <div><strong>探研</strong><span>射线探伤 × AI</span></div>
         </div>
         <nav aria-label="主导航">
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <button className={`nav-item ${view === item.id ? "active" : ""}`} key={item.id} onClick={() => setView(item.id)}>
               <span>{item.icon}</span>{item.label}
               {item.id === "reviews" && data?.metrics.pending ? <b>{data.metrics.pending}</b> : null}
@@ -156,8 +221,8 @@ export default function Dashboard() {
         </nav>
         <div className="privacy-note"><span>AI 数据边界已启用</span><small>代码与保密项目仅限本地模型</small></div>
         <div className="sidebar-foot">
-          <div className="avatar">于</div>
-          <div><strong>于兴华</strong><span>主导师 · 管理员</span></div>
+          <div className="avatar">{data?.viewer.name.slice(0, 1) || "于"}</div>
+          <div><strong>{data?.viewer.name || "于兴华"}</strong><span>{data?.viewer.role === "student" ? "学生" : "主导师 · 管理员"}</span></div>
         </div>
       </aside>
 
@@ -171,7 +236,7 @@ export default function Dashboard() {
             </p>
           </div>
           <div className="top-actions">
-            <button className="feishu" onClick={() => setFeishuOpen(true)}><i />飞书接入待配置</button>
+            <button className="feishu connected" onClick={() => setFeishuOpen(true)}><i />飞书已登录</button>
             <button className="primary" onClick={() => setSubmitOpen(true)}>＋ 提交进展</button>
           </div>
         </header>
@@ -255,13 +320,13 @@ export default function Dashboard() {
           </section>
         ) : null}
 
-        {!loading && !error && view === "meetings" ? <MeetingView students={data?.students ?? []} /> : null}
-        {!loading && !error && view === "settings" ? <SettingsView onFeishu={() => setFeishuOpen(true)} /> : null}
+        {!loading && !error && view === "meetings" ? <MeetingView students={data?.students ?? []} onRemind={sendReminder} /> : null}
+        {!loading && !error && view === "settings" && data ? <SettingsView onFeishu={() => setFeishuOpen(true)} students={data.students} /> : null}
       </section>
 
       {selectedStudent ? <StudentDrawer student={selectedStudent} onClose={() => setSelectedStudent(null)} /> : null}
       {submitOpen && data ? <ProgressModal students={data.students} onClose={() => setSubmitOpen(false)} onSaved={async () => { setSubmitOpen(false); setToast("进展已提交，等待导师确认"); await loadDashboard(); }} /> : null}
-      {feishuOpen ? <FeishuModal onClose={() => setFeishuOpen(false)} /> : null}
+      {feishuOpen && data ? <FeishuModal viewer={data.viewer} onClose={() => setFeishuOpen(false)} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.reload(); }} /> : null}
       {toast ? <div className="toast" role="status">{toast}</div> : null}
     </main>
   );
@@ -305,17 +370,143 @@ function ProgressModal({ students, onClose, onSaved }: { students: Student[]; on
   return <div className="modal-layer"><div className="modal"><button className="close" onClick={onClose}>×</button><div className="modal-title"><span>新增进展记录</span><h2>这次工作产生了什么新信息？</h2><p>不按工作量打分，只记录结论与可核验的证据。</p></div><form onSubmit={submit}><div className="form-row"><label>学生<select name="studentId" required defaultValue={students[0]?.id}>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label><label>进展类型<select name="kind" value={kind} onChange={(event) => setKind(event.target.value)}>{progressKinds.map((item) => <option key={item}>{item}</option>)}</select></label></div><label>进展标题<input name="title" required placeholder="例如：完成跨材料泛化验证" /></label><label>新增结论<textarea name="summary" required rows={3} placeholder="本次工作确认、排除或发现了什么？" /></label><label>证据<textarea name="evidence" required rows={2} placeholder="实验编号、图表、记录位置或 Git 提交号" /></label>{kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required placeholder="至少提供可识别的论文题目或 DOI" /></label> : <input type="hidden" name="literatureRef" value="" />}<label>私有 GitHub 链接（可选）<input name="gitUrl" placeholder="只保存链接；完整代码由本地 Agent 读取" /></label>{formError ? <p className="form-error">{formError}</p> : null}<div className="modal-actions"><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={busy}>{busy ? "提交中…" : "提交给导师确认"}</button></div></form></div></div>;
 }
 
-function FeishuModal({ onClose }: { onClose: () => void }) {
-  return <div className="modal-layer"><div className="modal compact-modal"><button className="close" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2>界面已预留，凭据尚未配置</h2><p>网站将作为飞书工作台应用打开，机器人负责提醒与快捷提交。</p></div><div className="integration-list"><div><b>1</b><span><strong>登录与身份映射</strong><small>需要飞书 App ID、App Secret 和重定向域名</small></span><em>待配置</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按每名学生的 7/14/21/30 天周期发送</small></span><em>待配置</em></div><div><b>3</b><span><strong>历史记录导入</strong><small>经授权后拉取指定群聊或文档，不读取私人评价</small></span><em>待授权</em></div></div><div className="safe-banner">真实密钥不会写入代码仓库；部署时通过加密环境变量配置。</div></div></div>;
+function FeishuModal({ viewer, onClose, onLogout }: { viewer: DashboardData["viewer"]; onClose: () => void; onLogout: () => Promise<void> }) {
+  return <div className="modal-layer"><div className="modal compact-modal"><button className="close" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2>{viewer.name}，飞书身份已验证</h2><p>当前角色：{viewer.role === "admin" ? "主导师 · 管理员" : "学生"}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按每名学生的 7/14/21/30 天周期发送</small></span><em>下一步</em></div><div><b>3</b><span><strong>历史记录导入</strong><small>仅导入您明确授权的群聊或文档</small></span><em>待授权</em></div></div><div className="safe-banner">App Secret 只保存在加密环境变量中；系统不保存飞书 user_access_token。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
 }
 
-function MeetingView({ students }: { students: Student[] }) {
+function MeetingView({ students, onRemind }: { students: Student[]; onRemind: (student: Student) => Promise<void> }) {
+  const [busy, setBusy] = useState<string | null>(null);
   const due = students.filter((student) => student.risk.days + 7 >= student.cadenceDays).slice(0, 6);
-  return <div className="meeting-grid"><section className="panel"><PanelHeader title="未来 7 天更新提醒" subtitle="按个人需要设置，最长不超过 30 天" count={due.length} /><div className="reminder-list">{due.map((student, index) => <div key={student.id}><span>{index < 2 ? "明天" : index < 4 ? "3 天后" : "本周内"}</span><strong>{student.name}</strong><small>{student.cadenceDays} 天周期 · {student.stage}</small><button>飞书提醒</button></div>)}</div></section><section className="panel meeting-rule"><PanelHeader title="组会建议" subtitle="不是固定轮转，而是优先解决阻塞" /><div className="meeting-summary"><span>{students.filter((student) => student.risk.level !== "正常").length}</span><strong>名学生需要优先讨论</strong><p>系统会根据连续无进展时间、待决策事项和证据缺口自动生成组会议程草案。</p><button className="primary">生成本周议程</button></div></section></div>;
+  return <div className="meeting-grid"><section className="panel"><PanelHeader title="未来 7 天更新提醒" subtitle="按个人需要设置，最长不超过 30 天" count={due.length} /><div className="reminder-list">{due.map((student, index) => <div key={student.id}><span>{index < 2 ? "明天" : index < 4 ? "3 天后" : "本周内"}</span><strong>{student.name}</strong><small>{student.cadenceDays} 天周期 · {student.stage}</small><button disabled={busy === student.id} onClick={async () => { setBusy(student.id); await onRemind(student); setBusy(null); }}>{busy === student.id ? "发送中…" : "飞书提醒"}</button></div>)}</div></section><section className="panel meeting-rule"><PanelHeader title="组会建议" subtitle="不是固定轮转，而是优先解决阻塞" /><div className="meeting-summary"><span>{students.filter((student) => student.risk.level !== "正常").length}</span><strong>名学生需要优先讨论</strong><p>系统会根据连续无进展时间、待决策事项和证据缺口自动生成组会议程草案。</p><button className="primary">生成本周议程</button></div></section></div>;
 }
 
-function SettingsView({ onFeishu }: { onFeishu: () => void }) {
-  return <div className="settings-grid"><section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、消息、历史记录导入" /><div className="setting-body"><span className="status-pill pending">待配置凭据</span><p>创建飞书企业自建应用后，将 App ID、Secret 与事件回调信息配置到部署环境。</p><button className="primary" onClick={onFeishu}>查看接入清单</button></div></section><section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><button>稍后连接 GitHub App</button></div></section><section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section></div>;
+function SettingsView({ onFeishu, students }: { onFeishu: () => void; students: Student[] }) {
+  return <div className="settings-grid"><section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、消息、历史记录导入" /><div className="setting-body"><span className="status-pill safe">飞书身份已验证</span><p>登录和角色校验均在服务端完成；机器人提醒将在学生绑定飞书账号后可用。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section><section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><button>稍后连接 GitHub App</button></div></section><AccountManagement students={students} /><section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section></div>;
+}
+
+type ManagedUser = {
+  id: number;
+  display_name: string;
+  avatar_url: string;
+  email: string;
+  role: "admin" | "student" | "pending";
+  student_id: string | null;
+  student_name: string | null;
+  last_login_at: string;
+};
+
+function AccountManagement({ students }: { students: Student[] }) {
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [choices, setChoices] = useState<Record<number, string>>({});
+  const [busy, setBusy] = useState<number | null>(null);
+  const [message, setMessage] = useState("");
+
+  const loadUsers = useCallback(async () => {
+    const response = await fetch("/api/users", { cache: "no-store" });
+    const payload = (await response.json()) as { users?: ManagedUser[]; error?: string };
+    if (!response.ok) throw new Error(payload.error || "账号列表加载失败");
+    setUsers(payload.users ?? []);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadUsers().catch((error: Error) => setMessage(error.message)), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadUsers]);
+
+  async function updateUser(user: ManagedUser, role: "student" | "pending") {
+    setBusy(user.id); setMessage("");
+    try {
+      const response = await fetch("/api/users", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: user.id, role, studentId: role === "student" ? choices[user.id] || students[0]?.id : null }),
+      });
+      const payload = (await response.json()) as { error?: string; message?: string };
+      if (!response.ok) throw new Error(payload.error || "账号更新失败");
+      setMessage(payload.message || "账号已更新");
+      await loadUsers();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "账号更新失败");
+    } finally { setBusy(null); }
+  }
+
+  return <section className="panel account-panel"><PanelHeader title="飞书账号与学生绑定" subtitle="新用户先进入等待状态，由您确认后才能访问数据" count={users.length} /><div className="account-list">{users.map((user) => <div className="account-row" key={user.id}><div className="account-person"><div className="mini-avatar">{user.display_name.slice(0, 1)}</div><span><strong>{user.display_name}</strong><small>{user.email || "飞书成员"}</small></span></div>{user.role === "admin" ? <span className="status-pill safe">管理员</span> : user.role === "student" ? <><span className="bound-student">已绑定：{user.student_name}</span><button disabled={busy === user.id} onClick={() => void updateUser(user, "pending")}>解除</button></> : <><select value={choices[user.id] || students[0]?.id || ""} onChange={(event) => setChoices((current) => ({ ...current, [user.id]: event.target.value }))}>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select><button className="bind" disabled={busy === user.id} onClick={() => void updateUser(user, "student")}>{busy === user.id ? "绑定中…" : "确认绑定"}</button></>}</div>)}{!users.length ? <div className="empty-small">学生第一次从飞书打开应用后，账号会出现在这里。</div> : null}</div>{message ? <div className="account-message">{message}</div> : null}</section>;
+}
+
+function FeishuAccessGate({ gate, onAuthenticated }: { gate: AuthGate; onAuthenticated: () => Promise<void> }) {
+  const [status, setStatus] = useState<"checking" | "ready" | "authorizing" | "error">("checking");
+  const [message, setMessage] = useState(gate.message);
+  const [config, setConfig] = useState<{ configured: boolean; appId: string; sdkUrl: string } | null>(null);
+
+  const authorize = useCallback(async (activeConfig: { configured: boolean; appId: string; sdkUrl: string }) => {
+    if (!activeConfig.configured) {
+      setStatus("ready");
+      setMessage("网站端已经完成飞书接入代码，等待配置企业自建应用凭据。");
+      return;
+    }
+    if (!window.h5sdk || !window.tt) {
+      setStatus("error");
+      setMessage("请从飞书客户端的“探研”工作台应用打开本系统。");
+      return;
+    }
+    setStatus("authorizing");
+    window.h5sdk.error(() => {
+      setStatus("error");
+      setMessage("飞书环境鉴权失败，请检查应用主页和可用范围配置。");
+    });
+    window.h5sdk.ready(() => {
+      window.tt?.requestAccess({
+        appID: activeConfig.appId,
+        scopeList: [],
+        success: async ({ code }) => {
+          try {
+            const response = await fetch("/api/auth/feishu/exchange", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ code }),
+            });
+            const payload = (await response.json()) as { error?: string };
+            if (!response.ok) throw new Error(payload.error || "登录失败");
+            await onAuthenticated();
+          } catch (error) {
+            setStatus("error");
+            setMessage(error instanceof Error ? error.message : "飞书登录失败");
+          }
+        },
+        fail: () => {
+          setStatus("error");
+          setMessage("未能取得飞书授权码，请确认应用已发布且账号在可用范围内。");
+        },
+      });
+    });
+  }, [onAuthenticated]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/feishu/config", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((value: { configured: boolean; appId: string; sdkUrl: string }) => {
+        if (cancelled) return;
+        setConfig(value);
+        if (!value.configured) return void authorize(value);
+        const existing = document.querySelector<HTMLScriptElement>(`script[src="${value.sdkUrl}"]`);
+        if (existing) return void authorize(value);
+        const script = document.createElement("script");
+        script.src = value.sdkUrl;
+        script.async = true;
+        script.onload = () => { if (!cancelled) void authorize(value); };
+        script.onerror = () => { if (!cancelled) { setStatus("error"); setMessage("飞书客户端组件加载失败，请稍后重试。"); } };
+        document.head.appendChild(script);
+      })
+      .catch(() => {
+        if (!cancelled) { setStatus("error"); setMessage("无法读取飞书应用配置。"); }
+      });
+    return () => { cancelled = true; };
+  }, [authorize]);
+
+  const pending = gate.kind === "pending";
+  const setup = gate.kind === "setup" || config?.configured === false;
+  return <main className="access-shell"><section className="access-card"><div className="access-brand"><div className="brand-mark">探</div><div><strong>探研</strong><span>射线探伤 × AI</span></div></div><div className={`access-orb ${pending ? "pending" : ""}`}>{pending ? "…" : "飞"}</div><p className="access-kicker">飞书企业自建应用</p><h1>{pending ? "身份已验证，等待分配角色" : setup ? "飞书接入等待应用配置" : "正在通过飞书安全登录"}</h1><p className="access-copy">{message}</p>{setup ? <div className="setup-steps"><span><b>1</b>创建企业自建应用并添加“网页应用”能力</span><span><b>2</b>将应用主页设为当前系统地址</span><span><b>3</b>安全配置 App ID 和 App Secret 后发布</span></div> : null}{status === "authorizing" || status === "checking" ? <div className="access-loading"><i /><span>正在确认飞书环境…</span></div> : null}{status === "error" && config?.configured ? <button className="primary access-retry" onClick={() => void authorize(config)}>重新尝试飞书登录</button> : null}<div className="access-safe">不会把 App Secret、飞书访问凭证或完整代码发送给云端 GPT</div></section></main>;
 }
 
 function LoadingState() {

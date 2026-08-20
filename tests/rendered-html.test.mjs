@@ -21,21 +21,24 @@ test("server-renders the research progress application shell", async () => {
   const html = await response.text();
   assert.match(html, /<title>探研｜科研进展管理系统<\/title>/i);
   assert.match(html, /科研进展驾驶舱/);
-  assert.match(html, /飞书接入待配置/);
+  assert.match(html, /飞书已登录/);
   assert.match(html, /AI 数据边界已启用/);
 });
 
 test("keeps the database and Feishu boundaries explicit in source", async () => {
-  const [dashboard, database, hosting, packageJson] = await Promise.all([
+  const [dashboard, database, feishuAuth, hosting, packageJson] = await Promise.all([
     readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/database.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/feishu-auth.ts", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
   assert.match(dashboard, /完整代码由本地 Agent 读取/);
-  assert.match(dashboard, /真实密钥不会写入代码仓库/);
+  assert.match(dashboard, /App Secret 只保存在加密环境变量中/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS progress_entries/);
+  assert.match(feishuAuth, /crypto\.subtle\.digest\("SHA-256"/);
+  assert.match(feishuAuth, /FEISHU_AUTH_REQUIRED/);
   assert.match(hosting, /"d1": "DB"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 });

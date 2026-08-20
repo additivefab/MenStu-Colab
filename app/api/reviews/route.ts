@@ -1,9 +1,15 @@
 import { ensureDatabase, getD1 } from "../../../lib/database";
+import { assertSameOrigin, requireAppUser } from "../../../lib/feishu-auth";
 
 const actions = new Set(["substantive", "supporting", "supplement", "rejected"]);
 
 export async function POST(request: Request) {
   try {
+    if (!assertSameOrigin(request)) {
+      return Response.json({ error: "请求来源无效" }, { status: 403 });
+    }
+    const auth = await requireAppUser(request, ["admin"]);
+    if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = (await request.json()) as Record<string, unknown>;
     const id = Number(body.id);

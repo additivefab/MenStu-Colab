@@ -1,4 +1,5 @@
 import { ensureDatabase, getD1, riskFromDate } from "../../../lib/database";
+import { requireAppUser } from "../../../lib/feishu-auth";
 
 type StudentRow = {
   id: string;
@@ -13,21 +14,36 @@ type StudentRow = {
   latest_kind: string | null;
 };
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const auth = await requireAppUser(request, ["admin", "student"]);
+    if ("response" in auth) return auth.response;
+    const viewer = auth.user;
+    if (viewer.role === "student" && !viewer.studentId) {
+      return Response.json(
+        { code: "FEISHU_ACCOUNT_PENDING", error: "飞书账号尚未绑定学生记录" },
+        { status: 403 },
+      );
+    }
     await ensureDatabase();
     const d1 = getD1();
-    const { results } = await d1.prepare(`SELECT
+    const studentQuery = d1.prepare(`SELECT
       s.id, s.display_name, s.degree, s.grade_year, s.stage, s.cadence_days,
       s.current_focus, s.last_substantive_at,
       (SELECT p.title FROM progress_entries p WHERE p.student_id = s.id AND p.status = 'substantive' ORDER BY p.submitted_at DESC LIMIT 1) AS latest_title,
       (SELECT p.kind FROM progress_entries p WHERE p.student_id = s.id AND p.status = 'substantive' ORDER BY p.submitted_at DESC LIMIT 1) AS latest_kind
-      FROM students s WHERE s.active = 1 ORDER BY s.degree, s.display_name`).all<StudentRow>();
+      FROM students s WHERE s.active = 1 ${viewer.role === "student" ? "AND s.id = ?" : ""}
+      ORDER BY s.degree, s.display_name`);
+    const { results } = viewer.role === "student"
+      ? await studentQuery.bind(viewer.studentId).all<StudentRow>()
+      : await studentQuery.all<StudentRow>();
 
-    const pending = await d1.prepare(`SELECT p.id, p.student_id, p.kind, p.title, p.summary, p.evidence,
-      p.literature_ref, p.git_url, p.submitted_at, s.display_name
-      FROM progress_entries p JOIN students s ON s.id = p.student_id
-      WHERE p.status = 'pending' ORDER BY p.submitted_at DESC`).all();
+    const pending = viewer.role === "admin"
+      ? await d1.prepare(`SELECT p.id, p.student_id, p.kind, p.title, p.summary, p.evidence,
+        p.literature_ref, p.git_url, p.submitted_at, s.display_name
+        FROM progress_entries p JOIN students s ON s.id = p.student_id
+        WHERE p.status = 'pending' ORDER BY p.submitted_at DESC`).all()
+      : { results: [] };
 
     const students = results.map((row) => ({
       id: row.id,
@@ -49,6 +65,12 @@ export async function GET() {
     }, {});
 
     return Response.json({
+      viewer: {
+        name: viewer.displayName,
+        avatarUrl: viewer.avatarUrl,
+        role: viewer.role,
+        studentId: viewer.studentId,
+      },
       students,
       pending: pending.results,
       metrics: {
