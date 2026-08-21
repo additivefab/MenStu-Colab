@@ -26,7 +26,7 @@ test("server-renders the research progress application shell", async () => {
 });
 
 test("keeps the database and Feishu boundaries explicit in source", async () => {
-  const [dashboard, database, feishuAuth, browserStart, browserCallback, rosterImport, proposals, migration, hosting, packageJson] = await Promise.all([
+  const [dashboard, database, feishuAuth, browserStart, browserCallback, rosterImport, proposals, proposalMigration, feishuEvents, feishuEventRoute, meetingImports, feishuMigration, hosting, packageJson] = await Promise.all([
     readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/database.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/feishu-auth.ts", import.meta.url), "utf8"),
@@ -35,12 +35,16 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
     readFile(new URL("../app/api/admin/roster/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/proposals/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0004_spicy_morlun.sql", import.meta.url), "utf8"),
+    readFile(new URL("../lib/feishu-events.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/feishu/events/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/feishu/meeting-imports/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0005_wet_war_machine.sql", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
   assert.match(dashboard, /完整代码由本地 Agent 读取/);
-  assert.match(dashboard, /App Secret 只保存在加密环境变量中/);
+  assert.match(dashboard, /不会把 App Secret、飞书访问凭证或完整代码发送给云端 GPT/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS progress_entries/);
   assert.match(feishuAuth, /crypto\.subtle\.digest\("SHA-256"/);
   assert.match(feishuAuth, /FEISHU_AUTH_REQUIRED/);
@@ -59,8 +63,23 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(proposals, /research_proposal_versions/);
   assert.match(proposals, /proposal_audit_events/);
   assert.match(proposals, /只有管理员可以审核研究方案/);
-  assert.match(migration, /CREATE TABLE `research_proposals`/);
-  assert.match(migration, /CREATE UNIQUE INDEX `idx_proposal_versions_proposal_number`/);
+  assert.match(proposalMigration, /CREATE TABLE `research_proposals`/);
+  assert.match(proposalMigration, /CREATE UNIQUE INDEX `idx_proposal_versions_proposal_number`/);
+  assert.match(dashboard, /飞书 AI 会议总结待确认区/);
+  assert.match(feishuEvents, /x-lark-signature/);
+  assert.match(feishuEvents, /会议总结/);
+  assert.match(feishuEvents, /normalized\.length >= 120 && matches\.length >= 2/);
+  assert.match(feishuEventRoute, /header\.event_type !== "im\.message\.receive_v1"/);
+  assert.match(feishuEventRoute, /message\.chat_type !== "group"/);
+  assert.ok(feishuEventRoute.indexOf("if (!detectedReason)") < feishuEventRoute.indexOf("await ensureDatabase()"));
+  assert.match(feishuEventRoute, /INSERT OR IGNORE INTO feishu_meeting_summary_imports/);
+  assert.match(meetingImports, /requireAppUser\(request, \["admin"\]\)/);
+  assert.match(meetingImports, /assertSameOrigin/);
+  assert.match(meetingImports, /VALUES \(\?, '组会'/);
+  assert.match(meetingImports, /raw_content = '', extracted_text = ''/);
+  assert.match(meetingImports, /chat_id = '', sender_id = '', sender_type = '', raw_content = ''/);
+  assert.match(feishuMigration, /CREATE UNIQUE INDEX `idx_feishu_summary_event_unique`/);
+  assert.match(feishuMigration, /CREATE UNIQUE INDEX `idx_feishu_summary_message_unique`/);
   assert.match(hosting, /"d1": "DB"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 });

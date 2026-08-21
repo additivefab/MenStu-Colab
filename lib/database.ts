@@ -147,6 +147,30 @@ export async function ensureDatabase() {
       detail TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS feishu_meeting_summary_imports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      sender_id TEXT NOT NULL DEFAULT '',
+      sender_type TEXT NOT NULL DEFAULT '',
+      message_type TEXT NOT NULL DEFAULT '',
+      raw_content TEXT NOT NULL,
+      extracted_text TEXT NOT NULL,
+      detected_reason TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      message_created_at TEXT NOT NULL,
+      received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      reviewed_by_user_id INTEGER REFERENCES app_users(id),
+      reviewed_at TEXT
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS feishu_meeting_summary_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      import_id INTEGER NOT NULL REFERENCES feishu_meeting_summary_imports(id),
+      student_id TEXT NOT NULL REFERENCES students(id),
+      progress_entry_id INTEGER NOT NULL REFERENCES progress_entries(id),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_student_submitted ON progress_entries(student_id, submitted_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_status ON progress_entries(status, submitted_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_feishu_open_id ON app_users(feishu_open_id)"),
@@ -160,6 +184,11 @@ export async function ensureDatabase() {
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_proposal_versions_created ON research_proposal_versions(proposal_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_milestones_proposal_order ON research_milestones(proposal_id, sort_order)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_proposal_audit_proposal_created ON proposal_audit_events(proposal_id, created_at DESC)"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_summary_event_unique ON feishu_meeting_summary_imports(event_id)"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_summary_message_unique ON feishu_meeting_summary_imports(message_id)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_feishu_summary_status_received ON feishu_meeting_summary_imports(status, received_at DESC)"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_summary_link_import_student ON feishu_meeting_summary_links(import_id, student_id)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_feishu_summary_link_student ON feishu_meeting_summary_links(student_id, created_at DESC)"),
     d1.prepare("PRAGMA optimize"),
   ]);
 

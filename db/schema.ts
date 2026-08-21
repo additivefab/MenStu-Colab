@@ -181,3 +181,52 @@ export const proposalAuditEvents = sqliteTable(
   },
   (table) => [index("idx_proposal_audit_proposal_created").on(table.proposalId, table.createdAt)],
 );
+
+export const feishuMeetingSummaryImports = sqliteTable(
+  "feishu_meeting_summary_imports",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    eventId: text("event_id").notNull(),
+    messageId: text("message_id").notNull(),
+    chatId: text("chat_id").notNull(),
+    senderId: text("sender_id").notNull().default(""),
+    senderType: text("sender_type").notNull().default(""),
+    messageType: text("message_type").notNull().default(""),
+    rawContent: text("raw_content").notNull(),
+    extractedText: text("extracted_text").notNull(),
+    detectedReason: text("detected_reason").notNull().default(""),
+    status: text("status", { enum: ["pending", "confirmed", "ignored"] })
+      .notNull()
+      .default("pending"),
+    messageCreatedAt: text("message_created_at").notNull(),
+    receivedAt: text("received_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    reviewedByUserId: integer("reviewed_by_user_id").references(() => appUsers.id),
+    reviewedAt: text("reviewed_at"),
+  },
+  (table) => [
+    uniqueIndex("idx_feishu_summary_event_unique").on(table.eventId),
+    uniqueIndex("idx_feishu_summary_message_unique").on(table.messageId),
+    index("idx_feishu_summary_status_received").on(table.status, table.receivedAt),
+  ],
+);
+
+export const feishuMeetingSummaryLinks = sqliteTable(
+  "feishu_meeting_summary_links",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    importId: integer("import_id")
+      .notNull()
+      .references(() => feishuMeetingSummaryImports.id),
+    studentId: text("student_id")
+      .notNull()
+      .references(() => students.id),
+    progressEntryId: integer("progress_entry_id")
+      .notNull()
+      .references(() => progressEntries.id),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_feishu_summary_link_import_student").on(table.importId, table.studentId),
+    index("idx_feishu_summary_link_student").on(table.studentId, table.createdAt),
+  ],
+);

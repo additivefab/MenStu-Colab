@@ -49,6 +49,8 @@ export function getFeishuConfig() {
     appSecret: values.FEISHU_APP_SECRET?.trim() ?? "",
     allowFirstAdmin: values.FEISHU_ALLOW_FIRST_ADMIN === "true",
     adminOpenId: values.FEISHU_ADMIN_OPEN_ID?.trim() ?? "",
+    verificationToken: values.FEISHU_VERIFICATION_TOKEN?.trim() ?? "",
+    encryptKey: values.FEISHU_ENCRYPT_KEY?.trim() ?? "",
   };
 }
 

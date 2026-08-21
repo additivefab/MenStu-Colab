@@ -90,6 +90,23 @@ type ResearchProposal = {
   audit: Array<{ id: number; action: string; detail: string; created_at: string; actor_name: string }>;
 };
 
+type FeishuMeetingImport = {
+  id: number;
+  message_type: string;
+  extracted_text: string;
+  detected_reason: string;
+  status: "pending" | "confirmed";
+  message_created_at: string;
+  received_at: string;
+  links: Array<{
+    id: number;
+    student_id: string;
+    student_name: string;
+    progress_entry_id: number;
+    created_at: string;
+  }>;
+};
+
 type DashboardData = {
   viewer: {
     name: string;
@@ -123,7 +140,7 @@ const navItems = [
   { id: "settings", label: "系统设置", icon: "⚙" },
 ] as const;
 
-const progressKinds = ["文献", "实验", "算法", "数据", "论文", "复现", "项目"];
+const progressKinds = ["文献", "实验", "算法", "数据", "论文", "复现", "项目", "组会"];
 
 const proposalStatusMeta: Record<ProposalStatus, { label: string; hint: string }> = {
   draft: { label: "草稿", hint: "仅本人和管理员可见" },
@@ -383,7 +400,7 @@ export default function Dashboard() {
           </section>
         ) : null}
 
-        {!loading && !error && view === "meetings" ? <MeetingView students={data?.students ?? []} onRemind={sendReminder} /> : null}
+        {!loading && !error && data && view === "meetings" ? <MeetingView viewer={data.viewer} students={data.students} onRemind={sendReminder} /> : null}
         {!loading && !error && view === "settings" && data ? <SettingsView onFeishu={() => setFeishuOpen(true)} students={data.students} onRosterImported={async () => { setToast("真实学生名册已导入"); await loadDashboard(); }} /> : null}
       </section>
 
@@ -669,17 +686,60 @@ function ProposalDetail({ proposal, canReview, onToast, onRefresh }: {
 }
 
 function FeishuModal({ viewer, onClose, onLogout }: { viewer: DashboardData["viewer"]; onClose: () => void; onLogout: () => Promise<void> }) {
-  return <div className="modal-layer"><div className="modal compact-modal"><button className="close" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2>{viewer.name}，飞书身份已验证</h2><p>当前角色：{viewer.role === "admin" ? "管理员" : "学生"}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按每名学生的 7/14/21/30 天周期发送</small></span><em>下一步</em></div><div><b>3</b><span><strong>历史记录导入</strong><small>仅导入您明确授权的群聊或文档</small></span><em>待授权</em></div></div><div className="safe-banner">App Secret 只保存在加密环境变量中；系统不保存飞书 user_access_token。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
+  return <div className="modal-layer"><div className="modal compact-modal"><button className="close" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2>{viewer.name}，飞书身份已验证</h2><p>当前角色：{viewer.role === "admin" ? "管理员" : "学生"}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按每名学生的 7/14/21/30 天周期发送</small></span><em>下一步</em></div><div><b>3</b><span><strong>群消息 AI 总结导入</strong><small>接收群消息事件，但只保存识别为会议总结的候选消息</small></span><em>待开权限</em></div></div><div className="safe-banner">普通聊天会在接收时立即过滤且不落库；AI 总结仍需管理员确认后才能进入学生进展。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
 }
 
-function MeetingView({ students, onRemind }: { students: Student[]; onRemind: (student: Student) => Promise<void> }) {
+function MeetingView({ viewer, students, onRemind }: { viewer: DashboardData["viewer"]; students: Student[]; onRemind: (student: Student) => Promise<void> }) {
   const [busy, setBusy] = useState<string | null>(null);
   const due = students.filter((student) => student.risk.days + 7 >= student.cadenceDays).slice(0, 6);
-  return <div className="meeting-grid"><section className="panel"><PanelHeader title="未来 7 天更新提醒" subtitle="按个人需要设置，最长不超过 30 天" count={due.length} /><div className="reminder-list">{due.map((student, index) => <div key={student.id}><span>{index < 2 ? "明天" : index < 4 ? "3 天后" : "本周内"}</span><strong>{student.name}</strong><small>{student.cadenceDays} 天周期 · {student.stage}</small><button disabled={busy === student.id} onClick={async () => { setBusy(student.id); await onRemind(student); setBusy(null); }}>{busy === student.id ? "发送中…" : "飞书提醒"}</button></div>)}</div></section><section className="panel meeting-rule"><PanelHeader title="组会建议" subtitle="不是固定轮转，而是优先解决阻塞" /><div className="meeting-summary"><span>{students.filter((student) => student.risk.level !== "正常").length}</span><strong>名学生需要优先讨论</strong><p>系统会根据连续无进展时间、待决策事项和证据缺口自动生成组会议程草案。</p><button className="primary">生成本周议程</button></div></section></div>;
+  return <div className="meeting-workspace"><div className="meeting-grid"><section className="panel"><PanelHeader title="未来 7 天更新提醒" subtitle="按个人需要设置，最长不超过 30 天" count={due.length} /><div className="reminder-list">{due.map((student, index) => <div key={student.id}><span>{index < 2 ? "明天" : index < 4 ? "3 天后" : "本周内"}</span><strong>{student.name}</strong><small>{student.cadenceDays} 天周期 · {student.stage}</small><button disabled={busy === student.id} onClick={async () => { setBusy(student.id); await onRemind(student); setBusy(null); }}>{busy === student.id ? "发送中…" : "飞书提醒"}</button></div>)}</div></section><section className="panel meeting-rule"><PanelHeader title="组会建议" subtitle="不是固定轮转，而是优先解决阻塞" /><div className="meeting-summary"><span>{students.filter((student) => student.risk.level !== "正常").length}</span><strong>名学生需要优先讨论</strong><p>系统会根据连续无进展时间、待决策事项和证据缺口自动生成组会议程草案。</p><button className="primary">生成本周议程</button></div></section></div>{viewer.role === "admin" ? <FeishuMeetingImports students={students} /> : null}</div>;
+}
+
+function FeishuMeetingImports({ students }: { students: Student[] }) {
+  const [imports, setImports] = useState<FeishuMeetingImport[]>([]);
+  const [choices, setChoices] = useState<Record<number, string>>({});
+  const [titles, setTitles] = useState<Record<number, string>>({});
+  const [busy, setBusy] = useState<number | null>(null);
+  const [message, setMessage] = useState("");
+
+  const load = useCallback(async () => {
+    const response = await fetch("/api/feishu/meeting-imports", { cache: "no-store" });
+    const payload = (await response.json()) as { imports?: FeishuMeetingImport[]; error?: string };
+    if (!response.ok) throw new Error(payload.error || "AI 会议总结加载失败");
+    setImports(payload.imports ?? []);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load().catch((error: Error) => setMessage(error.message)), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  async function update(item: FeishuMeetingImport, action: "ignore" | "create_progress") {
+    setBusy(item.id); setMessage("");
+    try {
+      const response = await fetch("/api/feishu/meeting-imports", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          importId: item.id,
+          studentId: choices[item.id] || students[0]?.id,
+          title: titles[item.id] || "AI 会议总结",
+        }),
+      });
+      const payload = (await response.json()) as { error?: string; message?: string };
+      if (!response.ok) throw new Error(payload.error || "会议总结处理失败");
+      setMessage(payload.message || "会议总结已处理");
+      await load();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "会议总结处理失败"); }
+    finally { setBusy(null); }
+  }
+
+  return <section className="panel meeting-import-panel"><PanelHeader title="飞书 AI 会议总结待确认区" subtitle="全群消息只在接收瞬间识别；普通聊天不保存，候选总结不会自动评价学生" count={imports.filter((item) => item.status === "pending").length} /><div className="meeting-import-boundary"><b>最小留存</b><span>仅保存含“AI 总结、会议总结、会议纪要、智能纪要、妙记”等特征的候选消息；进入学生记录前必须由管理员选择学生并再次确认。</span></div><div className="meeting-import-list">{imports.map((item) => <article key={item.id}><div className="meeting-import-head"><div><span className={`status-pill ${item.status === "pending" ? "pending" : "safe"}`}>{item.status === "pending" ? "待确认" : "已生成进展草稿"}</span><strong>{shortDate(item.message_created_at)} AI 会议总结</strong><small>识别依据：{item.detected_reason} · {item.message_type || "消息"}</small></div>{!item.links.length ? <button disabled={busy === item.id} onClick={() => void update(item, "ignore")}>忽略</button> : null}</div><pre>{item.extracted_text}</pre>{item.links.length ? <div className="meeting-import-links">{item.links.map((link) => <span key={link.id}>已关联 {link.student_name} · 进展草稿 #{link.progress_entry_id}</span>)}</div> : null}<div className="meeting-import-actions"><select aria-label="关联学生" value={choices[item.id] || students[0]?.id || ""} onChange={(event) => setChoices((current) => ({ ...current, [item.id]: event.target.value }))}>{students.map((student) => <option value={student.id} key={student.id}>{student.name} · {student.stage}</option>)}</select><input aria-label="进展标题" value={titles[item.id] || ""} onChange={(event) => setTitles((current) => ({ ...current, [item.id]: event.target.value }))} placeholder="进展标题，默认：AI 会议总结" /><button className="primary" disabled={busy === item.id || !students.length} onClick={() => void update(item, "create_progress")}>{busy === item.id ? "处理中…" : "生成学生进展草稿"}</button></div></article>)}{!imports.length ? <div className="empty-small">权限和事件订阅启用后，识别到的 AI 会议总结会进入这里。</div> : null}</div>{message ? <div className="account-message">{message}</div> : null}</section>;
 }
 
 function SettingsView({ onFeishu, students, onRosterImported }: { onFeishu: () => void; students: Student[]; onRosterImported: () => Promise<void> }) {
-  return <div className="settings-grid"><RosterImport students={students} onImported={onRosterImported} /><section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、消息、历史记录导入" /><div className="setting-body"><span className="status-pill safe">飞书身份已验证</span><p>登录和角色校验均在服务端完成；机器人提醒将在学生绑定飞书账号后可用。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section><section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><button>稍后连接 GitHub App</button></div></section><section className="panel setting-card"><PanelHeader title="TUM 论文流程参考" subtitle="MIT 开源许可 · 本系统保持独立技术架构" /><div className="setting-body"><span className="status-pill safe">流程已移植</span><p>借鉴研究方案提交、版本历史、导师退回与确认、权限矩阵和审计留痕；飞书身份及科研证据评价仍由本系统负责。</p><a className="setting-link" href="https://github.com/ls1intum/thesis-management" target="_blank" rel="noreferrer">查看原项目与许可证</a></div></section><AccountManagement students={students} /><section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section></div>;
+  return <div className="settings-grid"><RosterImport students={students} onImported={onRosterImported} /><section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、提醒与 AI 会议总结导入" /><div className="setting-body"><span className="status-pill pending">全群监听待开通</span><p>接收全群消息事件，但普通聊天在接收时立即过滤且不落库；只有疑似 AI 会议总结进入管理员待确认区。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section><section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><button>稍后连接 GitHub App</button></div></section><section className="panel setting-card"><PanelHeader title="TUM 论文流程参考" subtitle="MIT 开源许可 · 本系统保持独立技术架构" /><div className="setting-body"><span className="status-pill safe">流程已移植</span><p>借鉴研究方案提交、版本历史、导师退回与确认、权限矩阵和审计留痕；飞书身份及科研证据评价仍由本系统负责。</p><a className="setting-link" href="https://github.com/ls1intum/thesis-management" target="_blank" rel="noreferrer">查看原项目与许可证</a></div></section><AccountManagement students={students} /><section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section></div>;
 }
 
 function RosterImport({ students, onImported }: { students: Student[]; onImported: () => Promise<void> }) {

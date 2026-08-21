@@ -1,7 +1,7 @@
 import { ensureDatabase, getD1 } from "../../../lib/database";
 import { assertSameOrigin, requireAppUser } from "../../../lib/feishu-auth";
 
-const allowedKinds = new Set(["文献", "实验", "算法", "数据", "论文", "复现", "项目"]);
+const allowedKinds = new Set(["文献", "实验", "算法", "数据", "论文", "复现", "项目", "组会"]);
 
 export async function POST(request: Request) {
   try {
