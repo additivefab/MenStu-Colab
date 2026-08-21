@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   detectMeetingSummary,
+  detectSummaryImportCommand,
   extractFeishuMessageText,
   parseFeishuEvent,
 } from "../lib/feishu-events.ts";
@@ -31,6 +32,12 @@ test("decrypts and verifies Feishu encrypted event envelopes", async () => {
   const payload = { type: "url_verification", token: "token", challenge: "challenge-value" };
   const request = encryptedRequest(payload, "test-encrypt-key");
   assert.deepEqual(await parseFeishuEvent(request.rawBody, request.headers, "test-encrypt-key"), payload);
+});
+
+test("recognizes the explicit current-group history import command", () => {
+  assert.equal(detectSummaryImportCommand("@_user_1 导入所有总结"), "导入所有总结");
+  assert.equal(detectSummaryImportCommand("@探研，请导入全部 AI 总结。"), "导入全部AI总结");
+  assert.equal(detectSummaryImportCommand("帮我看看以前的消息"), null);
 });
 
 test("rejects a Feishu event with an invalid signature", async () => {

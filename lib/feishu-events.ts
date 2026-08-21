@@ -99,3 +99,14 @@ export function detectMeetingSummary(text: string) {
   const matches = structuralSignals.filter((signal) => normalized.includes(signal));
   return normalized.length >= 120 && matches.length >= 2 ? matches.join("+") : null;
 }
+
+export function detectSummaryImportCommand(text: string) {
+  const normalized = text
+    .replace(/@成员/g, "")
+    .replace(/[\s，,。.!！?？:：]/g, "")
+    .trim()
+    .toUpperCase();
+  if (!normalized) return null;
+  const commands = ["导入所有总结", "导入全部总结", "导入所有AI总结", "导入全部AI总结", "导入所有会议纪要", "导入全部会议纪要"];
+  return commands.find((command) => normalized.includes(command.toUpperCase())) ?? null;
+}
