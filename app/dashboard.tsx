@@ -446,8 +446,9 @@ function FeishuAccessGate({ gate, onAuthenticated }: { gate: AuthGate; onAuthent
       return;
     }
     if (!window.h5sdk || !window.tt) {
-      setStatus("error");
-      setMessage("请从飞书客户端的“探研”工作台应用打开本系统。");
+      setStatus("authorizing");
+      setMessage("正在跳转至飞书完成安全登录…");
+      window.location.assign("/api/auth/feishu/browser/start");
       return;
     }
     setStatus("authorizing");

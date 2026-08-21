@@ -26,10 +26,12 @@ test("server-renders the research progress application shell", async () => {
 });
 
 test("keeps the database and Feishu boundaries explicit in source", async () => {
-  const [dashboard, database, feishuAuth, hosting, packageJson] = await Promise.all([
+  const [dashboard, database, feishuAuth, browserStart, browserCallback, hosting, packageJson] = await Promise.all([
     readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/database.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/feishu-auth.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/auth/feishu/browser/start/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/auth/feishu/browser/callback/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
@@ -39,6 +41,11 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(database, /CREATE TABLE IF NOT EXISTS progress_entries/);
   assert.match(feishuAuth, /crypto\.subtle\.digest\("SHA-256"/);
   assert.match(feishuAuth, /FEISHU_AUTH_REQUIRED/);
+  assert.match(dashboard, /\/api\/auth\/feishu\/browser\/start/);
+  assert.match(browserStart, /crypto\.getRandomValues/);
+  assert.match(browserStart, /SameSite=Lax/);
+  assert.match(browserCallback, /state !== expectedState/);
+  assert.match(browserCallback, /createFeishuSession/);
   assert.match(hosting, /"d1": "DB"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 });
