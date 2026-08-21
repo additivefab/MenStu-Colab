@@ -92,7 +92,7 @@ export function extractFeishuMessageText(rawContent: string) {
 export function detectMeetingSummary(text: string) {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (!normalized) return null;
-  const strongSignals = ["AI总结", "AI 总结", "会议总结", "会议纪要", "智能纪要", "妙记"];
+  const strongSignals = ["导入这份总结", "AI总结", "AI 总结", "会议总结", "会议纪要", "智能纪要", "妙记"];
   const strong = strongSignals.find((signal) => normalized.includes(signal));
   if (strong) return strong;
   const structuralSignals = ["行动项", "待办事项", "参会人", "会议时间", "讨论内容", "会议主题"];

@@ -26,7 +26,7 @@ test("server-renders the research progress application shell", async () => {
 });
 
 test("keeps the database and Feishu boundaries explicit in source", async () => {
-  const [dashboard, database, feishuAuth, browserStart, browserCallback, rosterImport, proposals, proposalMigration, feishuEvents, feishuEventRoute, meetingImports, feishuMigration, hosting, packageJson] = await Promise.all([
+  const [dashboard, database, feishuAuth, browserStart, browserCallback, rosterImport, proposals, proposalMigration, feishuEvents, feishuEventRoute, feishuMessageImport, feishuLongConnection, meetingImports, feishuMigration, hosting, packageJson] = await Promise.all([
     readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/database.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/feishu-auth.ts", import.meta.url), "utf8"),
@@ -37,6 +37,8 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
     readFile(new URL("../drizzle/0004_spicy_morlun.sql", import.meta.url), "utf8"),
     readFile(new URL("../lib/feishu-events.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/feishu/events/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/feishu-message-import.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/feishu/long-connection/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/feishu/meeting-imports/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0005_wet_war_machine.sql", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
@@ -72,9 +74,11 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(feishuEvents, /会议总结/);
   assert.match(feishuEvents, /normalized\.length >= 120 && matches\.length >= 2/);
   assert.match(feishuEventRoute, /header\.event_type !== "im\.message\.receive_v1"/);
-  assert.match(feishuEventRoute, /message\.chat_type !== "group"/);
-  assert.ok(feishuEventRoute.indexOf("if (!detectedReason)") < feishuEventRoute.indexOf("await ensureDatabase()"));
-  assert.match(feishuEventRoute, /INSERT OR IGNORE INTO feishu_meeting_summary_imports/);
+  assert.match(feishuMessageImport, /message\.chat_type !== "group"/);
+  assert.ok(feishuMessageImport.indexOf("if (!detectedReason)") < feishuMessageImport.indexOf("await ensureDatabase()"));
+  assert.match(feishuMessageImport, /INSERT OR IGNORE INTO feishu_meeting_summary_imports/);
+  assert.match(feishuLongConnection, /verifyLongConnectionRelay/);
+  assert.match(feishuLongConnection, /secureTextEqual\(event\.token, config\.verificationToken\)/);
   assert.match(meetingImports, /requireAppUser\(request, \["admin"\]\)/);
   assert.match(meetingImports, /assertSameOrigin/);
   assert.match(meetingImports, /VALUES \(\?, '组会'/);
