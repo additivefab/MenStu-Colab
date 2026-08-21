@@ -10,6 +10,7 @@ type StudentRow = {
   cadence_days: number;
   current_focus: string;
   last_substantive_at: string | null;
+  tracking_started_at: string | null;
   latest_title: string | null;
   latest_kind: string | null;
 };
@@ -29,11 +30,11 @@ export async function GET(request: Request) {
     const d1 = getD1();
     const studentQuery = d1.prepare(`SELECT
       s.id, s.display_name, s.degree, s.grade_year, s.stage, s.cadence_days,
-      s.current_focus, s.last_substantive_at,
+      s.current_focus, s.last_substantive_at, s.tracking_started_at,
       (SELECT p.title FROM progress_entries p WHERE p.student_id = s.id AND p.status = 'substantive' ORDER BY p.submitted_at DESC LIMIT 1) AS latest_title,
       (SELECT p.kind FROM progress_entries p WHERE p.student_id = s.id AND p.status = 'substantive' ORDER BY p.submitted_at DESC LIMIT 1) AS latest_kind
       FROM students s WHERE s.active = 1 ${viewer.role === "student" ? "AND s.id = ?" : ""}
-      ORDER BY s.degree, s.display_name`);
+      ORDER BY CASE s.degree WHEN '博士' THEN 0 ELSE 1 END, s.grade_year, s.display_name`);
     const { results } = viewer.role === "student"
       ? await studentQuery.bind(viewer.studentId).all<StudentRow>()
       : await studentQuery.all<StudentRow>();
@@ -56,7 +57,7 @@ export async function GET(request: Request) {
       lastSubstantiveAt: row.last_substantive_at,
       latestTitle: row.latest_title ?? "尚无已确认记录",
       latestKind: row.latest_kind ?? "待补充",
-      risk: riskFromDate(row.last_substantive_at),
+      risk: riskFromDate(row.last_substantive_at ?? row.tracking_started_at),
     }));
 
     const riskCounts = students.reduce<Record<string, number>>((acc, student) => {

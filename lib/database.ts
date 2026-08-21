@@ -59,6 +59,7 @@ export async function ensureDatabase() {
       cadence_days INTEGER NOT NULL DEFAULT 30,
       current_focus TEXT NOT NULL DEFAULT '',
       last_substantive_at TEXT,
+      tracking_started_at TEXT,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),

@@ -26,12 +26,13 @@ test("server-renders the research progress application shell", async () => {
 });
 
 test("keeps the database and Feishu boundaries explicit in source", async () => {
-  const [dashboard, database, feishuAuth, browserStart, browserCallback, hosting, packageJson] = await Promise.all([
+  const [dashboard, database, feishuAuth, browserStart, browserCallback, rosterImport, hosting, packageJson] = await Promise.all([
     readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/database.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/feishu-auth.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/auth/feishu/browser/start/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/auth/feishu/browser/callback/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/admin/roster/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
@@ -46,6 +47,10 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(browserStart, /SameSite=Lax/);
   assert.match(browserCallback, /state !== expectedState/);
   assert.match(browserCallback, /createFeishuSession/);
+  assert.match(rosterImport, /requireAppUser\(request, \["admin"\]\)/);
+  assert.match(rosterImport, /assertSameOrigin/);
+  assert.match(rosterImport, /confirmedRoster/);
+  assert.match(rosterImport, /counts\?\.total !== 26/);
   assert.match(hosting, /"d1": "DB"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 });

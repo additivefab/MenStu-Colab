@@ -222,8 +222,8 @@ export default function Dashboard() {
         </nav>
         <div className="privacy-note"><span>AI 数据边界已启用</span><small>代码与保密项目仅限本地模型</small></div>
         <div className="sidebar-foot">
-          <div className="avatar">{data?.viewer.name.slice(0, 1) || "于"}</div>
-          <div><strong>{data?.viewer.name || "于兴华"}</strong><span>{data?.viewer.role === "student" ? "学生" : "主导师 · 管理员"}</span></div>
+          <div className="avatar">{data?.viewer.name.slice(0, 1) || "佘"}</div>
+          <div><strong>{data?.viewer.name || "佘阳"}</strong><span>{data?.viewer.role === "student" ? "学生" : "管理员"}</span></div>
         </div>
       </aside>
 
@@ -249,14 +249,14 @@ export default function Dashboard() {
           <>
             <section className="metric-grid" aria-label="课题组概况">
               <article className="metric"><span>在组学生</span><strong>{data.metrics.total}</strong><small>{data.metrics.doctors} 博士 · {data.metrics.masters} 硕士</small></article>
-              <article className="metric"><span>30 天内有实质进展</span><strong>{data.metrics.total - data.metrics.attention}</strong><small className="positive">以导师确认后的证据为准</small></article>
+              <article className="metric"><span>当前无需预警</span><strong>{data.metrics.total - data.metrics.attention}</strong><small className="positive">首次导入从纳入管理日期计时</small></article>
               <article className="metric"><span>等待您确认</span><strong>{data.metrics.pending}</strong><small>可在右侧快速审核</small></article>
               <article className="metric attention"><span>需要关注</span><strong>{data.metrics.attention}</strong><small>黄 {data.metrics.riskCounts.黄色 ?? 0} · 橙 {data.metrics.riskCounts.橙色 ?? 0} · 红 {data.metrics.riskCounts.红色 ?? 0}</small></article>
             </section>
 
             <div className="content-grid">
               <section className="panel student-panel">
-                <PanelHeader title="学生进展" subtitle="按距离上次实质性进展的时间排序" action="查看全部 25 人 →" onAction={() => setView("students")} />
+                <PanelHeader title="学生进展" subtitle="按距离上次实质性进展的时间排序" action={`查看全部 ${data.metrics.total} 人 →`} onAction={() => setView("students")} />
                 <StudentFilters query={query} setQuery={setQuery} riskFilter={riskFilter} setRiskFilter={setRiskFilter} />
                 <StudentTable students={filteredStudents.slice(0, 8)} onSelect={setSelectedStudent} />
               </section>
@@ -322,7 +322,7 @@ export default function Dashboard() {
         ) : null}
 
         {!loading && !error && view === "meetings" ? <MeetingView students={data?.students ?? []} onRemind={sendReminder} /> : null}
-        {!loading && !error && view === "settings" && data ? <SettingsView onFeishu={() => setFeishuOpen(true)} students={data.students} /> : null}
+        {!loading && !error && view === "settings" && data ? <SettingsView onFeishu={() => setFeishuOpen(true)} students={data.students} onRosterImported={async () => { setToast("真实学生名册已导入"); await loadDashboard(); }} /> : null}
       </section>
 
       {selectedStudent ? <StudentDrawer student={selectedStudent} onClose={() => setSelectedStudent(null)} /> : null}
@@ -372,7 +372,7 @@ function ProgressModal({ students, onClose, onSaved }: { students: Student[]; on
 }
 
 function FeishuModal({ viewer, onClose, onLogout }: { viewer: DashboardData["viewer"]; onClose: () => void; onLogout: () => Promise<void> }) {
-  return <div className="modal-layer"><div className="modal compact-modal"><button className="close" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2>{viewer.name}，飞书身份已验证</h2><p>当前角色：{viewer.role === "admin" ? "主导师 · 管理员" : "学生"}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按每名学生的 7/14/21/30 天周期发送</small></span><em>下一步</em></div><div><b>3</b><span><strong>历史记录导入</strong><small>仅导入您明确授权的群聊或文档</small></span><em>待授权</em></div></div><div className="safe-banner">App Secret 只保存在加密环境变量中；系统不保存飞书 user_access_token。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
+  return <div className="modal-layer"><div className="modal compact-modal"><button className="close" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2>{viewer.name}，飞书身份已验证</h2><p>当前角色：{viewer.role === "admin" ? "管理员" : "学生"}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按每名学生的 7/14/21/30 天周期发送</small></span><em>下一步</em></div><div><b>3</b><span><strong>历史记录导入</strong><small>仅导入您明确授权的群聊或文档</small></span><em>待授权</em></div></div><div className="safe-banner">App Secret 只保存在加密环境变量中；系统不保存飞书 user_access_token。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
 }
 
 function MeetingView({ students, onRemind }: { students: Student[]; onRemind: (student: Student) => Promise<void> }) {
@@ -381,8 +381,29 @@ function MeetingView({ students, onRemind }: { students: Student[]; onRemind: (s
   return <div className="meeting-grid"><section className="panel"><PanelHeader title="未来 7 天更新提醒" subtitle="按个人需要设置，最长不超过 30 天" count={due.length} /><div className="reminder-list">{due.map((student, index) => <div key={student.id}><span>{index < 2 ? "明天" : index < 4 ? "3 天后" : "本周内"}</span><strong>{student.name}</strong><small>{student.cadenceDays} 天周期 · {student.stage}</small><button disabled={busy === student.id} onClick={async () => { setBusy(student.id); await onRemind(student); setBusy(null); }}>{busy === student.id ? "发送中…" : "飞书提醒"}</button></div>)}</div></section><section className="panel meeting-rule"><PanelHeader title="组会建议" subtitle="不是固定轮转，而是优先解决阻塞" /><div className="meeting-summary"><span>{students.filter((student) => student.risk.level !== "正常").length}</span><strong>名学生需要优先讨论</strong><p>系统会根据连续无进展时间、待决策事项和证据缺口自动生成组会议程草案。</p><button className="primary">生成本周议程</button></div></section></div>;
 }
 
-function SettingsView({ onFeishu, students }: { onFeishu: () => void; students: Student[] }) {
-  return <div className="settings-grid"><section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、消息、历史记录导入" /><div className="setting-body"><span className="status-pill safe">飞书身份已验证</span><p>登录和角色校验均在服务端完成；机器人提醒将在学生绑定飞书账号后可用。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section><section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><button>稍后连接 GitHub App</button></div></section><AccountManagement students={students} /><section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section></div>;
+function SettingsView({ onFeishu, students, onRosterImported }: { onFeishu: () => void; students: Student[]; onRosterImported: () => Promise<void> }) {
+  return <div className="settings-grid"><RosterImport students={students} onImported={onRosterImported} /><section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、消息、历史记录导入" /><div className="setting-body"><span className="status-pill safe">飞书身份已验证</span><p>登录和角色校验均在服务端完成；机器人提醒将在学生绑定飞书账号后可用。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section><section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><button>稍后连接 GitHub App</button></div></section><AccountManagement students={students} /><section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section></div>;
+}
+
+function RosterImport({ students, onImported }: { students: Student[]; onImported: () => Promise<void> }) {
+  const imported = students.length === 26 && students.some((student) => student.id === "student-026");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function importRoster() {
+    setBusy(true); setMessage("");
+    try {
+      const response = await fetch("/api/admin/roster", { method: "POST" });
+      const payload = (await response.json()) as { error?: string; message?: string; total?: number };
+      if (!response.ok) throw new Error(payload.error || "名册导入失败");
+      setMessage(`${payload.message}，共 ${payload.total} 人`);
+      await onImported();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "名册导入失败");
+    } finally { setBusy(false); }
+  }
+
+  return <section className="panel setting-card"><PanelHeader title="真实学生名册" subtitle="仅管理员可以执行导入" /><div className="setting-body"><span className="status-pill safe">{imported ? "已导入 26 人" : "等待导入"}</span><p>{imported ? "12 名博士生、14 名硕士生已纳入管理；演示记录已停用归档。" : "导入已确认的 26 人名册，并保留现有演示数据作为停用归档。"}</p><button className="primary" disabled={busy || imported} onClick={() => void importRoster()}>{busy ? "正在导入…" : imported ? "名册已导入" : "导入已确认名册"}</button>{message ? <small>{message}</small> : null}</div></section>;
 }
 
 type ManagedUser = {
@@ -431,7 +452,7 @@ function AccountManagement({ students }: { students: Student[] }) {
     } finally { setBusy(null); }
   }
 
-  return <section className="panel account-panel"><PanelHeader title="飞书账号与学生绑定" subtitle="新用户先进入等待状态，由您确认后才能访问数据" count={users.length} /><div className="account-list">{users.map((user) => <div className="account-row" key={user.id}><div className="account-person"><div className="mini-avatar">{user.display_name.slice(0, 1)}</div><span><strong>{user.display_name}</strong><small>{user.email || "飞书成员"}</small></span></div>{user.role === "admin" ? <span className="status-pill safe">管理员</span> : user.role === "student" ? <><span className="bound-student">已绑定：{user.student_name}</span><button disabled={busy === user.id} onClick={() => void updateUser(user, "pending")}>解除</button></> : <><select value={choices[user.id] || students[0]?.id || ""} onChange={(event) => setChoices((current) => ({ ...current, [user.id]: event.target.value }))}>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select><button className="bind" disabled={busy === user.id} onClick={() => void updateUser(user, "student")}>{busy === user.id ? "绑定中…" : "确认绑定"}</button></>}</div>)}{!users.length ? <div className="empty-small">学生第一次从飞书打开应用后，账号会出现在这里。</div> : null}</div>{message ? <div className="account-message">{message}</div> : null}</section>;
+  return <section className="panel account-panel"><PanelHeader title="飞书账号与学生绑定" subtitle="新用户先进入等待状态，由您确认后才能访问数据" count={users.length} /><div className="account-list">{users.map((user) => <div className="account-row" key={user.id}><div className="account-person"><div className="mini-avatar">{user.display_name.slice(0, 1)}</div><span><strong>{user.display_name}</strong><small>{user.email || "飞书成员"}</small></span></div>{user.role === "admin" ? <><span className="status-pill safe">管理员</span>{user.student_name ? <span className="bound-student">本人学生记录：{user.student_name}</span> : null}</> : user.role === "student" ? <><span className="bound-student">已绑定：{user.student_name}</span><button disabled={busy === user.id} onClick={() => void updateUser(user, "pending")}>解除</button></> : <><select value={choices[user.id] || students[0]?.id || ""} onChange={(event) => setChoices((current) => ({ ...current, [user.id]: event.target.value }))}>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select><button className="bind" disabled={busy === user.id} onClick={() => void updateUser(user, "student")}>{busy === user.id ? "绑定中…" : "确认绑定"}</button></>}</div>)}{!users.length ? <div className="empty-small">学生第一次从飞书打开应用后，账号会出现在这里。</div> : null}</div>{message ? <div className="account-message">{message}</div> : null}</section>;
 }
 
 function FeishuAccessGate({ gate, onAuthenticated }: { gate: AuthGate; onAuthenticated: () => Promise<void> }) {

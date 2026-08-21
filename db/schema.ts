@@ -10,6 +10,7 @@ export const students = sqliteTable("students", {
   cadenceDays: integer("cadence_days").notNull().default(30),
   currentFocus: text("current_focus").notNull().default(""),
   lastSubstantiveAt: text("last_substantive_at"),
+  trackingStartedAt: text("tracking_started_at"),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });

@@ -1,0 +1,1 @@
+ALTER TABLE `students` ADD `tracking_started_at` text;
