@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   detectMeetingSummary,
   detectSummaryImportCommand,
+  extractFeishuMinuteTokens,
   extractFeishuMessageText,
   parseFeishuEvent,
 } from "../lib/feishu-events.ts";
@@ -38,6 +39,21 @@ test("recognizes the explicit current-group history import command", () => {
   assert.equal(detectSummaryImportCommand("@_user_1 导入所有总结"), "导入所有总结");
   assert.equal(detectSummaryImportCommand("@探研，请导入全部 AI 总结。"), "导入全部AI总结");
   assert.equal(detectSummaryImportCommand("帮我看看以前的消息"), null);
+});
+
+test("extracts only valid Feishu Minutes tokens from links", () => {
+  assert.deepEqual(
+    extractFeishuMinuteTokens("纪要：https://example.feishu.cn/minutes/obcnq3b9jl72l83w4f14xxxx"),
+    ["obcnq3b9jl72l83w4f14xxxx"],
+  );
+  assert.deepEqual(
+    extractFeishuMinuteTokens("https://applink.feishu.cn/client/minutes/detail?minute_token=obcnq3b9jl72l83w4f14xxxx"),
+    ["obcnq3b9jl72l83w4f14xxxx"],
+  );
+  assert.deepEqual(
+    extractFeishuMinuteTokens("https://feishu.cn.evil.example/minutes/obcnq3b9jl72l83w4f14xxxx"),
+    [],
+  );
 });
 
 test("rejects a Feishu event with an invalid signature", async () => {

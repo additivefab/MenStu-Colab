@@ -4,6 +4,7 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import {
   detectMeetingSummary,
   detectSummaryImportCommand,
+  extractFeishuMinuteTokens,
   extractFeishuMessageText,
 } from "../lib/feishu-events.ts";
 
@@ -18,6 +19,7 @@ if (!/^cli_[0-9a-fA-F]{16}$/.test(appId) || !appSecret) {
 
 const pending = new Map();
 const historyScans = new Map();
+const minuteArtifacts = new Map();
 const maxHistoryMessages = 10_000;
 
 const apiClient = new Lark.Client({
@@ -74,6 +76,64 @@ async function forwardWithRetry(event) {
   })().finally(() => pending.delete(messageId));
   pending.set(messageId, task);
   return task;
+}
+
+function boundedMinuteArtifacts(data) {
+  return {
+    summary: (data.summary || "").slice(0, 60_000),
+    chapters: (data.minute_chapters || []).slice(0, 100).map((chapter) => ({
+      title: (chapter.title || "").slice(0, 500),
+      start_ms: chapter.start_ms || "",
+      stop_ms: chapter.stop_ms || "",
+      summary_content: (chapter.summary_content || "").slice(0, 4_000),
+    })),
+    todos: (data.minute_todos || []).slice(0, 200).map((todo) => ({
+      content: (todo.content || "").slice(0, 2_000),
+      assignees: (todo.assignees || []).slice(0, 30),
+      is_done: Boolean(todo.is_done),
+    })),
+    keywords: (data.keywords || []).slice(0, 80).map((keyword) => keyword.slice(0, 300)),
+  };
+}
+
+async function fetchMinuteArtifacts(minuteToken) {
+  if (minuteArtifacts.has(minuteToken)) return minuteArtifacts.get(minuteToken);
+  const task = (async () => {
+    const response = await apiClient.minutes.v1.minute.artifacts({ path: { minute_token: minuteToken } });
+    if (response.code && response.code !== 0) {
+      throw new Error(`飞书妙记接口返回 code ${response.code}`);
+    }
+    const artifacts = boundedMinuteArtifacts(response.data || {});
+    const hasContent = Boolean(
+      artifacts.summary || artifacts.chapters.length || artifacts.todos.length || artifacts.keywords.length,
+    );
+    return hasContent ? artifacts : null;
+  })().catch((error) => {
+    console.warn(`[探研] 妙记 AI 产物暂不可读取 · ${error instanceof Error ? error.message : "未知错误"}`);
+    return null;
+  });
+  minuteArtifacts.set(minuteToken, task);
+  setTimeout(() => minuteArtifacts.delete(minuteToken), 15 * 60 * 1000);
+  return task;
+}
+
+async function enrichMinuteMessage(event, text) {
+  const minuteToken = extractFeishuMinuteTokens(text)[0];
+  if (!minuteToken) return null;
+  const artifacts = await fetchMinuteArtifacts(minuteToken);
+  if (!artifacts) return null;
+  return {
+    ...event,
+    message: {
+      ...event.message,
+      content: JSON.stringify({
+        type: "飞书妙记 AI 会议纪要",
+        minute_token: minuteToken,
+        original_content: event.message?.content || "",
+        ai_artifacts: artifacts,
+      }),
+    },
+  };
 }
 
 function historySender(sender) {
@@ -141,9 +201,12 @@ async function scanChatHistory(commandEvent) {
       scanned += 1;
       if (!item.message_id || item.deleted) continue;
       const text = extractFeishuMessageText(item.body?.content || "");
-      if (detectSummaryImportCommand(text) || !detectMeetingSummary(text)) continue;
+      if (detectSummaryImportCommand(text)) continue;
+      const candidateEvent = historyEvent(commandEvent, item);
+      const enrichedEvent = await enrichMinuteMessage(candidateEvent, text);
+      if (!enrichedEvent && !detectMeetingSummary(text)) continue;
       matched += 1;
-      await forwardWithRetry(historyEvent(commandEvent, item));
+      await forwardWithRetry(enrichedEvent || candidateEvent);
     }
 
     if (!response.data?.has_more || !response.data.page_token || truncated) break;
@@ -164,6 +227,15 @@ function startHistoryScan(event) {
   historyScans.set(chatId, task);
 }
 
+async function handleGroupMessage(event, text) {
+  const enrichedEvent = await enrichMinuteMessage(event, text);
+  if (enrichedEvent) {
+    await forwardWithRetry(enrichedEvent);
+    return;
+  }
+  if (detectMeetingSummary(text)) await forwardWithRetry(event);
+}
+
 const eventDispatcher = new Lark.EventDispatcher({}).register({
   "im.message.receive_v1": async (event) => {
     const message = event.message;
@@ -173,8 +245,8 @@ const eventDispatcher = new Lark.EventDispatcher({}).register({
       startHistoryScan(event);
       return;
     }
-    if (!detectMeetingSummary(text)) return;
-    void forwardWithRetry(event);
+    if (!detectMeetingSummary(text) && extractFeishuMinuteTokens(text).length === 0) return;
+    void handleGroupMessage(event, text);
   },
 });
 
@@ -193,7 +265,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 async function startBridge() {
   await wsClient.start({ eventDispatcher });
-  console.info("[探研] 飞书长连接客户端已启动；普通群消息会在本机过滤，不会上传；支持“导入所有总结”。");
+  console.info("[探研] 飞书长连接客户端已启动；普通群消息会在本机过滤，不会上传；支持妙记 AI 产物与“导入所有总结”。");
 }
 
 startBridge().catch(() => {

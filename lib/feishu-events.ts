@@ -110,3 +110,21 @@ export function detectSummaryImportCommand(text: string) {
   const commands = ["导入所有总结", "导入全部总结", "导入所有AI总结", "导入全部AI总结", "导入所有会议纪要", "导入全部会议纪要"];
   return commands.find((command) => normalized.includes(command.toUpperCase())) ?? null;
 }
+
+export function extractFeishuMinuteTokens(text: string) {
+  const tokens = new Set<string>();
+  for (const match of text.matchAll(/https?:\/\/[^\s<>"']+/gi)) {
+    const rawUrl = match[0].replace(/[),，。.!！?？]+$/g, "");
+    try {
+      const url = new URL(rawUrl);
+      if (url.hostname !== "feishu.cn" && !url.hostname.endsWith(".feishu.cn")) continue;
+      const queryToken = url.searchParams.get("minute_token") ?? "";
+      const pathToken = url.pathname.match(/\/minutes\/([A-Za-z0-9]{24})(?:\/|$)/)?.[1] ?? "";
+      const token = queryToken || pathToken;
+      if (/^[A-Za-z0-9]{24}$/.test(token)) tokens.add(token);
+    } catch {
+      // 忽略无法解析的链接；只接受飞书域名内格式正确的妙记链接。
+    }
+  }
+  return Array.from(tokens);
+}
