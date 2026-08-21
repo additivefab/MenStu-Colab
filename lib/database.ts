@@ -97,6 +97,56 @@ export async function ensureDatabase() {
       expires_at TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS research_proposals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id TEXT NOT NULL REFERENCES students(id),
+      title TEXT NOT NULL DEFAULT '未命名方案',
+      scientific_question TEXT NOT NULL DEFAULT '',
+      hypothesis TEXT NOT NULL DEFAULT '',
+      objectives TEXT NOT NULL DEFAULT '',
+      innovation TEXT NOT NULL DEFAULT '',
+      literature_basis TEXT NOT NULL DEFAULT '',
+      methodology TEXT NOT NULL DEFAULT '',
+      data_ethics TEXT NOT NULL DEFAULT '',
+      risks TEXT NOT NULL DEFAULT '',
+      resources TEXT NOT NULL DEFAULT '',
+      references_text TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'draft',
+      current_version INTEGER NOT NULL DEFAULT 0,
+      reviewer_note TEXT NOT NULL DEFAULT '',
+      created_by_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      submitted_at TEXT,
+      approved_at TEXT
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS research_proposal_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      proposal_id INTEGER NOT NULL REFERENCES research_proposals(id),
+      version_number INTEGER NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      submitted_by_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS research_milestones (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      proposal_id INTEGER NOT NULL REFERENCES research_proposals(id),
+      title TEXT NOT NULL,
+      target_date TEXT NOT NULL,
+      evidence_target TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS proposal_audit_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      proposal_id INTEGER NOT NULL REFERENCES research_proposals(id),
+      actor_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      action TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_student_submitted ON progress_entries(student_id, submitted_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_status ON progress_entries(status, submitted_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_feishu_open_id ON app_users(feishu_open_id)"),
@@ -104,6 +154,13 @@ export async function ensureDatabase() {
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_student_id_unique ON app_users(student_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_sessions_user ON app_sessions(app_user_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_sessions_expires ON app_sessions(expires_at)"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_research_proposals_student_unique ON research_proposals(student_id)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_proposals_status_updated ON research_proposals(status, updated_at DESC)"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_proposal_versions_proposal_number ON research_proposal_versions(proposal_id, version_number)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_proposal_versions_created ON research_proposal_versions(proposal_id, created_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_milestones_proposal_order ON research_milestones(proposal_id, sort_order)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_proposal_audit_proposal_created ON proposal_audit_events(proposal_id, created_at DESC)"),
+    d1.prepare("PRAGMA optimize"),
   ]);
 
   const count = await d1.prepare("SELECT COUNT(*) AS count FROM students").first<{ count: number }>();

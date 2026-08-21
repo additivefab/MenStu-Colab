@@ -26,13 +26,15 @@ test("server-renders the research progress application shell", async () => {
 });
 
 test("keeps the database and Feishu boundaries explicit in source", async () => {
-  const [dashboard, database, feishuAuth, browserStart, browserCallback, rosterImport, hosting, packageJson] = await Promise.all([
+  const [dashboard, database, feishuAuth, browserStart, browserCallback, rosterImport, proposals, migration, hosting, packageJson] = await Promise.all([
     readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/database.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/feishu-auth.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/auth/feishu/browser/start/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/auth/feishu/browser/callback/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/admin/roster/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/proposals/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0004_spicy_morlun.sql", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
@@ -51,6 +53,14 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(rosterImport, /assertSameOrigin/);
   assert.match(rosterImport, /confirmedRoster/);
   assert.match(rosterImport, /counts\?\.total !== 26/);
+  assert.match(proposals, /requireAppUser\(request, \["admin", "student"\]\)/);
+  assert.match(proposals, /assertSameOrigin/);
+  assert.match(proposals, /管理员只能撰写与本人绑定的研究方案/);
+  assert.match(proposals, /research_proposal_versions/);
+  assert.match(proposals, /proposal_audit_events/);
+  assert.match(proposals, /只有管理员可以审核研究方案/);
+  assert.match(migration, /CREATE TABLE `research_proposals`/);
+  assert.match(migration, /CREATE UNIQUE INDEX `idx_proposal_versions_proposal_number`/);
   assert.match(hosting, /"d1": "DB"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 });

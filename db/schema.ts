@@ -83,3 +83,101 @@ export const appSessions = sqliteTable(
     index("idx_app_sessions_expires").on(table.expiresAt),
   ],
 );
+
+export const researchProposals = sqliteTable(
+  "research_proposals",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    studentId: text("student_id")
+      .notNull()
+      .references(() => students.id),
+    title: text("title").notNull().default("未命名方案"),
+    scientificQuestion: text("scientific_question").notNull().default(""),
+    hypothesis: text("hypothesis").notNull().default(""),
+    objectives: text("objectives").notNull().default(""),
+    innovation: text("innovation").notNull().default(""),
+    literatureBasis: text("literature_basis").notNull().default(""),
+    methodology: text("methodology").notNull().default(""),
+    dataEthics: text("data_ethics").notNull().default(""),
+    risks: text("risks").notNull().default(""),
+    resources: text("resources").notNull().default(""),
+    referencesText: text("references_text").notNull().default(""),
+    status: text("status", {
+      enum: ["draft", "submitted", "changes_requested", "approved"],
+    })
+      .notNull()
+      .default("draft"),
+    currentVersion: integer("current_version").notNull().default(0),
+    reviewerNote: text("reviewer_note").notNull().default(""),
+    createdByUserId: integer("created_by_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    submittedAt: text("submitted_at"),
+    approvedAt: text("approved_at"),
+  },
+  (table) => [
+    uniqueIndex("idx_research_proposals_student_unique").on(table.studentId),
+    index("idx_research_proposals_status_updated").on(table.status, table.updatedAt),
+  ],
+);
+
+export const researchProposalVersions = sqliteTable(
+  "research_proposal_versions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    proposalId: integer("proposal_id")
+      .notNull()
+      .references(() => researchProposals.id),
+    versionNumber: integer("version_number").notNull(),
+    snapshotJson: text("snapshot_json").notNull(),
+    submittedByUserId: integer("submitted_by_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_proposal_versions_proposal_number").on(table.proposalId, table.versionNumber),
+    index("idx_proposal_versions_created").on(table.proposalId, table.createdAt),
+  ],
+);
+
+export const researchMilestones = sqliteTable(
+  "research_milestones",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    proposalId: integer("proposal_id")
+      .notNull()
+      .references(() => researchProposals.id),
+    title: text("title").notNull(),
+    targetDate: text("target_date").notNull(),
+    evidenceTarget: text("evidence_target").notNull().default(""),
+    status: text("status", {
+      enum: ["pending", "in_progress", "completed", "blocked"],
+    })
+      .notNull()
+      .default("pending"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("idx_research_milestones_proposal_order").on(table.proposalId, table.sortOrder)],
+);
+
+export const proposalAuditEvents = sqliteTable(
+  "proposal_audit_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    proposalId: integer("proposal_id")
+      .notNull()
+      .references(() => researchProposals.id),
+    actorUserId: integer("actor_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    action: text("action").notNull(),
+    detail: text("detail").notNull().default(""),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("idx_proposal_audit_proposal_created").on(table.proposalId, table.createdAt)],
+);
