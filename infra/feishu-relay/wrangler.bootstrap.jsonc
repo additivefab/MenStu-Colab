@@ -1,0 +1,11 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "tanyan-feishu-relay",
+  "main": "bootstrap-worker.mjs",
+  "compatibility_date": "2026-08-21",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": false
+  }
+}
