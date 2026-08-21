@@ -86,5 +86,12 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 
-await wsClient.start({ eventDispatcher });
-console.info("[探研] 飞书长连接客户端已启动；普通群消息会在本机过滤，不会上传。");
+async function startBridge() {
+  await wsClient.start({ eventDispatcher });
+  console.info("[探研] 飞书长连接客户端已启动；普通群消息会在本机过滤，不会上传。");
+}
+
+startBridge().catch(() => {
+  console.error("[探研] 飞书长连接客户端启动失败，将由系统自动重试。");
+  process.exitCode = 1;
+});

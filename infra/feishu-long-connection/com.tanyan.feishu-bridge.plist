@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tanyan.feishu-bridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>/Users/xiaosheyang123/.local/share/tanyan-feishu-bridge/run-bridge.zsh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/xiaosheyang123/.local/share/tanyan-feishu-bridge</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>FEISHU_APP_ID</key>
+    <string>cli_aa0d8658e8b89cb6</string>
+    <key>FEISHU_KEYCHAIN_SERVICE</key>
+    <string>com.tanyan.feishu-app-secret</string>
+    <key>TANYAN_BRIDGE_BUNDLE</key>
+    <string>/Users/xiaosheyang123/.local/share/tanyan-feishu-bridge/bridge.cjs</string>
+    <key>TANYAN_NODE_BIN</key>
+    <string>/Users/xiaosheyang123/.local/bin/node</string>
+    <key>TANYAN_SITE_URL</key>
+    <string>https://progress.tz-ndt.com</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>ThrottleInterval</key>
+  <integer>15</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/xiaosheyang123/Library/Logs/Tanyan/feishu-bridge.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/xiaosheyang123/Library/Logs/Tanyan/feishu-bridge.err.log</string>
+</dict>
+</plist>
