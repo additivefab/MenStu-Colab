@@ -67,6 +67,8 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(proposalMigration, /CREATE UNIQUE INDEX `idx_proposal_versions_proposal_number`/);
   assert.match(dashboard, /飞书 AI 会议总结待确认区/);
   assert.match(feishuEvents, /x-lark-signature/);
+  assert.match(feishuEvents, /iv: encrypted\.slice\(0, 16\)/);
+  assert.match(feishuEvents, /encrypted\.slice\(16\)/);
   assert.match(feishuEvents, /会议总结/);
   assert.match(feishuEvents, /normalized\.length >= 120 && matches\.length >= 2/);
   assert.match(feishuEventRoute, /header\.event_type !== "im\.message\.receive_v1"/);

@@ -30,10 +30,12 @@ function decodeBase64(value: string) {
 async function decryptEvent(value: string, encryptKey: string) {
   const keyBytes = await sha256(encryptKey);
   const key = await crypto.subtle.importKey("raw", keyBytes, { name: "AES-CBC" }, false, ["decrypt"]);
+  const encrypted = decodeBase64(value);
+  if (encrypted.length <= 16) throw new Error("飞书加密事件内容无效");
   const decrypted = await crypto.subtle.decrypt(
-    { name: "AES-CBC", iv: keyBytes.slice(0, 16) },
+    { name: "AES-CBC", iv: encrypted.slice(0, 16) },
     key,
-    decodeBase64(value),
+    encrypted.slice(16),
   );
   return new TextDecoder().decode(decrypted);
 }
