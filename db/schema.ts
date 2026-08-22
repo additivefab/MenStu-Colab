@@ -104,6 +104,41 @@ export const mentorStudentAssignments = sqliteTable(
   ],
 );
 
+export const studentGuidanceNotes = sqliteTable(
+  "student_guidance_notes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    studentId: text("student_id")
+      .notNull()
+      .references(() => students.id),
+    mentorUserId: integer("mentor_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    sourceProgressEntryId: integer("source_progress_entry_id")
+      .references(() => progressEntries.id),
+    guidanceType: text("guidance_type", {
+      enum: ["meeting_followup", "paper", "milestone", "blocker", "general"],
+    })
+      .notNull()
+      .default("general"),
+    content: text("content").notNull(),
+    nextAction: text("next_action").notNull().default(""),
+    dueDate: text("due_date"),
+    status: text("status", { enum: ["open", "completed"] })
+      .notNull()
+      .default("open"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    check("student_guidance_notes_type_check", sql`${table.guidanceType} IN ('meeting_followup', 'paper', 'milestone', 'blocker', 'general')`),
+    check("student_guidance_notes_status_check", sql`${table.status} IN ('open', 'completed')`),
+    index("idx_student_guidance_student_created").on(table.studentId, table.createdAt),
+    index("idx_student_guidance_mentor_created").on(table.mentorUserId, table.createdAt),
+    index("idx_student_guidance_source").on(table.sourceProgressEntryId),
+  ],
+);
+
 export const appUserRoleEvents = sqliteTable(
   "app_user_role_events",
   {

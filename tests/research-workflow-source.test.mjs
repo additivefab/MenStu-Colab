@@ -2,16 +2,18 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("admin assignment scope, evidence provenance, outputs, and upgrade backfill remain wired together", async () => {
-  const [schema, migration, roleMigration, roleRequestMigration, roleMergeMigration, dashboardRoute, reviewsRoute, outputsRoute, usersRoute, progressRoute, proposalsRoute, feishuAuth, studentPage, feishuImport] = await Promise.all([
+test("admin assignment scope, evidence provenance, outputs, guidance, and upgrade backfill remain wired together", async () => {
+  const [schema, migration, roleMigration, roleRequestMigration, roleMergeMigration, guidanceMigration, dashboardRoute, reviewsRoute, outputsRoute, guidanceRoute, usersRoute, progressRoute, proposalsRoute, feishuAuth, studentPage, feishuImport] = await Promise.all([
     readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0006_boring_nehzno.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0007_magical_hobgoblin.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0008_dear_steve_rogers.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0010_merge_admin_mentor_roles.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0014_vengeful_scarlet_witch.sql", import.meta.url), "utf8"),
     readFile(new URL("../app/api/dashboard/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/reviews/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/research-outputs/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/student-guidance/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/users/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/progress/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/proposals/route.ts", import.meta.url), "utf8"),
@@ -23,6 +25,7 @@ test("admin assignment scope, evidence provenance, outputs, and upgrade backfill
   assert.match(schema, /mentorStudentAssignments/);
   assert.match(schema, /progressEvidenceSources/);
   assert.match(schema, /researchOutputs/);
+  assert.match(schema, /studentGuidanceNotes/);
   assert.match(migration, /migration_backfill/);
   assert.match(migration, /WHEN 'substantive' THEN 'substantive'/);
   assert.match(migration, /ALTER TABLE `progress_entries` ADD `updated_at` text;/);
@@ -31,6 +34,8 @@ test("admin assignment scope, evidence provenance, outputs, and upgrade backfill
   assert.match(roleMigration, /`request_id` text NOT NULL/);
   assert.match(roleRequestMigration, /idx_app_user_role_events_request/);
   assert.match(roleMergeMigration, /SET `role` = 'mentor' WHERE `role` = 'admin'/);
+  assert.match(guidanceMigration, /CREATE TABLE `student_guidance_notes`/);
+  assert.match(guidanceMigration, /student_guidance_notes_type_check/);
   assert.match(schema, /internal storage value for rollback-safe scoped admins/);
   assert.match(dashboardRoute, /getStudentScope/);
   assert.match(dashboardRoute, /scopeSql/);
@@ -43,6 +48,12 @@ test("admin assignment scope, evidence provenance, outputs, and upgrade backfill
   assert.match(outputsRoute, /validateHttpsUrl/);
   assert.match(outputsRoute, /research_output_events/);
   assert.match(outputsRoute, /requireAppUser\(request, \["superadmin", "admin"\]\)/);
+  assert.match(guidanceRoute, /canViewStudent/);
+  assert.doesNotMatch(guidanceRoute, /canReviewStudent/);
+  assert.match(guidanceRoute, /日常指导与正式审核分权/);
+  assert.match(guidanceRoute, /assertSameOrigin/);
+  assert.match(guidanceRoute, /feishu_meeting_summary_links/);
+  assert.match(guidanceRoute, /student_guidance_notes/);
   assert.match(usersRoute, /mentor_student_assignments/);
   assert.match(usersRoute, /首次超级管理员本人初始化/);
   assert.match(usersRoute, /app_user_role_events/);

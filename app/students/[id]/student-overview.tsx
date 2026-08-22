@@ -144,6 +144,42 @@ type ResearchOutput = {
   events: Array<{ id: number; action: string; detail: string; created_at: string; actor_name: string }>;
 };
 
+type GuidanceNote = {
+  id: number;
+  student_id: string;
+  source_progress_entry_id: number | null;
+  guidance_type: "meeting_followup" | "paper" | "milestone" | "blocker" | "general";
+  content: string;
+  next_action: string;
+  due_date: string | null;
+  status: "open" | "completed";
+  created_at: string;
+  updated_at: string;
+  mentor_name: string;
+  source_title: string | null;
+  source_kind: string | null;
+};
+
+type MeetingSummary = {
+  link_id: number;
+  import_id: number;
+  progress_entry_id: number;
+  title: string;
+  summary: string;
+  evidence: string;
+  review_status: ReviewStatus;
+  assessment: "substantive" | "supporting" | null;
+  reviewer_note: string;
+  submitted_at: string;
+  detected_reason: string;
+  message_created_at: string;
+  received_at: string;
+  saved_at: string;
+  source_type: string | null;
+  source_label: string | null;
+  content_sha256: string | null;
+};
+
 const reviewLabels: Record<ReviewStatus, string> = {
   submitted: "等待导师接手",
   in_review: "导师审核中",
@@ -184,6 +220,14 @@ const paperStatusLabels: Record<StudentPaper["status"], string> = {
   accepted: "已录用",
   published: "已发表",
   closed: "已关闭",
+};
+
+const guidanceTypeLabels: Record<GuidanceNote["guidance_type"], string> = {
+  meeting_followup: "组会跟进",
+  paper: "论文指导",
+  milestone: "培养节点",
+  blocker: "解除阻塞",
+  general: "综合指导",
 };
 
 const milestoneLabels: Record<MilestoneStatus, string> = {
@@ -230,6 +274,8 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [outputs, setOutputs] = useState<ResearchOutput[]>([]);
   const [papers, setPapers] = useState<StudentPaper[]>([]);
+  const [guidanceNotes, setGuidanceNotes] = useState<GuidanceNote[]>([]);
+  const [meetingSummaries, setMeetingSummaries] = useState<MeetingSummary[]>([]);
   const [viewerRole, setViewerRole] = useState<ViewerRole | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -244,6 +290,8 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   const [reviewNotes, setReviewNotes] = useState<Record<number, string>>({});
   const [reviewBusy, setReviewBusy] = useState<number | null>(null);
   const [guidanceMessage, setGuidanceMessage] = useState("");
+  const [guidanceSaveBusy, setGuidanceSaveBusy] = useState(false);
+  const [guidanceStatusBusy, setGuidanceStatusBusy] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -262,14 +310,17 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         window.location.replace("/");
         return;
       }
-      const [proposalResponse, outputResponse] = await Promise.all([
+      const [proposalResponse, outputResponse, guidanceResponse] = await Promise.all([
         fetch("/api/proposals", { cache: "no-store" }),
         fetch(`/api/research-outputs?studentId=${encodeURIComponent(studentId)}`, { cache: "no-store" }),
+        fetch(`/api/student-guidance?studentId=${encodeURIComponent(studentId)}`, { cache: "no-store" }),
       ]);
       const proposals = (await proposalResponse.json()) as { proposals?: Proposal[]; error?: string };
       const outputPayload = (await outputResponse.json()) as { outputs?: ResearchOutput[]; error?: string };
+      const guidancePayload = (await guidanceResponse.json()) as { notes?: GuidanceNote[]; meetingSummaries?: MeetingSummary[]; error?: string };
       if (!proposalResponse.ok) throw new Error(proposals.error || "研究方案读取失败");
       if (!outputResponse.ok) throw new Error(outputPayload.error || "科研成果读取失败");
+      if (!guidanceResponse.ok) throw new Error(guidancePayload.error || "导师指导与飞书总结读取失败");
       const matched = dashboard.students?.find((item) => item.id === studentId) ?? null;
       if (!matched) throw new Error("学生不存在，或当前账号无权查看该学生");
       const reviewability = new Map((dashboard.pending ?? []).map((entry) => [entry.id, entry.can_finalize]));
@@ -281,6 +332,8 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       setProposal(proposals.proposals?.find((item) => item.student_id === studentId) ?? null);
       setOutputs(outputPayload.outputs ?? []);
       setPapers((dashboard.papers ?? []).filter((paper) => paper.student_id === studentId));
+      setGuidanceNotes(guidancePayload.notes ?? []);
+      setMeetingSummaries(guidancePayload.meetingSummaries ?? []);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "学生信息读取失败");
     } finally {
@@ -379,6 +432,50 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     } catch (saveError) {
       setMilestoneMessage(saveError instanceof Error ? saveError.message : "培养节点更新失败");
     } finally { setMilestoneBusy(null); }
+  }
+
+  async function createGuidance(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = Object.fromEntries(new FormData(form));
+    setGuidanceSaveBusy(true);
+    setGuidanceMessage("");
+    try {
+      const response = await fetch("/api/student-guidance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...values, studentId }),
+      });
+      const payload = await response.json() as { error?: string; message?: string };
+      if (!response.ok) throw new Error(payload.error || "导师指导保存失败");
+      setGuidanceMessage(payload.message || "导师指导已保存到学生档案");
+      form.reset();
+      await load();
+    } catch (saveError) {
+      setGuidanceMessage(saveError instanceof Error ? saveError.message : "导师指导保存失败");
+    } finally {
+      setGuidanceSaveBusy(false);
+    }
+  }
+
+  async function updateGuidanceStatus(note: GuidanceNote, status: GuidanceNote["status"]) {
+    setGuidanceStatusBusy(note.id);
+    setGuidanceMessage("");
+    try {
+      const response = await fetch("/api/student-guidance", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: note.id, status }),
+      });
+      const payload = await response.json() as { error?: string; message?: string };
+      if (!response.ok) throw new Error(payload.error || "导师指导状态更新失败");
+      setGuidanceMessage(payload.message || "导师指导状态已更新");
+      await load();
+    } catch (saveError) {
+      setGuidanceMessage(saveError instanceof Error ? saveError.message : "导师指导状态更新失败");
+    } finally {
+      setGuidanceStatusBusy(null);
+    }
   }
 
   async function reviewProgress(entry: StudentProgress, action: "start_review" | "substantive" | "supporting" | "supplement" | "rejected") {
@@ -517,7 +614,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     </header>
 
     <nav className="student-section-nav" aria-label="学生档案章节">
-      <a href="#guidance">导师指导</a><a href="#papers">论文图谱</a><a href="#workflow">培养流程</a><a href="#evidence">进展证据</a><a href="#outputs">科研成果</a><a href="#proposal">研究方案</a><a href="#audit">审计记录</a>
+      <a href="#guidance">导师指导</a><a href="#ai-summaries">AI 总结</a><a href="#papers">论文图谱</a><a href="#workflow">培养流程</a><a href="#evidence">进展证据</a><a href="#outputs">科研成果</a><a href="#proposal">研究方案</a><a href="#audit">审计记录</a>
     </nav>
 
     <section className={`student-next-action ${insights.action.tone}`}>
@@ -529,9 +626,27 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
 
     <section className="student-guidance-workbench" id="guidance">
       <div className="student-guidance-intro">
-        <div><span>MENTOR GUIDANCE DESK</span><h2>导师指导工作台</h2><p>从学生姓名进入后，可直接核验证据、写指导意见并形成审核判断；每次操作都会进入审计链。</p></div>
-        <strong>{pendingGuidance.length}<small>项待指导</small></strong>
+        <div><span>MENTOR GUIDANCE DESK</span><h2>导师指导工作台</h2><p>指导不再依赖待审核进展。导师可以随时记录结论、下一步与期限，也可以关联某一份飞书 AI 总结。</p></div>
+        <strong>{guidanceNotes.filter((note) => note.status === "open").length}<small>项进行中</small></strong>
       </div>
+      <form className="student-guidance-compose" onSubmit={createGuidance}>
+        <div className="student-guidance-compose-title"><span>新建指导</span><strong>给 {student.name} 留下一条可执行的指导记录</strong><small>保存后长期留在该学生档案中，不需要先有待审核进展。</small></div>
+        <label>指导类型<select name="guidanceType" defaultValue="general">{Object.entries(guidanceTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label>关联飞书 AI 总结<select name="sourceProgressEntryId" defaultValue=""><option value="">不关联具体总结</option>{meetingSummaries.map((item) => <option key={item.progress_entry_id} value={item.progress_entry_id}>{dateText(item.message_created_at)} · {item.title}</option>)}</select></label>
+        <label className="wide">导师指导内容<textarea name="content" rows={4} required maxLength={3000} placeholder="写清当前判断、需要调整的方向、方法建议或关键问题。" /></label>
+        <label>下一项可交付行动<input name="nextAction" maxLength={800} placeholder="例如：补做消融实验并更新结果表" /></label>
+        <label>建议完成期限<input name="dueDate" type="date" /></label>
+        <div className="student-guidance-compose-actions"><span>指导记录与飞书总结分别保存，关联后可以相互追溯。</span><button className="primary" disabled={guidanceSaveBusy}>{guidanceSaveBusy ? "保存中…" : "保存导师指导"}</button></div>
+      </form>
+      {guidanceMessage ? <p className="student-guidance-message" role="status">{guidanceMessage}</p> : null}
+      <div className="student-guidance-ledger">
+        <div className="student-guidance-ledger-head"><div><span>GUIDANCE LOG</span><h3>已保存的导师指导</h3></div><strong>{guidanceNotes.length}</strong></div>
+        <div>{guidanceNotes.map((note) => <details key={note.id} className={note.status}>
+          <summary><span className={`student-guidance-state ${note.status}`}>{note.status === "open" ? "进行中" : "已完成"}</span><div><strong>{guidanceTypeLabels[note.guidance_type]}{note.source_title ? ` · ${note.source_title}` : ""}</strong><small>{note.mentor_name} · {dateText(note.created_at)}</small></div><i>展开查看</i></summary>
+          <div className="student-guidance-note-body"><p>{note.content}</p>{note.next_action ? <dl><div><dt>下一项行动</dt><dd>{note.next_action}</dd></div>{note.due_date ? <div><dt>建议期限</dt><dd>{note.due_date}</dd></div> : null}</dl> : null}<footer><span>{note.source_title ? `关联 ${note.source_kind || "进展"}：${note.source_title}` : "独立指导记录"}</span><button type="button" disabled={guidanceStatusBusy === note.id} onClick={() => void updateGuidanceStatus(note, note.status === "open" ? "completed" : "open")}>{note.status === "open" ? "标记已完成" : "重新打开"}</button></footer></div>
+        </details>)}{!guidanceNotes.length ? <div className="student-guidance-ledger-empty">尚无已保存指导；使用上方表单即可建立第一条。</div> : null}</div>
+      </div>
+      <div className="student-guidance-subhead"><div><span>EVIDENCE REVIEW</span><h3>待审核进展与证据判断</h3><p>这里处理学生提交或飞书导入后仍待导师判断的进展。</p></div><strong>{pendingGuidance.length}</strong></div>
       <div className="student-guidance-steps" aria-label="导师指导闭环"><span><i>1</i><b>看新增结论</b><small>先判断学生本次真正推进了什么</small></span><span><i>2</i><b>核对证据</b><small>检查来源、附件与论文版本</small></span><span><i>3</i><b>给出判断</b><small>明确下一步或要求补充</small></span></div>
       <div className="student-guidance-list">
         {pendingGuidance.map((entry) => <article key={entry.id}>
@@ -547,7 +662,18 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         </article>)}
         {!pendingGuidance.length ? <div className="student-guidance-clear"><i>✓</i><div><strong>当前没有待指导进展</strong><p>历史指导意见仍保留在下方证据时间线中。</p></div><a href="#evidence">查看完整证据链 ↓</a></div> : null}
       </div>
-      {guidanceMessage ? <p className="student-guidance-message" role="status">{guidanceMessage}</p> : null}
+    </section>
+
+    <section className="student-ai-summary-archive" id="ai-summaries">
+      <div className="student-section-head"><div><span>FEISHU AI SUMMARY ARCHIVE</span><h2>飞书 AI 总结汇总</h2><p>所有已归属到 {student.name} 的智能纪要集中保存在这里；列表先看摘要，点开后查看完整内容与导师反馈。</p></div><em>{meetingSummaries.length}</em></div>
+      <div className="student-ai-summary-stats"><div><span>已保存总结</span><strong>{meetingSummaries.length}</strong><small>按学生归档，不与其他学生混合</small></div><div><span>等待导师判断</span><strong>{meetingSummaries.filter((item) => item.review_status === "submitted" || item.review_status === "in_review").length}</strong><small>可在上方指导工作台处理</small></div><div><span>最近一次导入</span><strong>{dateText(meetingSummaries[0]?.message_created_at ?? null)}</strong><small>{meetingSummaries[0]?.source_label || "尚无飞书总结"}</small></div></div>
+      <div className="student-ai-summary-list">
+        {meetingSummaries.map((item) => <details key={item.link_id}>
+          <summary><span className="student-ai-mark">AI</span><div><small>{dateText(item.message_created_at)} · {item.source_label || "飞书智能纪要"}</small><strong>{item.title}</strong><p>{item.summary}</p></div><span className="student-ai-saved">✓ 已保存</span><i>点开查看</i></summary>
+          <div className="student-ai-summary-body"><div className="student-ai-summary-content"><span>完整总结</span><p>{item.summary}</p></div><dl><div><dt>导入识别</dt><dd>{item.detected_reason || "飞书 AI 总结"}</dd></div><div><dt>证据说明</dt><dd>{item.evidence || "飞书智能纪要自动归档"}</dd></div><div><dt>审核状态</dt><dd>{reviewLabels[item.review_status]}{item.assessment ? ` · ${item.assessment === "substantive" ? "实质性进展" : "支持性工作"}` : ""}</dd></div><div><dt>保存时间</dt><dd>{dateText(item.saved_at)}</dd></div>{item.content_sha256 ? <div><dt>内容指纹</dt><dd>{item.content_sha256.slice(0, 12)}</dd></div> : null}</dl>{item.reviewer_note ? <blockquote><b>导师反馈</b><p>{item.reviewer_note}</p></blockquote> : null}<footer><span>已作为个人进展 #{item.progress_entry_id} 保存</span><a href={`#progress-${item.progress_entry_id}`}>查看对应证据链 ↓</a></footer></div>
+        </details>)}
+        {!meetingSummaries.length ? <div className="student-ai-summary-empty"><i>AI</i><div><strong>尚无已归属的飞书 AI 总结</strong><p>在飞书导入并识别到该学生后，总结会自动保存并出现在这里。</p></div></div> : null}
+      </div>
     </section>
 
     <section className="student-paper-landscape" id="papers">
@@ -623,7 +749,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     <div className="student-page-grid">
       <section className="student-page-panel student-progress-panel" id="evidence">
         <div className="student-section-head"><div><span>EVIDENCE & REVIEW</span><h2>个人进展与证据链</h2><p>飞书智能纪要和学生主动提交均归入这里；来源、审核和评价分开记录。</p></div><em>{student.progress.length}</em></div>
-        <div className="student-progress-timeline">{student.progress.map((entry) => <article key={entry.id}>
+        <div className="student-progress-timeline">{student.progress.map((entry) => <article key={entry.id} id={`progress-${entry.id}`}>
           <div className="student-timeline-marker"><i /><span>{dateText(entry.submitted_at)}</span></div>
           <div className="student-timeline-card"><div><span className={`status-pill review-${entry.review_status}`}>{reviewLabels[entry.review_status]}</span><small>{entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.kind} · #{entry.id}</small></div><h3>{entry.paper?.title || entry.title}</h3><p>{entry.summary}</p><dl><div><dt>核验证据</dt><dd>{entry.evidence || "尚未填写"}</dd></div>{entry.paper ? <><div><dt>下一行动</dt><dd>{entry.paper.next_action} · {entry.paper.next_action_due_date}</dd></div>{entry.paper.blocker ? <div><dt>当前阻塞</dt><dd>{entry.paper.blocker}</dd></div> : null}{entry.paper.submission_identifier ? <div><dt>稿件编号 / DOI</dt><dd>{entry.paper.submission_identifier}</dd></div> : null}</> : null}{entry.assessment ? <div><dt>审核判断</dt><dd>{entry.assessment === "substantive" ? "实质性进展" : "支持性工作"}{entry.reviewer_name ? ` · ${entry.reviewer_name}` : ""}</dd></div> : null}{entry.reviewer_note ? <div><dt>审核意见</dt><dd>{entry.reviewer_note}</dd></div> : null}</dl>
             <div className="student-evidence-sources" aria-label="证据来源">{entry.evidence_sources.filter((source) => source.source_type !== "attachment").map((source) => <span key={source.id}><b>{source.label}</b>{source.source_ref ? source.source_type === "git" || source.source_type === "url" ? <a href={source.source_ref} target="_blank" rel="noreferrer">打开 ↗</a> : <small>{source.source_ref}</small> : null}{source.content_sha256 ? <em>指纹 {source.content_sha256}</em> : null}</span>)}{!entry.evidence_sources.some((source) => source.source_type !== "attachment") ? <span><b>历史文本证据</b><small>补证时将建立结构化来源</small></span> : null}</div>

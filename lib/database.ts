@@ -123,6 +123,20 @@ export async function ensureDatabase() {
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS student_guidance_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id TEXT NOT NULL REFERENCES students(id),
+      mentor_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      source_progress_entry_id INTEGER REFERENCES progress_entries(id),
+      guidance_type TEXT NOT NULL DEFAULT 'general'
+        CHECK (guidance_type IN ('meeting_followup', 'paper', 'milestone', 'blocker', 'general')),
+      content TEXT NOT NULL,
+      next_action TEXT NOT NULL DEFAULT '',
+      due_date TEXT,
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'completed')),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS app_user_role_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       target_user_id INTEGER NOT NULL REFERENCES app_users(id),
@@ -337,6 +351,9 @@ export async function ensureDatabase() {
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_mentor_student_unique ON mentor_student_assignments(mentor_user_id, student_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_mentor_active_students ON mentor_student_assignments(mentor_user_id, active, student_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_active_mentors ON mentor_student_assignments(student_id, active, mentor_user_id)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_guidance_student_created ON student_guidance_notes(student_id, created_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_guidance_mentor_created ON student_guidance_notes(mentor_user_id, created_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_guidance_source ON student_guidance_notes(source_progress_entry_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_user_role_events_target ON app_user_role_events(target_user_id, created_at)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_user_role_events_actor ON app_user_role_events(actor_user_id, created_at)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_identity_bindings_open_id ON student_feishu_identity_bindings(feishu_open_id)"),
