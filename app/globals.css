@@ -820,11 +820,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-guidance-note-body footer span { color: #8390a1; font-size: 8px; }
 .student-guidance-note-body footer button { min-height: 31px; padding: 0 10px; border: 1px solid #d3dfed; border-radius: 7px; color: #356399; background: white; font-size: 8px; }
 .student-guidance-ledger-empty { padding: 19px 0 5px; border-top: 1px solid #e8edf2; color: #8b97a6; font-size: 9px; text-align: center; }
-.student-guidance-subhead { padding: 18px 27px 12px; display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }
-.student-guidance-subhead span { color: #3270c5; font-size: 8px; font-weight: 900; letter-spacing: .12em; }
-.student-guidance-subhead h3 { margin: 4px 0; font-size: 13px; }
-.student-guidance-subhead p { margin: 0; color: #8592a4; font-size: 8px; }
-.student-guidance-subhead > strong { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; color: #93651d; background: #fff2d7; font-size: 9px; }
+.student-formal-review { border-top: 1px solid #e5eaf0; }
+.student-formal-review > summary { min-height: 72px; padding: 15px 27px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 13px; cursor: pointer; list-style: none; background: #fbfcfe; }
+.student-formal-review > summary::-webkit-details-marker { display: none; }
+.student-formal-review > summary span, .student-formal-review > summary strong, .student-formal-review > summary small { display: block; }
+.student-formal-review > summary span { color: #3970b6; font-size: 7px; font-weight: 900; letter-spacing: .12em; }
+.student-formal-review > summary strong { margin-top: 4px; font-size: 12px; }
+.student-formal-review > summary small { margin-top: 4px; color: #8390a1; font-size: 8px; }
+.student-formal-review > summary em { padding: 5px 8px; border-radius: 99px; color: #8b621d; background: #fff2d7; font-size: 8px; font-style: normal; font-weight: 900; }
+.student-formal-review > summary > i { color: #446e9f; font-size: 8px; font-style: normal; }
+.student-formal-review > summary > i::after { content: "展开审核"; }
+.student-formal-review[open] > summary { border-bottom: 1px solid #e5eaf0; background: #f6f9fd; }
+.student-formal-review[open] > summary > i::after { content: "收起审核"; }
+.student-formal-review-body { background: #fff; }
 .student-guidance-steps { padding: 13px 27px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; border-bottom: 1px solid #e8edf3; background: #f8fbff; }
 .student-guidance-steps > span { min-width: 0; padding: 3px 20px; display: grid; grid-template-columns: 26px 1fr; align-items: center; gap: 2px 9px; border-left: 1px solid #dfe7f1; }
 .student-guidance-steps > span:first-child { padding-left: 0; border-left: 0; }
@@ -1079,7 +1087,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-guidance-note-body dl { grid-template-columns: 1fr; }
   .student-guidance-note-body footer { align-items: stretch; flex-direction: column; }
   .student-guidance-note-body footer button { min-height: 44px; }
-  .student-guidance-subhead { padding-inline: 20px; }
+  .student-formal-review > summary { grid-template-columns: 1fr auto; padding-inline: 20px; }
+  .student-formal-review > summary > i { grid-column: 1 / -1; font-size: 11px; }
+  .student-formal-review > summary span, .student-formal-review > summary small, .student-formal-review > summary em { font-size: 11px; }
   .student-guidance-steps { grid-template-columns: 1fr; padding: 10px 20px; }
   .student-guidance-steps > span { padding: 9px 0; border-top: 1px solid #dfe7f1; border-left: 0; }
   .student-guidance-steps > span:first-child { border-top: 0; }

@@ -17,7 +17,7 @@ function clean(value: unknown, label: string, maxLength: number) {
 async function readStudentWorkspace(studentId: string) {
   const d1 = getD1();
   const [notes, meetingSummaries] = await Promise.all([
-    d1.prepare(`SELECT n.id, n.student_id, n.source_progress_entry_id, n.guidance_type,
+    d1.prepare(`SELECT n.id, n.student_id, n.source_progress_entry_id, n.guidance_type, n.title,
       n.content, n.next_action, n.due_date, n.status, n.created_at, n.updated_at,
       u.display_name AS mentor_name, p.title AS source_title, p.kind AS source_kind
       FROM student_guidance_notes n
@@ -74,6 +74,7 @@ export async function POST(request: Request) {
     const body = await request.json() as Record<string, unknown>;
     const studentId = clean(body.studentId, "学生", 80);
     const guidanceType = clean(body.guidanceType, "指导类型", 40) || "general";
+    const title = clean(body.title, "指导主题", 200);
     const content = clean(body.content, "指导内容", 3000);
     const nextAction = clean(body.nextAction, "下一步行动", 800);
     const dueDate = clean(body.dueDate, "完成期限", 10);
@@ -102,9 +103,9 @@ export async function POST(request: Request) {
     }
     const row = await d1.prepare(`INSERT INTO student_guidance_notes
       (student_id, mentor_user_id, source_progress_entry_id, guidance_type,
-       content, next_action, due_date)
-      VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`)
-      .bind(studentId, auth.user.id, sourceProgressEntryId, guidanceType, content, nextAction, dueDate || null)
+       title, content, next_action, due_date)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+      .bind(studentId, auth.user.id, sourceProgressEntryId, guidanceType, title, content, nextAction, dueDate || null)
       .first<{ id: number }>();
     if (!row?.id) throw new Error("无法保存导师指导");
     return Response.json({ id: row.id, message: "导师指导已保存到学生档案" }, { status: 201 });

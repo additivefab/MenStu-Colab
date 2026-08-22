@@ -1,0 +1,1 @@
+ALTER TABLE `student_guidance_notes` ADD `title` text DEFAULT '' NOT NULL;

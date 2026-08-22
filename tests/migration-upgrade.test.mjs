@@ -3,7 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-test("0010-0014 preserve existing data while adding identity, attachment, paper, and guidance workflows", async () => {
+test("0010-0015 preserve existing data while adding identity, attachment, paper, and free-form guidance workflows", async () => {
   const migrationDirectory = new URL("../drizzle/", import.meta.url);
   const names = (await readdir(migrationDirectory))
     .filter((name) => /^\d{4}_.*\.sql$/.test(name))
@@ -11,7 +11,7 @@ test("0010-0014 preserve existing data while adding identity, attachment, paper,
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
 
-  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_", "0014_"].some((prefix) => item.startsWith(prefix)))) {
+  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_", "0014_", "0015_"].some((prefix) => item.startsWith(prefix)))) {
     database.exec(await readFile(new URL(name, migrationDirectory), "utf8"));
   }
   database.exec(`
@@ -36,6 +36,7 @@ test("0010-0014 preserve existing data while adding identity, attachment, paper,
   const attachmentMigration = await readFile(new URL(names.find((item) => item.startsWith("0012_")), migrationDirectory), "utf8");
   const paperMigration = await readFile(new URL(names.find((item) => item.startsWith("0013_")), migrationDirectory), "utf8");
   const guidanceMigration = await readFile(new URL(names.find((item) => item.startsWith("0014_")), migrationDirectory), "utf8");
+  const freeGuidanceMigration = await readFile(new URL(names.find((item) => item.startsWith("0015_")), migrationDirectory), "utf8");
   database.exec(businessMigration);
   database.exec(roleMigration);
   database.exec(roleIndexMigration);
@@ -197,13 +198,14 @@ test("0010-0014 preserve existing data while adding identity, attachment, paper,
     { title: "迁移后的论文台账", stage: "drafting", manuscript_version: "v0.3", next_action: "完成讨论章节" },
   );
   database.exec(guidanceMigration);
+  database.exec(freeGuidanceMigration);
   database.exec(`INSERT INTO student_guidance_notes
-    (student_id, mentor_user_id, source_progress_entry_id, guidance_type, content, next_action, due_date)
-    VALUES ('student-upgrade', 9002, 1, 'meeting_followup', '优先核对历史实验的可重复性', '补充对照实验', '2026-09-20')`);
+    (student_id, mentor_user_id, source_progress_entry_id, guidance_type, title, content, next_action, due_date)
+    VALUES ('student-upgrade', 9002, 1, 'general', '下一轮实验设计', '优先核对历史实验的可重复性', '补充对照实验', '2026-09-20')`);
   assert.deepEqual(
-    { ...database.prepare(`SELECT guidance_type, content, next_action, status
+    { ...database.prepare(`SELECT guidance_type, title, content, next_action, status
       FROM student_guidance_notes WHERE student_id = 'student-upgrade'`).get() },
-    { guidance_type: "meeting_followup", content: "优先核对历史实验的可重复性", next_action: "补充对照实验", status: "open" },
+    { guidance_type: "general", title: "下一轮实验设计", content: "优先核对历史实验的可重复性", next_action: "补充对照实验", status: "open" },
   );
   assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
   database.close();

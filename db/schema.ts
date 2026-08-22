@@ -121,6 +121,7 @@ export const studentGuidanceNotes = sqliteTable(
     })
       .notNull()
       .default("general"),
+    title: text("title").notNull().default(""),
     content: text("content").notNull(),
     nextAction: text("next_action").notNull().default(""),
     dueDate: text("due_date"),

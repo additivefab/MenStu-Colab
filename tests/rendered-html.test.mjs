@@ -105,9 +105,14 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /未来 7 天更新/);
   assert.match(studentOverview, /科研培养流程图/);
   assert.match(studentOverview, /导师决策视图/);
-  assert.match(studentOverview, /导师指导工作台/);
+  assert.match(studentOverview, /导师自由指导区/);
+  assert.match(studentOverview, /指导主题（可选）/);
+  assert.match(studentOverview, /导师想说的话/);
+  assert.doesNotMatch(studentOverview, /<select name="guidanceType"/);
   assert.match(studentOverview, /保存导师指导/);
   assert.match(studentOverview, /已保存的导师指导/);
+  assert.match(studentOverview, /正式进展审核/);
+  assert.match(studentOverview, /不是导师自由指导/);
   assert.match(studentOverview, /飞书 AI 总结汇总/);
   assert.match(studentOverview, /✓ 已保存/);
   assert.match(studentOverview, /点开查看/);

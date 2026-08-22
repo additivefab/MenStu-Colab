@@ -149,6 +149,7 @@ type GuidanceNote = {
   student_id: string;
   source_progress_entry_id: number | null;
   guidance_type: "meeting_followup" | "paper" | "milestone" | "blocker" | "general";
+  title: string;
   content: string;
   next_action: string;
   due_date: string | null;
@@ -220,14 +221,6 @@ const paperStatusLabels: Record<StudentPaper["status"], string> = {
   accepted: "已录用",
   published: "已发表",
   closed: "已关闭",
-};
-
-const guidanceTypeLabels: Record<GuidanceNote["guidance_type"], string> = {
-  meeting_followup: "组会跟进",
-  paper: "论文指导",
-  milestone: "培养节点",
-  blocker: "解除阻塞",
-  general: "综合指导",
 };
 
 const milestoneLabels: Record<MilestoneStatus, string> = {
@@ -626,14 +619,15 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
 
     <section className="student-guidance-workbench" id="guidance">
       <div className="student-guidance-intro">
-        <div><span>MENTOR GUIDANCE DESK</span><h2>导师指导工作台</h2><p>指导不再依赖待审核进展。导师可以随时记录结论、下一步与期限，也可以关联某一份飞书 AI 总结。</p></div>
+        <div><span>MENTOR GUIDANCE DESK</span><h2>导师自由指导区</h2><p>这里是一张开放的指导便笺：导师自由书写主题和内容，不需要先选择结论，也不依赖待审核进展。</p></div>
         <strong>{guidanceNotes.filter((note) => note.status === "open").length}<small>项进行中</small></strong>
       </div>
       <form className="student-guidance-compose" onSubmit={createGuidance}>
-        <div className="student-guidance-compose-title"><span>新建指导</span><strong>给 {student.name} 留下一条可执行的指导记录</strong><small>保存后长期留在该学生档案中，不需要先有待审核进展。</small></div>
-        <label>指导类型<select name="guidanceType" defaultValue="general">{Object.entries(guidanceTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <div className="student-guidance-compose-title"><span>自由书写</span><strong>给 {student.name} 留下一条真正有内容的指导</strong><small>只有指导内容必填；主题、关联资料、下一步和期限都可以按实际需要使用。</small></div>
+        <input name="guidanceType" type="hidden" value="general" />
+        <label>指导主题（可选）<input name="title" maxLength={200} placeholder="自由填写，例如：下一轮实验设计建议" /></label>
         <label>关联飞书 AI 总结<select name="sourceProgressEntryId" defaultValue=""><option value="">不关联具体总结</option>{meetingSummaries.map((item) => <option key={item.progress_entry_id} value={item.progress_entry_id}>{dateText(item.message_created_at)} · {item.title}</option>)}</select></label>
-        <label className="wide">导师指导内容<textarea name="content" rows={4} required maxLength={3000} placeholder="写清当前判断、需要调整的方向、方法建议或关键问题。" /></label>
+        <label className="wide">导师想说的话<textarea name="content" rows={6} required maxLength={3000} placeholder="自由记录研究判断、方法建议、问题讨论、阅读建议、实验思路或任何需要学生关注的内容。" /></label>
         <label>下一项可交付行动<input name="nextAction" maxLength={800} placeholder="例如：补做消融实验并更新结果表" /></label>
         <label>建议完成期限<input name="dueDate" type="date" /></label>
         <div className="student-guidance-compose-actions"><span>指导记录与飞书总结分别保存，关联后可以相互追溯。</span><button className="primary" disabled={guidanceSaveBusy}>{guidanceSaveBusy ? "保存中…" : "保存导师指导"}</button></div>
@@ -642,12 +636,14 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       <div className="student-guidance-ledger">
         <div className="student-guidance-ledger-head"><div><span>GUIDANCE LOG</span><h3>已保存的导师指导</h3></div><strong>{guidanceNotes.length}</strong></div>
         <div>{guidanceNotes.map((note) => <details key={note.id} className={note.status}>
-          <summary><span className={`student-guidance-state ${note.status}`}>{note.status === "open" ? "进行中" : "已完成"}</span><div><strong>{guidanceTypeLabels[note.guidance_type]}{note.source_title ? ` · ${note.source_title}` : ""}</strong><small>{note.mentor_name} · {dateText(note.created_at)}</small></div><i>展开查看</i></summary>
+          <summary><span className={`student-guidance-state ${note.status}`}>{note.status === "open" ? "进行中" : "已完成"}</span><div><strong>{note.title || "自由指导"}{note.source_title ? ` · ${note.source_title}` : ""}</strong><small>{note.mentor_name} · {dateText(note.created_at)}</small></div><i>展开查看</i></summary>
           <div className="student-guidance-note-body"><p>{note.content}</p>{note.next_action ? <dl><div><dt>下一项行动</dt><dd>{note.next_action}</dd></div>{note.due_date ? <div><dt>建议期限</dt><dd>{note.due_date}</dd></div> : null}</dl> : null}<footer><span>{note.source_title ? `关联 ${note.source_kind || "进展"}：${note.source_title}` : "独立指导记录"}</span><button type="button" disabled={guidanceStatusBusy === note.id} onClick={() => void updateGuidanceStatus(note, note.status === "open" ? "completed" : "open")}>{note.status === "open" ? "标记已完成" : "重新打开"}</button></footer></div>
         </details>)}{!guidanceNotes.length ? <div className="student-guidance-ledger-empty">尚无已保存指导；使用上方表单即可建立第一条。</div> : null}</div>
       </div>
-      <div className="student-guidance-subhead"><div><span>EVIDENCE REVIEW</span><h3>待审核进展与证据判断</h3><p>这里处理学生提交或飞书导入后仍待导师判断的进展。</p></div><strong>{pendingGuidance.length}</strong></div>
-      <div className="student-guidance-steps" aria-label="导师指导闭环"><span><i>1</i><b>看新增结论</b><small>先判断学生本次真正推进了什么</small></span><span><i>2</i><b>核对证据</b><small>检查来源、附件与论文版本</small></span><span><i>3</i><b>给出判断</b><small>明确下一步或要求补充</small></span></div>
+      <details className="student-formal-review">
+        <summary><div><span>FORMAL REVIEW</span><strong>正式进展审核</strong><small>“实质性进展”等是系统状态判断，不是导师自由指导。</small></div><em>{pendingGuidance.length} 项待审</em><i aria-hidden="true" /></summary>
+        <div className="student-formal-review-body">
+      <div className="student-guidance-steps" aria-label="正式审核流程"><span><i>1</i><b>看新增结论</b><small>先判断学生本次真正推进了什么</small></span><span><i>2</i><b>核对证据</b><small>检查来源、附件与论文版本</small></span><span><i>3</i><b>记录状态</b><small>形成正式进展判断</small></span></div>
       <div className="student-guidance-list">
         {pendingGuidance.map((entry) => <article key={entry.id}>
           <header><div className={`student-guidance-kind ${entry.paper ? "paper" : "general"}`}>{entry.paper ? "论" : entry.kind.slice(0, 1)}</div><div><span>{entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.kind}</span><h3>{entry.paper?.title || entry.title}</h3><small>{dateText(entry.submitted_at)} · {entry.evidence_sources.length} 个来源 · {entry.attachments.length} 个附件</small></div><em className={entry.review_status}>{reviewLabels[entry.review_status]}</em></header>
@@ -660,8 +656,10 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
           <label>导师指导意见<textarea rows={3} maxLength={3000} value={reviewNotes[entry.id] || ""} disabled={!entry.can_finalize} onChange={(event) => setReviewNotes((current) => ({ ...current, [entry.id]: event.target.value }))} placeholder="写清判断依据、需要修正的问题和下一项可交付成果；退回补证或判定非进展时必填。" /></label>
           <footer>{entry.can_finalize ? <>{entry.review_status === "submitted" ? <button disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "start_review")}>接手审核</button> : null}<button className="approve" disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "substantive")}>确认实质性进展</button><button disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "supporting")}>记为支持性工作</button><button disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim()} onClick={() => void reviewProgress(entry, "supplement")}>要求补充证据</button><button className="reject" disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim()} onClick={() => void reviewProgress(entry, "rejected")}>不认定为进展</button></> : <p>{entry.reviewer_name ? `该记录正在由 ${entry.reviewer_name} 审核` : "该记录不可由当前账号审核"}</p>}</footer>
         </article>)}
-        {!pendingGuidance.length ? <div className="student-guidance-clear"><i>✓</i><div><strong>当前没有待指导进展</strong><p>历史指导意见仍保留在下方证据时间线中。</p></div><a href="#evidence">查看完整证据链 ↓</a></div> : null}
+        {!pendingGuidance.length ? <div className="student-guidance-clear"><i>✓</i><div><strong>当前没有待审核进展</strong><p>导师仍可继续使用上方自由指导区。</p></div><a href="#evidence">查看完整证据链 ↓</a></div> : null}
       </div>
+        </div>
+      </details>
     </section>
 
     <section className="student-ai-summary-archive" id="ai-summaries">

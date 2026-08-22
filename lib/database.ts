@@ -47,7 +47,7 @@ export function getD1() {
   return env.DB;
 }
 
-async function ensureColumn(table: "progress_entries", column: string, definition: string) {
+async function ensureColumn(table: "progress_entries" | "student_guidance_notes", column: string, definition: string) {
   const d1 = getD1();
   const { results } = await d1.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
   if (results.some((item) => item.name === column)) return;
@@ -130,6 +130,7 @@ export async function ensureDatabase() {
       source_progress_entry_id INTEGER REFERENCES progress_entries(id),
       guidance_type TEXT NOT NULL DEFAULT 'general'
         CHECK (guidance_type IN ('meeting_followup', 'paper', 'milestone', 'blocker', 'general')),
+      title TEXT NOT NULL DEFAULT '',
       content TEXT NOT NULL,
       next_action TEXT NOT NULL DEFAULT '',
       due_date TEXT,
@@ -400,6 +401,7 @@ export async function ensureDatabase() {
   await ensureColumn("progress_entries", "submitted_by_user_id", "INTEGER REFERENCES app_users(id)");
   await ensureColumn("progress_entries", "reviewed_by_user_id", "INTEGER REFERENCES app_users(id)");
   await ensureColumn("progress_entries", "updated_at", "TEXT");
+  await ensureColumn("student_guidance_notes", "title", "TEXT NOT NULL DEFAULT ''");
 
   await d1.batch([
     d1.prepare(`UPDATE progress_entries SET
