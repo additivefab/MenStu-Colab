@@ -20,6 +20,18 @@ declare global {
 }
 
 type RiskLevel = "正常" | "黄色" | "橙色" | "红色";
+type StudentProgress = {
+  id: number;
+  kind: string;
+  title: string;
+  summary: string;
+  evidence: string;
+  status: "pending" | "substantive" | "supporting" | "supplement" | "rejected";
+  reviewer_note: string;
+  submitted_at: string;
+  reviewed_at: string | null;
+};
+
 type Student = {
   id: string;
   name: string;
@@ -32,6 +44,7 @@ type Student = {
   latestTitle: string;
   latestKind: string;
   risk: { level: RiskLevel; days: number };
+  progress: StudentProgress[];
 };
 
 type PendingEntry = {
@@ -141,6 +154,13 @@ const navItems = [
 ] as const;
 
 const progressKinds = ["文献", "实验", "算法", "数据", "论文", "复现", "项目", "组会"];
+const progressStatusLabels: Record<StudentProgress["status"], string> = {
+  pending: "待审核",
+  substantive: "实质性进展",
+  supporting: "支持性工作",
+  supplement: "需要补充",
+  rejected: "非进展",
+};
 
 const proposalStatusMeta: Record<ProposalStatus, { label: string; hint: string }> = {
   draft: { label: "草稿", hint: "仅本人和管理员可见" },
@@ -430,7 +450,7 @@ function StudentTable({ students, onSelect }: { students: Student[]; onSelect: (
 }
 
 function StudentDrawer({ student, onClose }: { student: Student; onClose: () => void }) {
-  return <div className="overlay" role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Escape" || event.key === "Enter") onClose(); }} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside className="drawer"><button className="close" onClick={onClose}>×</button><div className="drawer-profile"><div className="large-avatar">{student.name.slice(-2)}</div><h2>{student.name}</h2><p>{student.gradeYear}级{student.degree}</p><span className={`risk ${student.risk.level}`}>{student.risk.level}</span></div><div className="detail-grid"><div><span>当前阶段</span><strong>{student.stage}</strong></div><div><span>更新周期</span><strong>{student.cadenceDays} 天</strong></div><div className="wide"><span>当前研究重点</span><strong>{student.currentFocus}</strong></div><div className="wide"><span>最近实质性进展</span><strong>{student.latestTitle}</strong><small>{shortDate(student.lastSubstantiveAt)} · {sinceText(student.risk.days)}</small></div></div><div className="drawer-note"><strong>系统建议</strong><p>{student.risk.level === "正常" ? "当前无需导师介入，等待下一次个性化更新。" : `已连续 ${student.risk.days} 天没有确认的实质性进展，建议检查阻塞项并给出下一步决策。`}</p></div></aside></div>;
+  return <div className="overlay" role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Escape" || event.key === "Enter") onClose(); }} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside className="drawer"><button className="close" onClick={onClose}>×</button><div className="drawer-profile"><div className="large-avatar">{student.name.slice(-2)}</div><h2>{student.name}</h2><p>{student.gradeYear}级{student.degree}</p><span className={`risk ${student.risk.level}`}>{student.risk.level}</span></div><div className="detail-grid"><div><span>当前阶段</span><strong>{student.stage}</strong></div><div><span>更新周期</span><strong>{student.cadenceDays} 天</strong></div><div className="wide"><span>当前研究重点</span><strong>{student.currentFocus}</strong></div><div className="wide"><span>最近实质性进展</span><strong>{student.latestTitle}</strong><small>{shortDate(student.lastSubstantiveAt)} · {sinceText(student.risk.days)}</small></div></div><section className="student-progress-history"><div className="section-title"><div><h3>个人进展记录</h3><p>飞书纪要按学生拆分后，只显示与 {student.name} 相关的内容。</p></div><span className="count">{student.progress.length}</span></div>{student.progress.map((entry) => <article key={entry.id}><div><span className={`status-pill ${entry.status === "pending" ? "pending" : "safe"}`}>{progressStatusLabels[entry.status]}</span><small>{shortDate(entry.submitted_at)} · {entry.kind}</small></div><h4>{entry.title}</h4><p>{entry.summary}</p><dl><div><dt>证据</dt><dd>{entry.evidence}</dd></div>{entry.reviewer_note ? <div><dt>审核意见</dt><dd>{entry.reviewer_note}</dd></div> : null}</dl></article>)}{!student.progress.length ? <div className="empty-small">尚无个人进展记录</div> : null}</section><div className="drawer-note"><strong>系统建议</strong><p>{student.risk.level === "正常" ? "当前无需导师介入，等待下一次个性化更新。" : `已连续 ${student.risk.days} 天没有确认的实质性进展，建议检查阻塞项并给出下一步决策。`}</p></div></aside></div>;
 }
 
 function ProgressModal({ students, onClose, onSaved }: { students: Student[]; onClose: () => void; onSaved: () => Promise<void> }) {
@@ -686,7 +706,7 @@ function ProposalDetail({ proposal, canReview, onToast, onRefresh }: {
 }
 
 function FeishuModal({ viewer, onClose, onLogout }: { viewer: DashboardData["viewer"]; onClose: () => void; onLogout: () => Promise<void> }) {
-  return <div className="modal-layer"><div className="modal compact-modal"><button className="close" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2>{viewer.name}，飞书身份已验证</h2><p>当前角色：{viewer.role === "admin" ? "管理员" : "学生"}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按每名学生的 7/14/21/30 天周期发送</small></span><em>下一步</em></div><div><b>3</b><span><strong>群消息 AI 总结导入</strong><small>接收群消息事件，但只保存识别为会议总结的候选消息</small></span><em>待开权限</em></div></div><div className="safe-banner">普通聊天会在接收时立即过滤且不落库；AI 总结仍需管理员确认后才能进入学生进展。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
+  return <div className="modal-layer"><div className="modal compact-modal"><button className="close" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2>{viewer.name}，飞书身份已验证</h2><p>当前角色：{viewer.role === "admin" ? "管理员" : "学生"}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按每名学生的 7/14/21/30 天周期发送</small></span><em>下一步</em></div><div><b>3</b><span><strong>智能纪要个人进展</strong><small>自动识别学生姓名并把科研部分拆成独立进展</small></span><em className="done">已接入</em></div></div><div className="safe-banner">普通聊天会在接收时立即过滤且不落库；纪要只能在学生归属明确时自动建个人进展，正式评价仍由导师完成。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
 }
 
 function MeetingView({ viewer, students, onRemind }: { viewer: DashboardData["viewer"]; students: Student[]; onRemind: (student: Student) => Promise<void> }) {
@@ -735,11 +755,21 @@ function FeishuMeetingImports({ students }: { students: Student[] }) {
     finally { setBusy(null); }
   }
 
-  return <section className="panel meeting-import-panel"><PanelHeader title="飞书 AI 会议总结待确认区" subtitle="全群消息只在接收瞬间识别；普通聊天不保存，候选总结不会自动评价学生" count={imports.filter((item) => item.status === "pending").length} /><div className="meeting-import-boundary"><b>最小留存</b><span>仅保存含“AI 总结、会议总结、会议纪要、智能纪要、妙记”等特征的候选消息；进入学生记录前必须由管理员选择学生并再次确认。</span></div><div className="meeting-import-list">{imports.map((item) => <article key={item.id}><div className="meeting-import-head"><div><span className={`status-pill ${item.status === "pending" ? "pending" : "safe"}`}>{item.status === "pending" ? "待确认" : "已生成进展草稿"}</span><strong>{shortDate(item.message_created_at)} AI 会议总结</strong><small>识别依据：{item.detected_reason} · {item.message_type || "消息"}</small></div>{!item.links.length ? <button disabled={busy === item.id} onClick={() => void update(item, "ignore")}>忽略</button> : null}</div><pre>{item.extracted_text}</pre>{item.links.length ? <div className="meeting-import-links">{item.links.map((link) => <span key={link.id}>已关联 {link.student_name} · 进展草稿 #{link.progress_entry_id}</span>)}</div> : null}<div className="meeting-import-actions"><select aria-label="关联学生" value={choices[item.id] || students[0]?.id || ""} onChange={(event) => setChoices((current) => ({ ...current, [item.id]: event.target.value }))}>{students.map((student) => <option value={student.id} key={student.id}>{student.name} · {student.stage}</option>)}</select><input aria-label="进展标题" value={titles[item.id] || ""} onChange={(event) => setTitles((current) => ({ ...current, [item.id]: event.target.value }))} placeholder="进展标题，默认：AI 会议总结" /><button className="primary" disabled={busy === item.id || !students.length} onClick={() => void update(item, "create_progress")}>{busy === item.id ? "处理中…" : "生成学生进展草稿"}</button></div></article>)}{!imports.length ? <div className="empty-small">权限和事件订阅启用后，识别到的 AI 会议总结会进入这里。</div> : null}</div>{message ? <div className="account-message">{message}</div> : null}</section>;
+  return <section className="panel meeting-import-panel">
+    <PanelHeader title="飞书 AI 会议总结自动归档" subtitle="自动按学生拆分个人科研进展；普通聊天不保存，也不会自动评价学生" count={imports.filter((item) => item.status === "pending").length} />
+    <div className="meeting-import-boundary"><b>智能拆分</b><span>纪要能明确对应到学生时直接生成各自的个人进展；多人纪要按姓名标题分段。只有无法可靠归属的内容才留在这里人工处理。</span></div>
+    <div className="meeting-import-list">{imports.map((item) => <article key={item.id}>
+      <div className="meeting-import-head"><div><span className={`status-pill ${item.status === "pending" ? "pending" : "safe"}`}>{item.status === "pending" ? "无法自动归属" : "已拆分为个人进展"}</span><strong>{shortDate(item.message_created_at)} AI 会议总结</strong><small>识别依据：{item.detected_reason} · {item.message_type || "消息"}</small></div>{item.status === "pending" && !item.links.length ? <button disabled={busy === item.id} onClick={() => void update(item, "ignore")}>忽略</button> : null}</div>
+      {item.status === "pending" ? <pre>{item.extracted_text}</pre> : null}
+      {item.links.length ? <div className="meeting-import-links">{item.links.map((link) => <span key={link.id}>已生成 {link.student_name} 的个人进展 #{link.progress_entry_id}</span>)}</div> : null}
+      {item.status === "pending" ? <div className="meeting-import-actions"><select aria-label="关联学生" value={choices[item.id] || students[0]?.id || ""} onChange={(event) => setChoices((current) => ({ ...current, [item.id]: event.target.value }))}>{students.map((student) => <option value={student.id} key={student.id}>{student.name} · {student.stage}</option>)}</select><input aria-label="进展标题" value={titles[item.id] || ""} onChange={(event) => setTitles((current) => ({ ...current, [item.id]: event.target.value }))} placeholder="无法自动拆分时的备用标题" /><button className="primary" disabled={busy === item.id || !students.length} onClick={() => void update(item, "create_progress")}>{busy === item.id ? "处理中…" : "人工归属此候选"}</button></div> : null}
+    </article>)}{!imports.length ? <div className="empty-small">识别到智能纪要后，系统会自动拆分到对应学生的个人进展。</div> : null}</div>
+    {message ? <div className="account-message">{message}</div> : null}
+  </section>;
 }
 
 function SettingsView({ onFeishu, students, onRosterImported }: { onFeishu: () => void; students: Student[]; onRosterImported: () => Promise<void> }) {
-  return <div className="settings-grid"><RosterImport students={students} onImported={onRosterImported} /><section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、提醒与 AI 会议总结导入" /><div className="setting-body"><span className="status-pill pending">全群监听待开通</span><p>接收全群消息事件，但普通聊天在接收时立即过滤且不落库；只有疑似 AI 会议总结进入管理员待确认区。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section><section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><button>稍后连接 GitHub App</button></div></section><section className="panel setting-card"><PanelHeader title="TUM 论文流程参考" subtitle="MIT 开源许可 · 本系统保持独立技术架构" /><div className="setting-body"><span className="status-pill safe">流程已移植</span><p>借鉴研究方案提交、版本历史、导师退回与确认、权限矩阵和审计留痕；飞书身份及科研证据评价仍由本系统负责。</p><a className="setting-link" href="https://github.com/ls1intum/thesis-management" target="_blank" rel="noreferrer">查看原项目与许可证</a></div></section><AccountManagement students={students} /><section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section></div>;
+  return <div className="settings-grid"><RosterImport students={students} onImported={onRosterImported} /><section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、提醒与 AI 会议总结导入" /><div className="setting-body"><span className="status-pill safe">智能拆分已启用</span><p>普通聊天即时过滤；智能纪要会按学生姓名和汇报分段生成个人进展，归属不明确时才进入备用人工区。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section><section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><button>稍后连接 GitHub App</button></div></section><section className="panel setting-card"><PanelHeader title="TUM 论文流程参考" subtitle="MIT 开源许可 · 本系统保持独立技术架构" /><div className="setting-body"><span className="status-pill safe">流程已移植</span><p>借鉴研究方案提交、版本历史、导师退回与确认、权限矩阵和审计留痕；飞书身份及科研证据评价仍由本系统负责。</p><a className="setting-link" href="https://github.com/ls1intum/thesis-management" target="_blank" rel="noreferrer">查看原项目与许可证</a></div></section><AccountManagement students={students} /><section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section></div>;
 }
 
 function RosterImport({ students, onImported }: { students: Student[]; onImported: () => Promise<void> }) {

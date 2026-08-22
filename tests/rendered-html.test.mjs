@@ -68,7 +68,8 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(proposals, /只有管理员可以审核研究方案/);
   assert.match(proposalMigration, /CREATE TABLE `research_proposals`/);
   assert.match(proposalMigration, /CREATE UNIQUE INDEX `idx_proposal_versions_proposal_number`/);
-  assert.match(dashboard, /飞书 AI 会议总结待确认区/);
+  assert.match(dashboard, /飞书 AI 会议总结自动归档/);
+  assert.match(dashboard, /个人进展记录/);
   assert.match(feishuEvents, /x-lark-signature/);
   assert.match(feishuEvents, /iv: encrypted\.slice\(0, 16\)/);
   assert.match(feishuEvents, /encrypted\.slice\(16\)/);
@@ -78,6 +79,8 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(feishuMessageImport, /message\.chat_type !== "group"/);
   assert.ok(feishuMessageImport.indexOf("if (!detectedReason)") < feishuMessageImport.indexOf("await ensureDatabase()"));
   assert.match(feishuMessageImport, /INSERT OR IGNORE INTO feishu_meeting_summary_imports/);
+  assert.match(feishuMessageImport, /splitMeetingProgressByStudent/);
+  assert.match(feishuMessageImport, /飞书智能纪要自动拆分/);
   assert.match(feishuLongConnection, /verifyLongConnectionRelay/);
   assert.doesNotMatch(feishuLongConnection, /event\.token/);
   assert.doesNotMatch(feishuBridge, /!chatId \|\| !commandEvent\.token/);

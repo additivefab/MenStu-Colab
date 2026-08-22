@@ -15,6 +15,19 @@ type StudentRow = {
   latest_kind: string | null;
 };
 
+type ProgressRow = {
+  id: number;
+  student_id: string;
+  kind: string;
+  title: string;
+  summary: string;
+  evidence: string;
+  status: "pending" | "substantive" | "supporting" | "supplement" | "rejected";
+  reviewer_note: string;
+  submitted_at: string;
+  reviewed_at: string | null;
+};
+
 export async function GET(request: Request) {
   try {
     const auth = await requireAppUser(request, ["admin", "student"]);
@@ -46,6 +59,17 @@ export async function GET(request: Request) {
         WHERE p.status = 'pending' ORDER BY p.submitted_at DESC`).all()
       : { results: [] };
 
+    const studentIds = results.map((row) => row.id);
+    let progressRows: ProgressRow[] = [];
+    if (studentIds.length) {
+      const placeholders = studentIds.map(() => "?").join(",");
+      const progress = await d1.prepare(`SELECT id, student_id, kind, title, summary, evidence,
+        status, reviewer_note, submitted_at, reviewed_at FROM progress_entries
+        WHERE student_id IN (${placeholders}) ORDER BY submitted_at DESC, id DESC LIMIT 1000`)
+        .bind(...studentIds).all<ProgressRow>();
+      progressRows = progress.results;
+    }
+
     const students = results.map((row) => ({
       id: row.id,
       name: row.display_name,
@@ -58,6 +82,7 @@ export async function GET(request: Request) {
       latestTitle: row.latest_title ?? "尚无已确认记录",
       latestKind: row.latest_kind ?? "待补充",
       risk: riskFromDate(row.last_substantive_at ?? row.tracking_started_at),
+      progress: progressRows.filter((entry) => entry.student_id === row.id),
     }));
 
     const riskCounts = students.reduce<Record<string, number>>((acc, student) => {

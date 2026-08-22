@@ -160,6 +160,17 @@ button.primary { border: 0; background: var(--blue); color: white; box-shadow: 0
 .drawer-note { padding: 16px; background: #fff8e9; border: 1px solid #f3e2b7; border-radius: 10px; }
 .drawer-note strong { font-size: 11px; color: #85651d; }
 .drawer-note p { margin: 7px 0 0; color: #7f7252; font-size: 10px; line-height: 1.7; }
+.student-progress-history { margin: 6px 0 24px; }
+.student-progress-history .section-title { border-top: 0; border-bottom: 1px solid #edf0f4; }
+.student-progress-history article { padding: 15px 0; border-bottom: 1px solid #edf0f4; }
+.student-progress-history article > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.student-progress-history article small { color: #8a96a6; font-size: 9px; }
+.student-progress-history h4 { margin: 10px 0 7px; color: #203149; font-size: 12px; }
+.student-progress-history article > p { max-height: 220px; margin: 0; overflow-y: auto; color: #526176; font-size: 10px; line-height: 1.8; white-space: pre-wrap; }
+.student-progress-history dl { margin: 10px 0 0; padding: 10px 12px; border-radius: 8px; background: #f7f9fb; }
+.student-progress-history dl > div + div { margin-top: 8px; }
+.student-progress-history dt { color: #8490a0; font-size: 8px; font-weight: 800; }
+.student-progress-history dd { margin: 3px 0 0; color: #3f4f64; font-size: 9px; line-height: 1.6; }
 
 .modal-layer { display: grid; place-items: center; padding: 24px; overflow-y: auto; }
 .modal { width: min(620px, 96vw); background: white; border-radius: 16px; padding: 28px; position: relative; box-shadow: 0 25px 80px #06132655; }
