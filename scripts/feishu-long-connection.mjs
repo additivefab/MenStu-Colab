@@ -153,7 +153,6 @@ function historyEvent(commandEvent, item) {
     app_id: commandEvent.app_id,
     event_id: `history:${messageId}`,
     event_type: "im.message.receive_v1",
-    token: commandEvent.token,
     sender: historySender(item.sender),
     message: {
       message_id: messageId,
@@ -168,8 +167,8 @@ function historyEvent(commandEvent, item) {
 
 async function scanChatHistory(commandEvent) {
   const chatId = commandEvent.message?.chat_id || "";
-  if (!chatId || !commandEvent.token) {
-    console.error("[探研] 无法扫描群历史：当前命令缺少必要的事件验证信息。");
+  if (!chatId) {
+    console.error("[探研] 无法扫描群历史：当前命令缺少群聊 ID。");
     return;
   }
 

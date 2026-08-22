@@ -26,7 +26,7 @@ test("server-renders the research progress application shell", async () => {
 });
 
 test("keeps the database and Feishu boundaries explicit in source", async () => {
-  const [dashboard, database, feishuAuth, browserStart, browserCallback, rosterImport, proposals, proposalMigration, feishuEvents, feishuEventRoute, feishuMessageImport, feishuLongConnection, meetingImports, feishuMigration, hosting, packageJson] = await Promise.all([
+  const [dashboard, database, feishuAuth, browserStart, browserCallback, rosterImport, proposals, proposalMigration, feishuEvents, feishuEventRoute, feishuMessageImport, feishuLongConnection, feishuBridge, meetingImports, feishuMigration, hosting, packageJson] = await Promise.all([
     readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/database.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/feishu-auth.ts", import.meta.url), "utf8"),
@@ -39,6 +39,7 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
     readFile(new URL("../app/api/feishu/events/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/feishu-message-import.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/feishu/long-connection/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/feishu-long-connection.mjs", import.meta.url), "utf8"),
     readFile(new URL("../app/api/feishu/meeting-imports/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0005_wet_war_machine.sql", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
@@ -78,7 +79,8 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.ok(feishuMessageImport.indexOf("if (!detectedReason)") < feishuMessageImport.indexOf("await ensureDatabase()"));
   assert.match(feishuMessageImport, /INSERT OR IGNORE INTO feishu_meeting_summary_imports/);
   assert.match(feishuLongConnection, /verifyLongConnectionRelay/);
-  assert.match(feishuLongConnection, /secureTextEqual\(event\.token, config\.verificationToken\)/);
+  assert.doesNotMatch(feishuLongConnection, /event\.token/);
+  assert.doesNotMatch(feishuBridge, /!chatId \|\| !commandEvent\.token/);
   assert.match(meetingImports, /requireAppUser\(request, \["admin"\]\)/);
   assert.match(meetingImports, /assertSameOrigin/);
   assert.match(meetingImports, /VALUES \(\?, '组会'/);
