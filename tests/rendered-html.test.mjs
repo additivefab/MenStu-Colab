@@ -59,7 +59,10 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /完整代码由本地 Agent 读取/);
   assert.match(dashboard, /学生个人工作台/);
   assert.match(dashboard, /提交论文进度/);
-  assert.match(dashboard, /提交项目进度/);
+  assert.doesNotMatch(dashboard, /提交项目进度/);
+  assert.match(dashboard, /论文台账与版本进展/);
+  assert.match(dashboard, /稿件版本/);
+  assert.match(dashboard, /下一项可交付行动/);
   assert.match(dashboard, /name="attachments" type="file" multiple/);
   assert.match(dashboard, /预约导师会议/);
   assert.ok(dashboard.indexOf('data?.viewer.role === "student"') < dashboard.indexOf('className="app-shell"'));

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { paperDeadlineState, paperStageMeta, paperStages, paperTypes, type PaperStage } from "../lib/paper-progress";
 
 declare global {
   interface Window {
@@ -36,6 +37,19 @@ type StudentProgress = {
   reviewer_name: string | null;
   submitted_at: string;
   reviewed_at: string | null;
+  paper: {
+    id: number;
+    title: string;
+    paper_type: string;
+    stage: PaperStage;
+    target_venue: string;
+    planned_submission_date: string | null;
+    submission_identifier: string;
+    manuscript_version: string;
+    next_action: string;
+    next_action_due_date: string;
+    blocker: string;
+  } | null;
   attachments: Array<{
     id: number;
     file_name: string;
@@ -62,6 +76,22 @@ type StudentProgress = {
     actor_name: string | null;
     actor_type: string;
   }>;
+};
+
+type StudentPaper = {
+  id: number;
+  student_id: string;
+  student_name: string;
+  title: string;
+  paper_type: string;
+  target_venue: string;
+  planned_submission_date: string | null;
+  current_stage: PaperStage;
+  submission_identifier: string;
+  status: "active" | "on_hold" | "accepted" | "published" | "closed";
+  latest_progress_at: string | null;
+  update_count: number;
+  pending_count: number;
 };
 
 type Student = {
@@ -95,6 +125,7 @@ type PendingEntry = {
   git_url: string;
   review_status: "submitted" | "in_review";
   reviewer_name: string | null;
+  paper: StudentProgress["paper"];
   can_finalize: boolean;
   evidence_sources: StudentProgress["evidence_sources"];
   attachments: StudentProgress["attachments"];
@@ -198,6 +229,7 @@ type DashboardData = {
     studentId: string | null;
   };
   students: Student[];
+  papers: StudentPaper[];
   pending: PendingEntry[];
   workflowTasks: Array<{
     id: number;
@@ -284,7 +316,6 @@ export default function Dashboard() {
   const [riskFilter, setRiskFilter] = useState<"全部" | RiskLevel>("全部");
   const [degreeFilter, setDegreeFilter] = useState<"全部" | Student["degree"]>("全部");
   const [submitOpen, setSubmitOpen] = useState(false);
-  const [studentSubmitKind, setStudentSubmitKind] = useState<"论文" | "项目">("论文");
   const [feishuOpen, setFeishuOpen] = useState(false);
   const [reviewBusy, setReviewBusy] = useState<number | null>(null);
   const [reviewNotes, setReviewNotes] = useState<Record<number, string>>({});
@@ -405,15 +436,16 @@ export default function Dashboard() {
 
   if (data?.viewer.role === "student") {
     const ownStudents = data.students.filter((student) => student.id === data.viewer.studentId);
+    const ownPapers = data.papers.filter((paper) => paper.student_id === data.viewer.studentId);
     return <>
       <StudentPortal
         data={data}
-        onSubmitProgress={(kind) => { setStudentSubmitKind(kind); setSubmitOpen(true); }}
+        onSubmitProgress={() => setSubmitOpen(true)}
         onRefresh={loadDashboard}
         onToast={setToast}
         onFeishu={() => setFeishuOpen(true)}
       />
-      {submitOpen ? <ProgressModal students={ownStudents} fixedKind={studentSubmitKind} onClose={() => setSubmitOpen(false)} onSaved={async () => { setSubmitOpen(false); setToast(`${studentSubmitKind}进度已提交，等待导师确认`); await loadDashboard(); }} /> : null}
+      {submitOpen ? <ProgressModal students={ownStudents} papers={ownPapers} fixedKind="论文" onClose={() => setSubmitOpen(false)} onSaved={async () => { setSubmitOpen(false); setToast("论文进度已提交，等待导师确认"); await loadDashboard(); }} /> : null}
       {feishuOpen ? <FeishuModal viewer={data.viewer} onClose={() => setFeishuOpen(false)} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.reload(); }} /> : null}
       {toast ? <div className="toast" role="status">{toast}</div> : null}
     </>;
@@ -524,7 +556,7 @@ export default function Dashboard() {
               <article className="review-card" key={entry.id}>
                 <div className="review-card-head">
                   <span className={`decision-icon kind-${entry.kind}`}>{entry.kind.slice(0, 1)}</span>
-                  <div><h2>{entry.title}</h2><p>{entry.display_name} · {entry.kind} · {shortDate(entry.submitted_at)}提交</p></div>
+                  <div><h2>{entry.paper?.title || entry.title}</h2><p>{entry.display_name} · {entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.kind} · {shortDate(entry.submitted_at)}提交</p></div>
                   <span className={`status-pill ${entry.review_status === "in_review" ? "reviewing" : "pending"}`}>
                     {entry.review_status === "in_review" ? `${entry.reviewer_name || "导师"}审核中` : "等待接手"}
                   </span>
@@ -534,6 +566,7 @@ export default function Dashboard() {
                   <div><span>证据</span><p>{entry.evidence}</p></div>
                   {entry.literature_ref ? <div><span>论文 / DOI</span><p>{entry.literature_ref}</p></div> : null}
                 </div>
+                {entry.paper ? <div className="review-paper-plan"><div><span>下一行动</span><b>{entry.paper.next_action}</b></div><div><span>行动期限</span><b>{entry.paper.next_action_due_date}</b></div>{entry.paper.submission_identifier ? <div><span>稿件编号 / DOI</span><b>{entry.paper.submission_identifier}</b></div> : null}{entry.paper.blocker ? <div className="blocker"><span>当前阻塞</span><b>{entry.paper.blocker}</b></div> : null}</div> : null}
                 <div className="evidence-source-list" aria-label="证据来源">
                   {entry.evidence_sources.filter((source) => source.source_type !== "attachment").map((source) => <span key={source.id}>
                     <b>{source.label}</b>
@@ -597,17 +630,24 @@ const studentReviewLabels: Record<StudentProgress["review_status"], string> = {
 
 function StudentPortal({ data, onSubmitProgress, onRefresh, onToast, onFeishu }: {
   data: DashboardData;
-  onSubmitProgress: (kind: "论文" | "项目") => void;
+  onSubmitProgress: () => void;
   onRefresh: () => Promise<void>;
   onToast: (message: string) => void;
   onFeishu: () => void;
 }) {
   const student = data.students.find((item) => item.id === data.viewer.studentId);
   if (!student) return <main className="student-portal-shell"><div className="error-state"><strong>学生档案尚未绑定</strong><span>请联系管理员核对飞书账号与学生记录。</span></div></main>;
-  const pendingCount = student.progress.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
-  const paperCount = student.progress.filter((entry) => entry.kind === "论文").length;
-  const projectCount = student.progress.filter((entry) => entry.kind === "项目").length;
-  const latest = [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime())[0];
+  const papers = data.papers.filter((paper) => paper.student_id === student.id);
+  const paperEntries = student.progress.filter((entry) => entry.kind === "论文");
+  const pendingCount = paperEntries.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
+  const latest = [...paperEntries].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime())[0];
+  const trackingPapers = papers.filter((paper) => paper.status === "active" || paper.status === "on_hold");
+  const leadPaper = trackingPapers.find((paper) => paper.status === "active") ?? trackingPapers[0] ?? papers[0];
+  const planned = trackingPapers
+    .map((paper) => paper.planned_submission_date)
+    .filter((value): value is string => Boolean(value))
+    .sort()[0] ?? null;
+  const deadline = paperDeadlineState(planned);
   return <main className="student-portal-shell">
     <header className="student-portal-header">
       <div className="brand"><div className="brand-mark">探</div><div><strong>探研</strong><span>学生个人工作台</span></div></div>
@@ -615,38 +655,39 @@ function StudentPortal({ data, onSubmitProgress, onRefresh, onToast, onFeishu }:
     </header>
 
     <section className="student-portal-hero">
-      <div><span className="student-portal-kicker">PERSONAL RESEARCH DESK</span><h1>{student.name}，记录本周的新结论</h1><p>{student.gradeYear}级{student.degree} · {student.stage} · 当前方向：{student.currentFocus || "待补充"}</p></div>
+      <div><span className="student-portal-kicker">PAPER PROGRESS DESK</span><h1>{student.name}，推进你的论文</h1><p>按阶段门记录版本、证据、下一行动和截止日期；每次提交都保留导师反馈。</p></div>
       <div className="student-primary-actions">
-        <button className="primary" type="button" onClick={() => onSubmitProgress("论文")}>＋ 提交论文进度</button>
-        <button type="button" onClick={() => onSubmitProgress("项目")}>＋ 提交项目进度</button>
+        <button className="primary" type="button" onClick={onSubmitProgress}>＋ 提交论文进度</button>
         <button type="button" onClick={() => document.getElementById("student-meeting-form")?.scrollIntoView({ behavior: "smooth", block: "start" })}>预约导师会议</button>
       </div>
     </section>
 
     <section className="student-portal-summary" aria-label="我的提交概况">
-      <article><span>论文进度</span><strong>{paperCount}</strong><small>论文撰写、投稿与返修</small></article>
-      <article><span>项目进度</span><strong>{projectCount}</strong><small>项目研发、交付与验收</small></article>
+      <article><span>论文台账</span><strong>{papers.length}</strong><small>{latest ? `共 ${paperEntries.length} 次版本化更新` : "先建立第一篇论文"}</small></article>
+      <article><span>当前阶段</span><strong>{leadPaper ? paperStageMeta[leadPaper.current_stage].label : "尚未开始"}</strong><small>{leadPaper?.title || "提交进度时可新建论文"}</small></article>
       <article><span>等待导师反馈</span><strong>{pendingCount}</strong><small>提交后由导师或超级管理员确认</small></article>
-      <article><span>最近更新</span><strong>{latest ? shortDate(latest.submitted_at) : "暂无"}</strong><small>{student.cadenceDays} 天个人更新周期</small></article>
+      <article className={deadline.overdue ? "overdue" : ""}><span>计划投稿</span><strong>{deadline.label}</strong><small>{planned || "请在论文台账中设置日期"}</small></article>
     </section>
 
     <div className="student-portal-grid">
-      <StudentProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} />
+      <StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} />
       <StudentMeetingRequests onToast={onToast} />
     </div>
-    <footer className="student-portal-boundary">学生端仅允许提交本人进展、补充本人证据和预约会议；方案、成果、审核及系统管理由相应角色处理。</footer>
+    <footer className="student-portal-boundary">学生端仅管理本人论文进度、稿件附件和会议预约；论文阶段由提交记录推进，导师审核结论不会被后续版本覆盖。</footer>
   </main>;
 }
 
-function StudentProgressPanel({ student, onRefresh, onToast }: {
+function StudentProgressPanel({ student, papers, onRefresh, onToast }: {
   student: Student;
+  papers: StudentPaper[];
   onRefresh: () => Promise<void>;
   onToast: (message: string) => void;
 }) {
   const [busy, setBusy] = useState<number | null>(null);
   const entries = [...student.progress]
+    .filter((entry) => entry.kind === "论文")
     .sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime())
-    .slice(0, 8);
+    .slice(0, 12);
 
   async function resubmit(event: FormEvent<HTMLFormElement>, entry: StudentProgress) {
     event.preventDefault();
@@ -670,21 +711,28 @@ function StudentProgressPanel({ student, onRefresh, onToast }: {
   }
 
   return <section className="student-portal-panel student-progress-feed">
-    <div className="student-portal-panel-head"><div><span>MY PROGRESS</span><h2>我的提交与导师反馈</h2><p>记录不会被覆盖；退回后可在原记录下补证。</p></div><b>{student.progress.length}</b></div>
+    <div className="student-portal-panel-head"><div><span>PAPER REGISTER</span><h2>论文台账与版本进展</h2><p>一篇论文一条台账；每次更新记录阶段、稿件版本、下一行动与证据。</p></div><b>{entries.length}</b></div>
+    <div className="student-paper-register">{papers.map((paper) => { const due = paperDeadlineState(paper.planned_submission_date); const deadlineLabel = paper.status === "published" ? "已发表" : paper.status === "accepted" ? "已录用" : due.label; return <article key={paper.id}>
+      <div><span className={`paper-stage stage-${paper.current_stage}`}>{paperStageMeta[paper.current_stage].label}</span><em className={paper.status === "active" && due.overdue ? "overdue" : ""}>{deadlineLabel}</em></div>
+      <h3>{paper.title}</h3><p>{paper.paper_type}{paper.target_venue ? ` · ${paper.target_venue}` : " · 目标期刊/会议待定"}</p>
+      <footer><span>{paper.update_count} 次更新</span><span>{paper.pending_count ? `${paper.pending_count} 条待反馈` : "无待反馈"}</span></footer>
+    </article>; })}{!papers.length ? <div className="student-portal-empty">尚未建立论文台账。第一次提交论文进度时，填写论文题目与计划投稿日期即可建立。</div> : null}</div>
     <div className="student-progress-feed-list">{entries.map((entry) => <article key={entry.id}>
       <div><span className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</span><time>{shortDate(entry.submitted_at)}</time></div>
-      <h3>{entry.title}</h3><small>{entry.kind}</small><p>{entry.summary}</p>
+      <h3>{entry.paper?.title || entry.title}</h3><small>{entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : "历史论文进展"}</small><p>{entry.summary}</p>
+      {entry.paper ? <dl className="student-paper-update-detail"><div><dt>下一行动</dt><dd>{entry.paper.next_action}</dd></div><div><dt>行动期限</dt><dd>{entry.paper.next_action_due_date}</dd></div>{entry.paper.submission_identifier ? <div><dt>稿件编号 / DOI</dt><dd>{entry.paper.submission_identifier}</dd></div> : null}{entry.paper.blocker ? <div className="blocker"><dt>当前阻塞</dt><dd>{entry.paper.blocker}</dd></div> : null}</dl> : null}
       {entry.attachments?.length ? <div className="student-attachment-list" aria-label="提交附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
       {entry.reviewer_note ? <blockquote><b>导师反馈</b><span>{entry.reviewer_note}</span></blockquote> : null}
       {entry.review_status === "changes_requested" ? <details><summary>补充证据并重新提交</summary><form onSubmit={(event) => void resubmit(event, entry)}>
         <label>更新后的结论<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label>
         <label>补充核验证据<textarea name="evidence" rows={3} required defaultValue={entry.evidence} /></label>
         {entry.kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required defaultValue={entry.literature_ref} /></label> : <input type="hidden" name="literatureRef" value={entry.literature_ref || ""} />}
-        <label>Git 链接（可选）<input name="gitUrl" type="url" defaultValue={entry.git_url} placeholder="仅支持 https://" /></label>
+        {entry.paper ? <><input type="hidden" name="paperId" value={entry.paper.id} /><label>论文阶段<select name="paperStage" defaultValue={entry.paper.stage}>{paperStages.map((stage) => <option key={stage} value={stage}>{paperStageMeta[stage].label}</option>)}</select></label><label>稿件版本<input name="manuscriptVersion" required defaultValue={entry.paper.manuscript_version} /></label><label>下一行动<textarea name="nextAction" rows={2} required defaultValue={entry.paper.next_action} /></label><label>行动期限<input name="nextActionDueDate" type="date" required defaultValue={entry.paper.next_action_due_date} /></label><label>阻塞问题（可选）<textarea name="blocker" rows={2} defaultValue={entry.paper.blocker} /></label><label>稿件编号 / DOI（可选）<input name="submissionIdentifier" defaultValue={entry.paper.submission_identifier} /></label></> : null}
+        <input name="gitUrl" type="hidden" value={entry.git_url || ""} />
         <label>补充附件（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件，单个不超过 20 MB，总计不超过 50 MB</small></label>
         <button className="primary" disabled={busy === entry.id}>{busy === entry.id ? "提交中…" : "重新提交"}</button>
       </form></details> : null}
-    </article>)}{!entries.length ? <div className="student-portal-empty">尚无进展。提交第一条可核验的新结论后，会在这里看到导师反馈。</div> : null}</div>
+    </article>)}{!entries.length ? <div className="student-portal-empty">尚无论文进度。提交第一条带稿件版本和下一行动的更新后，会在这里看到导师反馈。</div> : null}</div>
   </section>;
 }
 
@@ -890,13 +938,16 @@ function StudentTable({ students }: { students: Student[] }) {
   return <div className="student-table"><div className="table-row table-head"><span>学生</span><span>当前阶段</span><span>下一行动</span><span>科研成果</span><span>状态</span></div>{students.map((student) => <Link className="table-row student-row" key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><div className="student-name"><div className="mini-avatar">{student.name.slice(-2)}</div><div><strong>{student.name}</strong><small>{student.gradeYear}级{student.degree} · {student.cadenceDays}天更新</small></div></div><div><span className="stage-tag">{student.stage}</span></div><div className="progress-copy"><strong>{student.nextMilestone || student.latestTitle}</strong><small><em>{student.nextMilestone ? "培养节点" : student.latestKind}</em>{student.nextMilestoneDate ? shortDate(student.nextMilestoneDate) : sinceText(student.risk.days)}</small></div><div className="output-count"><strong>{student.outputCount}</strong><small>论文/数据/软件等</small></div><div><span className={`risk ${student.risk.level}`}>{student.risk.level}</span></div></Link>)}{!students.length ? <div className="empty-small">没有符合条件的学生</div> : null}</div>;
 }
 
-function ProgressModal({ students, fixedKind, onClose, onSaved }: {
+function ProgressModal({ students, papers = [], fixedKind, onClose, onSaved }: {
   students: Student[];
-  fixedKind?: "论文" | "项目";
+  papers?: StudentPaper[];
+  fixedKind?: "论文";
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
   const [kind, setKind] = useState(fixedKind ?? "文献");
+  const [paperSelection, setPaperSelection] = useState(papers[0] ? String(papers[0].id) : "new");
+  const [paperStage, setPaperStage] = useState<PaperStage>(papers[0]?.current_stage ?? "planning");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -930,8 +981,22 @@ function ProgressModal({ students, fixedKind, onClose, onSaved }: {
     } catch (submitError) { setFormError(submitError instanceof Error ? submitError.message : "提交失败"); setBusy(false); }
   }
   const paperProgress = kind === "论文";
-  const projectProgress = kind === "项目";
-  return <div className="modal-layer" role="presentation"><div className="modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="progress-dialog-title"><button className="close" aria-label="关闭提交进展对话框" onClick={onClose}>×</button><div className="modal-title"><span>{fixedKind ? `提交${fixedKind}进度` : "新增进展记录"}</span><h2 id="progress-dialog-title">{paperProgress ? "论文推进到了哪一步？" : projectProgress ? "项目取得了什么新进展？" : "这次工作产生了什么新信息？"}</h2><p>填写结论，并通过文字说明或附件提供可核验的证据。</p></div><form onSubmit={submit}><div className="form-row">{fixedKind ? <label>学生<input name="studentName" value={students[0]?.name ?? ""} readOnly /><input name="studentId" type="hidden" value={students[0]?.id ?? ""} /></label> : <label>学生<select name="studentId" required defaultValue={students[0]?.id}>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label>}{fixedKind ? <label>进展类型<input name="kindLabel" value={`${fixedKind}进度`} readOnly /></label> : <label>进展类型<select name="kind" value={kind} onChange={(event) => setKind(event.target.value)}>{progressKinds.map((item) => <option key={item}>{item}</option>)}</select></label>}</div><label>进展标题<input name="title" required placeholder={paperProgress ? "例如：完成论文初稿的方法与实验章节" : projectProgress ? "例如：完成项目中期版本交付" : "例如：完成跨材料泛化验证"} /></label><label>新增结论<textarea name="summary" required rows={3} placeholder={paperProgress ? "本次完成了哪些章节、修改或投稿节点？" : projectProgress ? "本次完成了哪些研发、交付或验收节点？" : "本次工作确认、排除或发现了什么？"} /></label><label>文字证据（可选）<textarea name="evidence" rows={2} placeholder="版本号、实验编号、图表位置、评审记录；也可以只上传附件" /></label>{kind === "文献" || kind === "论文" ? <label>论文题目 / DOI（可选）<input name="literatureRef" required={kind === "文献"} placeholder="论文题目、DOI 或投稿编号" /></label> : <input type="hidden" name="literatureRef" value="" />}<label>私有 GitHub 链接（可选）<input name="gitUrl" type="url" placeholder="只保存 HTTPS 链接；完整代码由本地 Agent 读取" /></label><label>进展附件（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件；单个不超过 20 MB，总计不超过 50 MB</small></label>{formError ? <p className="form-error">{formError}</p> : null}<div className="modal-actions"><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={busy}>{busy ? "正在上传并提交…" : "提交给导师确认"}</button></div></form></div></div>;
+  const selectedPaper = papers.find((paper) => String(paper.id) === paperSelection);
+  const minimumDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+
+  if (fixedKind === "论文") {
+    return <div className="modal-layer" role="presentation"><div className="modal paper-progress-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="progress-dialog-title"><button className="close" aria-label="关闭提交论文进度对话框" onClick={onClose}>×</button><div className="modal-title"><span>论文阶段更新</span><h2 id="progress-dialog-title">论文推进到了哪一个可验证节点？</h2><p>按“当前阶段 → 本轮产出 → 下一行动 → 截止日期”提交，附件作为稿件版本证据保留。</p></div><form onSubmit={submit}>
+      <input name="studentId" type="hidden" value={students[0]?.id ?? ""} />
+      <div className="paper-form-section"><h3>1 · 选择论文</h3><label>论文台账<select value={paperSelection} onChange={(event) => { const value = event.target.value; setPaperSelection(value); setPaperStage(papers.find((paper) => String(paper.id) === value)?.current_stage ?? "planning"); }}>{papers.map((paper) => <option key={paper.id} value={paper.id}>{paper.title}</option>)}<option value="new">＋ 新建论文台账</option></select></label>{selectedPaper ? <><input type="hidden" name="paperId" value={selectedPaper.id} /><div className="selected-paper-summary"><b>{selectedPaper.paper_type}</b><span>{selectedPaper.target_venue || "目标期刊/会议待定"}</span><em>{paperDeadlineState(selectedPaper.planned_submission_date).label}</em></div><div className="form-row"><label>目标期刊 / 会议<input name="targetVenue" defaultValue={selectedPaper.target_venue} placeholder="待定可留空" /></label><label>修订后的计划投稿日期<input name="plannedSubmissionDate" type="date" defaultValue={selectedPaper.planned_submission_date ?? ""} required /></label></div></> : <div className="form-row"><label>论文题目<input name="paperTitle" required placeholder="填写暂定题目，后续版本沿用同一台账" /></label><label>论文类型<select name="paperType" defaultValue="期刊论文">{paperTypes.map((type) => <option key={type}>{type}</option>)}</select></label><label>目标期刊 / 会议（可选）<input name="targetVenue" placeholder="例如：NDT & E International" /></label><label>计划投稿日期<input name="plannedSubmissionDate" type="date" min={minimumDate} required /></label></div>}</div>
+      <div className="paper-form-section"><h3>2 · 阶段与版本</h3><label>当前阶段<select name="paperStage" value={paperStage} onChange={(event) => setPaperStage(event.target.value as PaperStage)}>{paperStages.map((stage) => <option key={stage} value={stage}>{paperStageMeta[stage].label}</option>)}</select></label><div className="paper-gate-hint"><b>阶段门</b><span>{paperStageMeta[paperStage].gate}</span></div><div className="form-row"><label>本轮更新标题<input name="title" required placeholder="例如：完成方法与实验章节内审稿" /></label><label>稿件版本<input name="manuscriptVersion" required placeholder="例如：v0.3、内审稿 2、R1" /></label></div><label>本轮已完成<textarea name="summary" required rows={3} placeholder="只写已完成、可检查的章节、实验、修改或投稿动作" /></label><label>文字证据（可选）<textarea name="evidence" rows={2} placeholder="章节页码、图表编号、评审记录；也可以只上传稿件附件" /></label></div>
+      <div className="paper-form-section"><h3>3 · 下一行动</h3><label>下一项可交付行动<textarea name="nextAction" required rows={2} placeholder="例如：补充厚板数据消融实验并更新图 6" /></label><div className="form-row"><label>行动期限<input name="nextActionDueDate" type="date" min={minimumDate} required /></label><label>稿件编号 / DOI（投稿后可填）<input name="submissionIdentifier" placeholder="Manuscript ID、DOI 或送审编号" /></label></div><label>当前阻塞（可选）<textarea name="blocker" rows={2} placeholder="只写需要导师决策、资源或协作支持的问题；没有可留空" /></label></div>
+      <input type="hidden" name="literatureRef" value="" /><input type="hidden" name="gitUrl" value="" />
+      <label>稿件与证据附件（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>建议上传带版本号的稿件、回复信或关键图表；最多 5 个文件，单个不超过 20 MB</small></label>
+      {formError ? <p className="form-error">{formError}</p> : null}<div className="modal-actions"><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={busy}>{busy ? "正在上传并提交…" : "提交论文进度"}</button></div>
+    </form></div></div>;
+  }
+
+  return <div className="modal-layer" role="presentation"><div className="modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="progress-dialog-title"><button className="close" aria-label="关闭提交进展对话框" onClick={onClose}>×</button><div className="modal-title"><span>新增进展记录</span><h2 id="progress-dialog-title">{paperProgress ? "论文推进到了哪一步？" : "这次工作产生了什么新信息？"}</h2><p>填写结论，并通过文字说明或附件提供可核验的证据。</p></div><form onSubmit={submit}><div className="form-row"><label>学生<select name="studentId" required defaultValue={students[0]?.id}>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label><label>进展类型<select name="kind" value={kind} onChange={(event) => setKind(event.target.value)}>{progressKinds.map((item) => <option key={item}>{item}</option>)}</select></label></div><label>进展标题<input name="title" required placeholder="例如：完成跨材料泛化验证" /></label><label>新增结论<textarea name="summary" required rows={3} placeholder="本次工作确认、排除或发现了什么？" /></label><label>文字证据（可选）<textarea name="evidence" rows={2} placeholder="实验编号、图表位置、评审记录；也可以只上传附件" /></label>{kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required placeholder="至少提供可识别的论文题目或 DOI" /></label> : <input type="hidden" name="literatureRef" value="" />}<label>私有 GitHub 链接（可选）<input name="gitUrl" type="url" placeholder="只保存 HTTPS 链接；完整代码由本地 Agent 读取" /></label><label>进展附件（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件；单个不超过 20 MB，总计不超过 50 MB</small></label>{formError ? <p className="form-error">{formError}</p> : null}<div className="modal-actions"><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={busy}>{busy ? "正在上传并提交…" : "提交给导师确认"}</button></div></form></div></div>;
 }
 
 function ProposalWorkspace({ viewer, students, onToast }: {

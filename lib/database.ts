@@ -192,6 +192,31 @@ export async function ensureDatabase() {
       uploaded_by_user_id INTEGER NOT NULL REFERENCES app_users(id),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS student_papers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id TEXT NOT NULL REFERENCES students(id),
+      title TEXT NOT NULL,
+      paper_type TEXT NOT NULL DEFAULT '期刊论文',
+      target_venue TEXT NOT NULL DEFAULT '',
+      planned_submission_date TEXT,
+      current_stage TEXT NOT NULL DEFAULT 'planning',
+      submission_identifier TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'active',
+      latest_progress_at TEXT,
+      created_by_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS paper_progress_details (
+      progress_entry_id INTEGER PRIMARY KEY REFERENCES progress_entries(id),
+      paper_id INTEGER NOT NULL REFERENCES student_papers(id),
+      stage TEXT NOT NULL,
+      manuscript_version TEXT NOT NULL DEFAULT '',
+      next_action TEXT NOT NULL,
+      next_action_due_date TEXT NOT NULL,
+      blocker TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS research_proposals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id TEXT NOT NULL REFERENCES students(id),
@@ -322,6 +347,10 @@ export async function ensureDatabase() {
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_audit_entry_created ON progress_audit_events(progress_entry_id, created_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_attachments_storage_key ON progress_attachments(storage_key)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_attachments_entry_created ON progress_attachments(progress_entry_id, created_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_papers_student_status ON student_papers(student_id, status, updated_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_papers_stage_due ON student_papers(current_stage, planned_submission_date)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_paper_progress_paper_created ON paper_progress_details(paper_id, created_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_paper_progress_due ON paper_progress_details(next_action_due_date, stage)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_research_proposals_student_unique ON research_proposals(student_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_proposals_status_updated ON research_proposals(status, updated_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_proposal_versions_proposal_number ON research_proposal_versions(proposal_id, version_number)"),

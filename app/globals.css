@@ -170,6 +170,11 @@ button.primary { border: 0; background: var(--blue); color: white; box-shadow: 0
 .review-evidence > div { padding: 13px; background: #f8fafc; border: 1px solid #edf0f4; border-radius: 9px; }
 .review-evidence span { color: #8895a6; font-size: 9px; font-weight: 700; }
 .review-evidence p { margin: 6px 0 0; font-size: 11px; line-height: 1.6; }
+.review-paper-plan { margin: -7px 0 15px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.review-paper-plan > div { padding: 11px 12px; display: grid; gap: 5px; border: 1px solid #dbe6f3; border-radius: 9px; background: #f5f9ff; }
+.review-paper-plan > div.blocker { grid-column: 1 / -1; border-color: #efd9b0; background: #fffaf0; }
+.review-paper-plan span { color: #7d8da2; font-size: 8px; font-weight: 800; }
+.review-paper-plan b { color: #334b68; font-size: 10px; line-height: 1.55; }
 .review-actions { display: flex; gap: 8px; padding-top: 14px; border-top: 1px solid #eef1f4; }
 .review-actions button { border: 1px solid #dfe5ec; background: white; border-radius: 8px; height: 34px; padding: 0 12px; font-size: 10px; font-weight: 700; }
 .review-actions button:hover { background: #f7f9fc; }
@@ -227,6 +232,7 @@ button.primary { border: 0; background: var(--blue); color: white; box-shadow: 0
 
 .modal-layer { display: grid; place-items: center; padding: 24px; overflow-y: auto; }
 .modal { width: min(620px, 96vw); background: white; border-radius: 16px; padding: 28px; position: relative; box-shadow: 0 25px 80px #06132655; }
+.paper-progress-modal { width: min(760px, 96vw); }
 .compact-modal { width: min(570px, 96vw); }
 .modal-title > span { color: #2b63bf; font-size: 10px; font-weight: 800; }
 .modal-title h2 { margin: 7px 0 6px; font-size: 20px; }
@@ -241,6 +247,15 @@ button.primary { border: 0; background: var(--blue); color: white; box-shadow: 0
 .modal-actions { display: flex; justify-content: flex-end; gap: 9px; padding-top: 4px; }
 .modal-actions button { min-height: 38px; border: 1px solid #dfe5ec; background: white; border-radius: 8px; padding: 0 15px; font-size: 11px; font-weight: 700; }
 .modal-actions button.primary { background: var(--blue); border-color: var(--blue); }
+.paper-form-section { display: grid; gap: 12px; padding: 15px 16px; border: 1px solid #e1e8f1; border-radius: 12px; background: #fbfcfe; }
+.paper-form-section > h3 { margin: 0; color: #2f64ad; font-size: 11px; letter-spacing: .03em; }
+.selected-paper-summary { padding: 10px 12px; display: grid; grid-template-columns: auto 1fr auto; gap: 9px; align-items: center; border-radius: 8px; background: #edf4ff; }
+.selected-paper-summary b, .selected-paper-summary span, .selected-paper-summary em { font-size: 9px; font-style: normal; }
+.selected-paper-summary b { color: #2d64b5; }
+.selected-paper-summary span { color: #52657d; }
+.selected-paper-summary em { color: #7f8c9d; }
+.paper-gate-hint { padding: 10px 12px; display: flex; gap: 8px; border-left: 3px solid #4f7fc3; border-radius: 0 8px 8px 0; color: #4f6075; background: #edf4ff; font-size: 9px; line-height: 1.55; }
+.paper-gate-hint b { color: #2d64b5; flex: 0 0 auto; }
 .integration-list { display: grid; gap: 9px; }
 .integration-list > div { display: grid; grid-template-columns: 32px 1fr auto; gap: 11px; align-items: center; padding: 13px; border: 1px solid #e7ebf0; border-radius: 10px; }
 .integration-list > div > b { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; color: #315fae; background: #eaf1ff; font-size: 10px; }
@@ -670,6 +685,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-portal-summary span { color: #7e8b9e; font-size: 12px; font-weight: 750; }
 .student-portal-summary strong { margin: 6px 0 4px; font-size: 24px; }
 .student-portal-summary small { color: #8c98a8; font-size: 12px; }
+.student-portal-summary article.overdue { border-color: #edc9c4; background: #fff8f7; }
+.student-portal-summary article.overdue strong { color: #ad4c44; }
 .student-portal-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr); gap: 18px; align-items: start; }
 .student-portal-panel { overflow: hidden; border: 1px solid #e1e8f0; border-radius: 19px; background: #fff; box-shadow: 0 10px 28px rgba(56, 78, 108, .07); }
 .student-portal-panel-head { display: flex; justify-content: space-between; padding: 23px 25px 18px; border-bottom: 1px solid #edf1f5; }
@@ -677,6 +694,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-portal-panel-head h2 { margin: 5px 0 3px; font-size: 19px; }
 .student-portal-panel-head p { margin: 0; color: #8793a4; font-size: 13px; }
 .student-portal-panel-head > b { color: #2e6dbc; font-size: 20px; }
+.student-paper-register { padding: 18px 24px 8px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; border-bottom: 1px solid #edf1f5; background: #fafcff; }
+.student-paper-register > article { min-width: 0; padding: 14px 15px; border: 1px solid #dce6f2; border-radius: 12px; background: white; }
+.student-paper-register > article > div, .student-paper-register footer { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+.paper-stage { padding: 4px 7px; border-radius: 99px; color: #2e67b1; background: #eaf2ff; font-size: 10px; font-weight: 800; }
+.paper-stage.stage-accepted, .paper-stage.stage-published { color: #177451; background: #e8f7f0; }
+.paper-stage.stage-revision { color: #975f12; background: #fff3d5; }
+.student-paper-register em { color: #7e8c9e; font-size: 10px; font-style: normal; }
+.student-paper-register em.overdue { color: #b34d45; font-weight: 800; }
+.student-paper-register h3 { margin: 11px 0 6px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.student-paper-register p { margin: 0; color: #7c899a; font-size: 11px; }
+.student-paper-register footer { margin-top: 12px; padding-top: 9px; border-top: 1px solid #edf1f5; color: #8290a2; font-size: 10px; }
 .student-progress-feed-list { padding: 5px 24px 18px; }
 .student-progress-feed-list > article { padding: 18px 1px; border-bottom: 1px solid #edf1f5; }
 .student-progress-feed-list > article:last-child { border-bottom: 0; }
@@ -689,6 +717,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-progress-feed-list h3 { margin: 10px 0 1px; font-size: 15px; }
 .student-progress-feed-list > article > small { color: #3f76b9; font-size: 12px; font-weight: 750; }
 .student-progress-feed-list > article > p { margin: 8px 0 0; color: #56667b; font-size: 13px; line-height: 1.7; }
+.student-paper-update-detail { margin: 11px 0 0; padding: 11px 12px; display: grid; grid-template-columns: 1fr auto; gap: 8px 14px; border-radius: 9px; background: #f7f9fc; }
+.student-paper-update-detail > div { min-width: 0; }
+.student-paper-update-detail > div.blocker { grid-column: 1 / -1; padding-top: 7px; border-top: 1px solid #eadfca; }
+.student-paper-update-detail dt { color: #8390a2; font-size: 10px; font-weight: 800; }
+.student-paper-update-detail dd { margin: 4px 0 0; color: #40536b; font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
 .student-attachment-list { display: grid !important; gap: 7px; margin-top: 11px; }
 .student-attachment-list a { min-width: 0; padding: 9px 11px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; border: 1px solid #dce6f2; border-radius: 9px; color: #315f94; background: #f7faff; text-decoration: none; }
 .student-attachment-list a > span { font-size: 16px; }
@@ -699,7 +732,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-progress-feed-list summary { color: #2f6dbd; font-size: 12px; font-weight: 750; cursor: pointer; }
 .student-progress-feed-list form, .student-meeting-form { display: grid; gap: 11px; margin-top: 12px; }
 .student-progress-feed-list label, .student-meeting-form label, .staff-meeting-actions label { display: grid; gap: 5px; color: #68778a; font-size: 12px; font-weight: 700; }
-.student-progress-feed-list input, .student-progress-feed-list textarea, .student-meeting-form input, .student-meeting-form select, .student-meeting-form textarea, .staff-meeting-actions input, .staff-meeting-actions textarea { width: 100%; min-height: 44px; padding: 10px 11px; border: 1px solid #d9e1ea; border-radius: 9px; color: #28384e; background: #fbfcfe; font-size: 14px; font-family: inherit; resize: vertical; }
+.student-progress-feed-list input, .student-progress-feed-list select, .student-progress-feed-list textarea, .student-meeting-form input, .student-meeting-form select, .student-meeting-form textarea, .staff-meeting-actions input, .staff-meeting-actions textarea { width: 100%; min-height: 44px; padding: 10px 11px; border: 1px solid #d9e1ea; border-radius: 9px; color: #28384e; background: #fbfcfe; font-size: 14px; font-family: inherit; resize: vertical; }
 .student-progress-feed-list form button { justify-self: start; min-height: 40px; }
 .student-portal-empty { padding: 32px 10px; color: #8c98a8; font-size: 11px; text-align: center; }
 .student-meeting-form { margin: 0; padding: 19px 24px; border-bottom: 1px solid #edf1f5; }
@@ -771,6 +804,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .table-row > :nth-child(5) { grid-column: 4; grid-row: 1; }
   .table-head { display: none; }
   .review-evidence { grid-template-columns: 1fr; }
+  .review-paper-plan { grid-template-columns: 1fr; }
+  .review-paper-plan > div.blocker { grid-column: auto; }
   .review-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .review-intro { align-items: flex-start; flex-direction: column; }
   .review-card-head { flex-wrap: wrap; align-items: flex-start; }
@@ -868,6 +903,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-primary-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .student-primary-actions button { min-height: 46px; }
   .student-portal-summary { grid-template-columns: 1fr 1fr; }
+  .student-paper-register { grid-template-columns: 1fr; padding-inline: 18px; }
   .student-portal-panel-head { padding-inline: 18px; }
   .student-progress-feed-list, .student-meeting-history { padding-inline: 18px; }
   .student-meeting-form { padding-inline: 18px; }
@@ -895,4 +931,5 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-primary-actions { grid-template-columns: 1fr; }
   .student-portal-summary { grid-template-columns: 1fr; }
   .student-meeting-form > div { grid-template-columns: 1fr; }
+  .selected-paper-summary { grid-template-columns: 1fr; }
 }

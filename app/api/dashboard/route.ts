@@ -39,6 +39,33 @@ type ProgressRow = {
   submitted_by_user_id: number | null;
   submitted_at: string;
   reviewed_at: string | null;
+  paper_id: number | null;
+  paper_title: string | null;
+  paper_type: string | null;
+  paper_stage: string | null;
+  target_venue: string | null;
+  planned_submission_date: string | null;
+  submission_identifier: string | null;
+  manuscript_version: string | null;
+  next_action: string | null;
+  next_action_due_date: string | null;
+  blocker: string | null;
+};
+
+type StudentPaperRow = {
+  id: number;
+  student_id: string;
+  student_name: string;
+  title: string;
+  paper_type: string;
+  target_venue: string;
+  planned_submission_date: string | null;
+  current_stage: string;
+  submission_identifier: string;
+  status: string;
+  latest_progress_at: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 type EvidenceSourceRow = {
@@ -126,21 +153,39 @@ export async function GET(request: Request) {
           WHERE mentor_user_id = ? AND active = 1 AND can_review = 1`)
         .bind(viewer.id).all<{ student_id: string }>()).results.map((item) => item.student_id));
     let progressRows: ProgressRow[] = [];
+    let paperRows: StudentPaperRow[] = [];
     let evidenceRows: EvidenceSourceRow[] = [];
     let attachmentRows: AttachmentRow[] = [];
     let auditRows: ProgressAuditRow[] = [];
     if (studentIds.length) {
       const placeholders = studentIds.map(() => "?").join(",");
-      const progress = await d1.prepare(`SELECT p.id, p.student_id, p.kind, p.title, p.summary, p.evidence,
+      const [progress, papers] = await Promise.all([
+        d1.prepare(`SELECT p.id, p.student_id, p.kind, p.title, p.summary, p.evidence,
         p.literature_ref, p.git_url, p.status, p.review_status, p.assessment,
         p.reviewer_note, p.reviewed_by_user_id, p.submitted_by_user_id,
-        reviewer.display_name AS reviewer_name, p.submitted_at, p.reviewed_at
+        reviewer.display_name AS reviewer_name, p.submitted_at, p.reviewed_at,
+        pd.paper_id, paper.title AS paper_title, paper.paper_type, pd.stage AS paper_stage,
+        paper.target_venue, paper.planned_submission_date, paper.submission_identifier,
+        pd.manuscript_version, pd.next_action, pd.next_action_due_date, pd.blocker
         FROM progress_entries p
         LEFT JOIN app_users reviewer ON reviewer.id = p.reviewed_by_user_id
+        LEFT JOIN paper_progress_details pd ON pd.progress_entry_id = p.id
+        LEFT JOIN student_papers paper ON paper.id = pd.paper_id
         WHERE p.student_id IN (${placeholders})
         ORDER BY p.submitted_at DESC, p.id DESC LIMIT 1000`)
-        .bind(...studentIds).all<ProgressRow>();
+          .bind(...studentIds).all<ProgressRow>(),
+        d1.prepare(`SELECT paper.id, paper.student_id, s.display_name AS student_name,
+          paper.title, paper.paper_type, paper.target_venue, paper.planned_submission_date,
+          paper.current_stage, paper.submission_identifier, paper.status,
+          paper.latest_progress_at, paper.created_at, paper.updated_at
+          FROM student_papers paper JOIN students s ON s.id = paper.student_id
+          WHERE paper.student_id IN (${placeholders}) AND paper.status != 'closed'
+          ORDER BY CASE paper.status WHEN 'active' THEN 0 WHEN 'on_hold' THEN 1 ELSE 2 END,
+            paper.updated_at DESC, paper.id DESC`)
+          .bind(...studentIds).all<StudentPaperRow>(),
+      ]);
       progressRows = progress.results;
+      paperRows = papers.results;
 
       const progressIds = progressRows.map((entry) => entry.id);
       if (progressIds.length) {
@@ -169,6 +214,19 @@ export async function GET(request: Request) {
 
     const mappedProgress = progressRows.map((entry) => ({
       ...entry,
+      paper: entry.paper_id ? {
+        id: entry.paper_id,
+        title: entry.paper_title ?? "未命名论文",
+        paper_type: entry.paper_type ?? "期刊论文",
+        stage: entry.paper_stage ?? "planning",
+        target_venue: entry.target_venue ?? "",
+        planned_submission_date: entry.planned_submission_date,
+        submission_identifier: entry.submission_identifier ?? "",
+        manuscript_version: entry.manuscript_version ?? "",
+        next_action: entry.next_action ?? "",
+        next_action_due_date: entry.next_action_due_date ?? "",
+        blocker: entry.blocker ?? "",
+      } : null,
       evidence_sources: evidenceRows
         .filter((source) => source.progress_entry_id === entry.id)
         .map((source) => ({
@@ -187,6 +245,13 @@ export async function GET(request: Request) {
     }));
 
     const nameById = new Map(studentResult.results.map((row) => [row.id, row.display_name]));
+    const papers = paperRows.map((paper) => ({
+      ...paper,
+      update_count: mappedProgress.filter((entry) => entry.paper_id === paper.id).length,
+      pending_count: mappedProgress.filter((entry) => entry.paper_id === paper.id && (
+        entry.review_status === "submitted" || entry.review_status === "in_review"
+      )).length,
+    }));
     const pending = mappedProgress
       .filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review")
       .map((entry) => ({
@@ -249,11 +314,13 @@ export async function GET(request: Request) {
             reviewer_name: entry.reviewer_name,
             submitted_at: entry.submitted_at,
             reviewed_at: entry.reviewed_at,
+            paper: entry.paper,
             evidence_sources: entry.evidence_sources,
             attachments: entry.attachments,
             audit: entry.audit,
           })),
         })),
+        papers,
         pending: [],
         workflowTasks: [],
         metrics: {
@@ -326,6 +393,7 @@ export async function GET(request: Request) {
         studentId: viewer.studentId,
       },
       students,
+      papers,
       pending,
       workflowTasks,
       metrics: {

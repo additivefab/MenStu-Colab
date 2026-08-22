@@ -3,7 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-test("0010 upgrades roles, 0011 binds identities, and 0012 adds progress attachments", async () => {
+test("0010-0013 preserve existing data while adding identity, attachment, and paper workflows", async () => {
   const migrationDirectory = new URL("../drizzle/", import.meta.url);
   const names = (await readdir(migrationDirectory))
     .filter((name) => /^\d{4}_.*\.sql$/.test(name))
@@ -11,7 +11,7 @@ test("0010 upgrades roles, 0011 binds identities, and 0012 adds progress attachm
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
 
-  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_"].some((prefix) => item.startsWith(prefix)))) {
+  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_"].some((prefix) => item.startsWith(prefix)))) {
     database.exec(await readFile(new URL(name, migrationDirectory), "utf8"));
   }
   database.exec(`
@@ -34,6 +34,7 @@ test("0010 upgrades roles, 0011 binds identities, and 0012 adds progress attachm
   const roleMergeMigration = await readFile(new URL(names.find((item) => item.startsWith("0010_")), migrationDirectory), "utf8");
   const identityBindingMigration = await readFile(new URL(names.find((item) => item.startsWith("0011_")), migrationDirectory), "utf8");
   const attachmentMigration = await readFile(new URL(names.find((item) => item.startsWith("0012_")), migrationDirectory), "utf8");
+  const paperMigration = await readFile(new URL(names.find((item) => item.startsWith("0013_")), migrationDirectory), "utf8");
   database.exec(businessMigration);
   database.exec(roleMigration);
   database.exec(roleIndexMigration);
@@ -173,6 +174,27 @@ test("0010 upgrades roles, 0011 binds identities, and 0012 adds progress attachm
     (progress_entry_id, storage_key, file_name, content_type, size_bytes, content_sha256, uploaded_by_user_id)
     VALUES (1, 'progress/test/file.pdf', '论文初稿.pdf', 'application/pdf', 128, 'abc123', 9002)`);
   assert.equal(database.prepare("SELECT file_name FROM progress_attachments WHERE progress_entry_id = 1").get().file_name, "论文初稿.pdf");
+
+  database.exec(paperMigration);
+  assert.deepEqual(
+    database.prepare(`SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name IN ('student_papers', 'paper_progress_details')
+      ORDER BY name`).all().map((row) => row.name),
+    ["paper_progress_details", "student_papers"],
+  );
+  database.exec(`
+    INSERT INTO student_papers
+      (student_id, title, paper_type, planned_submission_date, current_stage, created_by_user_id)
+      VALUES ('student-upgrade', '迁移后的论文台账', '期刊论文', '2026-12-31', 'drafting', 9002);
+    INSERT INTO paper_progress_details
+      (progress_entry_id, paper_id, stage, manuscript_version, next_action, next_action_due_date, blocker)
+      VALUES (1, 1, 'drafting', 'v0.3', '完成讨论章节', '2026-09-15', '等待补充实验');
+  `);
+  assert.deepEqual(
+    { ...database.prepare(`SELECT p.title, d.stage, d.manuscript_version, d.next_action
+      FROM student_papers p JOIN paper_progress_details d ON d.paper_id = p.id`).get() },
+    { title: "迁移后的论文台账", stage: "drafting", manuscript_version: "v0.3", next_action: "完成讨论章节" },
+  );
   assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
   database.close();
 });

@@ -8,9 +8,10 @@ import {
 } from "../../../lib/progress-attachments";
 import { sha256Bytes, sha256Text, validateHttpsUrl } from "../../../lib/progress-evidence";
 import { getProgressFileBucket } from "../../../lib/progress-file-storage";
+import { isIsoDate, isPaperStage, isPaperType, type PaperStage } from "../../../lib/paper-progress";
 
 const allowedKinds = new Set(["文献", "实验", "算法", "数据", "论文", "复现", "项目", "组会"]);
-const studentSubmissionKinds = new Set(["论文", "项目"]);
+const studentSubmissionKinds = new Set(["论文"]);
 
 class InputError extends Error {}
 
@@ -74,6 +75,60 @@ function progressInput(body: Record<string, unknown>, hasAttachments = false) {
   }
   if (kind === "文献" && !literatureRef) throw new InputError("文献进展需要填写论文题目或 DOI");
   return { studentId, kind, title, summary, evidence, literatureRef, gitUrl };
+}
+
+function cleanDate(value: unknown, label: string, required = false) {
+  const text = clean(value, label, 10);
+  if (!text && !required) return "";
+  if (!isIsoDate(text)) {
+    throw new InputError(`${label}格式无效`);
+  }
+  return text;
+}
+
+function paperProgressInput(body: Record<string, unknown>) {
+  const rawPaperId = clean(body.paperId, "论文", 20);
+  const paperId = rawPaperId ? Number(rawPaperId) : null;
+  if (rawPaperId && (!Number.isInteger(paperId) || Number(paperId) < 1)) {
+    throw new InputError("论文参数无效");
+  }
+  const stage = clean(body.paperStage, "论文阶段", 40);
+  if (!isPaperStage(stage)) throw new InputError("请选择有效的论文阶段");
+  const manuscriptVersion = clean(body.manuscriptVersion, "稿件版本", 80);
+  const nextAction = clean(body.nextAction, "下一行动", 1_000);
+  const nextActionDueDate = cleanDate(body.nextActionDueDate, "下一行动日期", true);
+  const blocker = clean(body.blocker, "阻塞问题", 2_000);
+  const submissionIdentifier = clean(body.submissionIdentifier, "稿件编号或 DOI", 300);
+  if (!manuscriptVersion || !nextAction) {
+    throw new InputError("请填写稿件版本和下一行动");
+  }
+
+  const paperTitle = clean(body.paperTitle, "论文题目", 300);
+  const paperType = clean(body.paperType, "论文类型", 20);
+  const targetVenue = clean(body.targetVenue, "目标期刊或会议", 200);
+  const plannedSubmissionDate = cleanDate(body.plannedSubmissionDate, "计划投稿日期", !paperId);
+  if (!paperId && (!paperTitle || !isPaperType(paperType))) {
+    throw new InputError("新建论文时请填写论文题目、类型和计划投稿日期");
+  }
+  return {
+    paperId: paperId as number | null,
+    stage,
+    manuscriptVersion,
+    nextAction,
+    nextActionDueDate,
+    blocker,
+    submissionIdentifier,
+    paperTitle,
+    paperType,
+    targetVenue,
+    plannedSubmissionDate,
+  };
+}
+
+function paperStatus(stage: PaperStage) {
+  if (stage === "published") return "published";
+  if (stage === "accepted") return "accepted";
+  return "active";
 }
 
 async function requestInput(request: Request) {
@@ -146,12 +201,14 @@ async function deleteCreatedProgress(progressId: number) {
     d1.prepare("DELETE FROM progress_evidence_sources WHERE progress_entry_id = ?").bind(progressId),
     d1.prepare("DELETE FROM progress_audit_events WHERE progress_entry_id = ?").bind(progressId),
     d1.prepare("DELETE FROM progress_attachments WHERE progress_entry_id = ?").bind(progressId),
+    d1.prepare("DELETE FROM paper_progress_details WHERE progress_entry_id = ?").bind(progressId),
     d1.prepare("DELETE FROM progress_entries WHERE id = ?").bind(progressId),
   ]);
 }
 
 export async function POST(request: Request) {
   let createdId: number | null = null;
+  let createdPaperId: number | null = null;
   try {
     if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
     const auth = await requireAppUser(request, ["superadmin", "admin", "student"]);
@@ -167,8 +224,12 @@ export async function POST(request: Request) {
       studentId: auth.user.role === "student" ? auth.user.studentId : body.studentId,
     }, files.length > 0);
     if (auth.user.role === "student" && !studentSubmissionKinds.has(values.kind)) {
-      return Response.json({ error: "学生端仅支持提交论文进度或项目进度" }, { status: 400 });
+      return Response.json({ error: "学生端当前仅支持提交论文进度" }, { status: 400 });
     }
+    const structuredPaper = values.kind === "论文" && (
+      auth.user.role === "student" || Boolean(String(body.paperStage ?? "").trim())
+    );
+    const paperValues = structuredPaper ? paperProgressInput(body) : null;
 
     const d1 = getD1();
     if (auth.user.role !== "student" && !(await canViewStudent(auth.user, values.studentId))) {
@@ -177,6 +238,26 @@ export async function POST(request: Request) {
     const student = await d1.prepare("SELECT id FROM students WHERE id = ? AND active = 1")
       .bind(values.studentId).first();
     if (!student) return Response.json({ error: "学生不存在" }, { status: 404 });
+
+    if (paperValues?.paperId) {
+      const paper = await d1.prepare(`SELECT id FROM student_papers
+        WHERE id = ? AND student_id = ? AND status != 'closed'`)
+        .bind(paperValues.paperId, values.studentId).first();
+      if (!paper) return Response.json({ error: "论文不存在或已关闭" }, { status: 404 });
+    } else if (paperValues) {
+      const paper = await d1.prepare(`INSERT INTO student_papers
+        (student_id, title, paper_type, target_venue, planned_submission_date,
+         current_stage, submission_identifier, status, latest_progress_at, created_by_user_id, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP) RETURNING id`)
+        .bind(
+          values.studentId, paperValues.paperTitle, paperValues.paperType,
+          paperValues.targetVenue, paperValues.plannedSubmissionDate, paperValues.stage,
+          paperValues.submissionIdentifier, paperStatus(paperValues.stage), auth.user.id,
+        ).first<{ id: number }>();
+      createdPaperId = paper?.id ?? null;
+      if (!createdPaperId) throw new Error("无法建立论文台账");
+      paperValues.paperId = createdPaperId;
+    }
 
     const row = await d1.prepare(`INSERT INTO progress_entries
       (student_id, kind, title, summary, evidence, literature_ref, git_url, status,
@@ -192,6 +273,26 @@ export async function POST(request: Request) {
 
     await d1.batch([
       ...(await evidenceStatements(createdId, auth.user.id, values)),
+      ...(paperValues?.paperId ? [
+        d1.prepare(`INSERT INTO paper_progress_details
+          (progress_entry_id, paper_id, stage, manuscript_version, next_action, next_action_due_date, blocker)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`)
+          .bind(
+            createdId, paperValues.paperId, paperValues.stage, paperValues.manuscriptVersion,
+            paperValues.nextAction, paperValues.nextActionDueDate, paperValues.blocker,
+          ),
+        d1.prepare(`UPDATE student_papers SET current_stage = ?,
+          target_venue = COALESCE(NULLIF(?, ''), target_venue),
+          planned_submission_date = COALESCE(NULLIF(?, ''), planned_submission_date),
+          submission_identifier = COALESCE(NULLIF(?, ''), submission_identifier),
+          status = ?, latest_progress_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND student_id = ?`)
+          .bind(
+            paperValues.stage, paperValues.targetVenue, paperValues.plannedSubmissionDate,
+            paperValues.submissionIdentifier, paperStatus(paperValues.stage),
+            paperValues.paperId, values.studentId,
+          ),
+      ] : []),
       d1.prepare(`INSERT INTO progress_audit_events
         (progress_entry_id, actor_user_id, actor_type, action, from_status, to_status, note)
         VALUES (?, ?, 'user', 'submit', '', 'submitted', '提交进展与核验证据')`)
@@ -200,10 +301,14 @@ export async function POST(request: Request) {
     await storeAttachments(createdId, values.studentId, auth.user.id, files);
     const id = createdId;
     createdId = null;
-    return Response.json({ id, message: "已提交，等待导师确认" }, { status: 201 });
+    createdPaperId = null;
+    return Response.json({ id, message: paperValues ? "论文进度已提交，等待导师确认" : "已提交，等待导师确认" }, { status: 201 });
   } catch (error) {
     if (createdId) {
       try { await deleteCreatedProgress(createdId); } catch { /* noop */ }
+    }
+    if (createdPaperId) {
+      try { await getD1().prepare("DELETE FROM student_papers WHERE id = ?").bind(createdPaperId).run(); } catch { /* noop */ }
     }
     return Response.json(
       { error: error instanceof Error ? error.message : "提交失败" },
@@ -224,9 +329,17 @@ export async function PATCH(request: Request) {
     if (!Number.isInteger(id)) return Response.json({ error: "进展参数无效" }, { status: 400 });
 
     const d1 = getD1();
-    const existing = await d1.prepare(`SELECT id, student_id, kind, title, review_status
-      FROM progress_entries WHERE id = ?`).bind(id).first<{
+    const existing = await d1.prepare(`SELECT p.id, p.student_id, p.kind, p.title, p.review_status,
+      pd.paper_id, pd.stage AS paper_stage, pd.manuscript_version, pd.next_action,
+      pd.next_action_due_date, pd.blocker, sp.submission_identifier
+      FROM progress_entries p
+      LEFT JOIN paper_progress_details pd ON pd.progress_entry_id = p.id
+      LEFT JOIN student_papers sp ON sp.id = pd.paper_id
+      WHERE p.id = ?`).bind(id).first<{
         id: number; student_id: string; kind: string; title: string; review_status: string;
+        paper_id: number | null; paper_stage: string | null; manuscript_version: string | null;
+        next_action: string | null; next_action_due_date: string | null; blocker: string | null;
+        submission_identifier: string | null;
       }>();
     if (!existing) return Response.json({ error: "进展记录不存在" }, { status: 404 });
     if (!(await canViewStudent(auth.user, existing.student_id))) {
@@ -242,6 +355,16 @@ export async function PATCH(request: Request) {
       kind: body.kind ?? existing.kind,
       title: body.title ?? existing.title,
     }, files.length > 0);
+    const paperValues = existing.paper_id ? paperProgressInput({
+      ...body,
+      paperId: existing.paper_id,
+      paperStage: body.paperStage ?? existing.paper_stage,
+      manuscriptVersion: body.manuscriptVersion ?? existing.manuscript_version,
+      nextAction: body.nextAction ?? existing.next_action,
+      nextActionDueDate: body.nextActionDueDate ?? existing.next_action_due_date,
+      blocker: body.blocker ?? existing.blocker,
+      submissionIdentifier: body.submissionIdentifier ?? existing.submission_identifier,
+    }) : null;
     const [result] = await d1.batch([
       d1.prepare(`UPDATE progress_entries SET
         kind = ?, title = ?, summary = ?, evidence = ?, literature_ref = ?, git_url = ?,
@@ -251,6 +374,23 @@ export async function PATCH(request: Request) {
         WHERE id = ? AND review_status = 'changes_requested'`)
         .bind(values.kind, values.title, values.summary, values.evidence, values.literatureRef, values.gitUrl, auth.user.id, id),
       ...(await evidenceStatements(id, auth.user.id, values, true)),
+      ...(paperValues?.paperId ? [
+        d1.prepare(`UPDATE paper_progress_details SET stage = ?, manuscript_version = ?,
+          next_action = ?, next_action_due_date = ?, blocker = ?
+          WHERE progress_entry_id = ? AND changes() > 0`)
+          .bind(
+            paperValues.stage, paperValues.manuscriptVersion, paperValues.nextAction,
+            paperValues.nextActionDueDate, paperValues.blocker, id,
+          ),
+        d1.prepare(`UPDATE student_papers SET current_stage = ?,
+          submission_identifier = COALESCE(NULLIF(?, ''), submission_identifier),
+          status = ?, latest_progress_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND student_id = ? AND changes() > 0`)
+          .bind(
+            paperValues.stage, paperValues.submissionIdentifier, paperStatus(paperValues.stage),
+            paperValues.paperId, existing.student_id,
+          ),
+      ] : []),
       d1.prepare(`INSERT INTO progress_audit_events
         (progress_entry_id, actor_user_id, actor_type, action, from_status, to_status, note)
         SELECT ?, ?, 'user', 'resubmit', 'changes_requested', 'submitted', '补充证据并重新提交'

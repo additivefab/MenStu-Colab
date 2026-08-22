@@ -272,6 +272,65 @@ export const progressAttachments = sqliteTable(
   ],
 );
 
+export const studentPapers = sqliteTable(
+  "student_papers",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    studentId: text("student_id")
+      .notNull()
+      .references(() => students.id),
+    title: text("title").notNull(),
+    paperType: text("paper_type", { enum: ["期刊论文", "会议论文", "学位论文"] })
+      .notNull()
+      .default("期刊论文"),
+    targetVenue: text("target_venue").notNull().default(""),
+    plannedSubmissionDate: text("planned_submission_date"),
+    currentStage: text("current_stage", {
+      enum: ["planning", "research", "drafting", "internal_review", "submitted", "peer_review", "revision", "accepted", "published"],
+    })
+      .notNull()
+      .default("planning"),
+    submissionIdentifier: text("submission_identifier").notNull().default(""),
+    status: text("status", { enum: ["active", "on_hold", "accepted", "published", "closed"] })
+      .notNull()
+      .default("active"),
+    latestProgressAt: text("latest_progress_at"),
+    createdByUserId: integer("created_by_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_student_papers_student_status").on(table.studentId, table.status, table.updatedAt),
+    index("idx_student_papers_stage_due").on(table.currentStage, table.plannedSubmissionDate),
+  ],
+);
+
+export const paperProgressDetails = sqliteTable(
+  "paper_progress_details",
+  {
+    progressEntryId: integer("progress_entry_id")
+      .primaryKey()
+      .references(() => progressEntries.id),
+    paperId: integer("paper_id")
+      .notNull()
+      .references(() => studentPapers.id),
+    stage: text("stage", {
+      enum: ["planning", "research", "drafting", "internal_review", "submitted", "peer_review", "revision", "accepted", "published"],
+    }).notNull(),
+    manuscriptVersion: text("manuscript_version").notNull().default(""),
+    nextAction: text("next_action").notNull(),
+    nextActionDueDate: text("next_action_due_date").notNull(),
+    blocker: text("blocker").notNull().default(""),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_paper_progress_paper_created").on(table.paperId, table.createdAt),
+    index("idx_paper_progress_due").on(table.nextActionDueDate, table.stage),
+  ],
+);
+
 export const researchProposals = sqliteTable(
   "research_proposals",
   {
