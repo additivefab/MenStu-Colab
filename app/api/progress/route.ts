@@ -73,7 +73,7 @@ export async function POST(request: Request) {
   let createdId: number | null = null;
   try {
     if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
-    const auth = await requireAppUser(request, ["admin", "student"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin", "student"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = (await request.json()) as Record<string, unknown>;
@@ -86,6 +86,9 @@ export async function POST(request: Request) {
     });
 
     const d1 = getD1();
+    if (auth.user.role !== "student" && !(await canViewStudent(auth.user, values.studentId))) {
+      return Response.json({ error: "当前账号无权为该学生提交进展" }, { status: 403 });
+    }
     const student = await d1.prepare("SELECT id FROM students WHERE id = ? AND active = 1")
       .bind(values.studentId).first();
     if (!student) return Response.json({ error: "学生不存在" }, { status: 404 });
@@ -126,7 +129,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
-    const auth = await requireAppUser(request, ["admin", "student"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin", "student"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = (await request.json()) as Record<string, unknown>;

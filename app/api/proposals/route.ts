@@ -174,7 +174,7 @@ async function readProposals(user: AppUser) {
 
 export async function GET(request: Request) {
   try {
-    const auth = await requireAppUser(request, ["superadmin", "admin", "mentor"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin"]);
     if ("response" in auth) return auth.response;
     if (auth.user.role === "student" && !auth.user.studentId) {
       return Response.json({ error: "飞书账号尚未绑定学生记录" }, { status: 403 });
@@ -190,7 +190,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
-    const auth = await requireAppUser(request, ["admin"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = (await request.json()) as Record<string, unknown>;
@@ -203,6 +203,9 @@ export async function POST(request: Request) {
     const milestones = milestoneInput(body.milestones);
     if (mode === "submit") validateSubmission(fields, milestones);
     const d1 = getD1();
+    if (!(await canViewStudent(auth.user, studentId))) {
+      return Response.json({ error: "当前账号无权为该学生维护研究方案" }, { status: 403 });
+    }
     const student = await d1.prepare("SELECT id FROM students WHERE id = ? AND active = 1").bind(studentId).first();
     if (!student) return Response.json({ error: "学生不存在或已停用" }, { status: 404 });
 
@@ -279,7 +282,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
-    const auth = await requireAppUser(request, ["superadmin", "admin", "mentor"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = (await request.json()) as Record<string, unknown>;
@@ -313,7 +316,7 @@ export async function PATCH(request: Request) {
       return Response.json({ message: "培养节点状态已更新" });
     }
 
-    if (!isReviewerRole(auth.user.role)) return Response.json({ error: "只有对应主导师或超级管理员可以审核研究方案" }, { status: 403 });
+    if (!isReviewerRole(auth.user.role)) return Response.json({ error: "只有授权管理员或超级管理员可以审核研究方案" }, { status: 403 });
     if (!new Set(["approve", "request_changes", "reopen"]).has(action)) {
       return Response.json({ error: "审核操作无效" }, { status: 400 });
     }

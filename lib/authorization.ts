@@ -5,9 +5,9 @@ import { type StudentScope } from "./access-policy";
 export { roleCanViewStudent, scopeSql, type StudentScope } from "./access-policy";
 
 export async function getStudentScope(user: AppUser): Promise<StudentScope> {
-  if (user.role === "superadmin" || user.role === "admin") return { all: true, studentIds: [] };
+  if (user.role === "superadmin") return { all: true, studentIds: [] };
   if (user.role === "student") return { all: false, studentIds: user.studentId ? [user.studentId] : [] };
-  if (user.role !== "mentor") return { all: false, studentIds: [] };
+  if (user.role !== "admin") return { all: false, studentIds: [] };
 
   const { results } = await getD1().prepare(`SELECT student_id FROM mentor_student_assignments
     WHERE mentor_user_id = ? AND active = 1 ORDER BY student_id`)
@@ -17,9 +17,9 @@ export async function getStudentScope(user: AppUser): Promise<StudentScope> {
 }
 
 export async function canViewStudent(user: AppUser, studentId: string) {
-  if (user.role === "superadmin" || user.role === "admin") return true;
+  if (user.role === "superadmin") return true;
   if (user.role === "student") return user.studentId === studentId;
-  if (user.role !== "mentor") return false;
+  if (user.role !== "admin") return false;
   const assignment = await getD1().prepare(`SELECT id FROM mentor_student_assignments
     WHERE mentor_user_id = ? AND student_id = ? AND active = 1`)
     .bind(user.id, studentId)
@@ -29,7 +29,7 @@ export async function canViewStudent(user: AppUser, studentId: string) {
 
 export async function canReviewStudent(user: AppUser, studentId: string) {
   if (user.role === "superadmin") return true;
-  if (user.role !== "mentor") return false;
+  if (user.role !== "admin") return false;
   const assignment = await getD1().prepare(`SELECT id FROM mentor_student_assignments
     WHERE mentor_user_id = ? AND student_id = ? AND active = 1 AND can_review = 1`)
     .bind(user.id, studentId)

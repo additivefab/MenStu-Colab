@@ -42,12 +42,8 @@ export async function POST(request: Request) {
     if (!assertSameOrigin(request)) {
       return Response.json({ error: "请求来源无效" }, { status: 403 });
     }
-    const auth = await requireAppUser(request, ["admin"]);
+    const auth = await requireAppUser(request, ["superadmin"]);
     if ("response" in auth) return auth.response;
-    if (auth.user.displayName !== "佘阳") {
-      return Response.json({ error: "仅已确认的名册管理员可以执行导入" }, { status: 403 });
-    }
-
     await ensureDatabase();
     const d1 = getD1();
     const trackingStartedAt = new Date().toISOString();
@@ -64,8 +60,6 @@ export async function POST(request: Request) {
             active = 1`)
           .bind(student.id, student.name, student.degree, student.gradeYear, trackingStartedAt),
       ),
-      d1.prepare("UPDATE app_users SET student_id = 'student-002' WHERE id = ? AND role = 'admin'")
-        .bind(auth.user.id),
     ];
     await d1.batch(statements);
 

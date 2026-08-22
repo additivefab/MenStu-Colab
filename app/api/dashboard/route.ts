@@ -77,7 +77,7 @@ type WorkflowTask = {
 
 export async function GET(request: Request) {
   try {
-    const auth = await requireAppUser(request, ["superadmin", "admin", "mentor", "student"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin", "student"]);
     if ("response" in auth) return auth.response;
     const viewer = auth.user;
     if (viewer.role === "student" && !viewer.studentId) {
@@ -110,6 +110,11 @@ export async function GET(request: Request) {
       : await studentStatement.all<StudentRow>();
 
     const studentIds = studentResult.results.map((row) => row.id);
+    const reviewableStudentIds = viewer.role === "superadmin"
+      ? new Set(studentIds)
+      : new Set((await d1.prepare(`SELECT student_id FROM mentor_student_assignments
+          WHERE mentor_user_id = ? AND active = 1 AND can_review = 1`)
+        .bind(viewer.id).all<{ student_id: string }>()).results.map((item) => item.student_id));
     let progressRows: ProgressRow[] = [];
     let evidenceRows: EvidenceSourceRow[] = [];
     let auditRows: ProgressAuditRow[] = [];
@@ -165,7 +170,7 @@ export async function GET(request: Request) {
         ...entry,
         display_name: nameById.get(entry.student_id) ?? entry.student_id,
         can_finalize: entry.submitted_by_user_id !== viewer.id
-          && (viewer.role === "superadmin" || viewer.role === "mentor") && (
+          && reviewableStudentIds.has(entry.student_id) && (
           entry.review_status === "submitted" || entry.reviewed_by_user_id === viewer.id
         ),
       }));
@@ -256,7 +261,7 @@ export async function GET(request: Request) {
           }>(),
       ]);
       workflowTasks.push(
-        ...proposalTasks.results.map((item) => ({
+        ...proposalTasks.results.filter((item) => reviewableStudentIds.has(item.student_id)).map((item) => ({
           id: item.id,
           type: "proposal_review" as const,
           studentId: item.student_id,

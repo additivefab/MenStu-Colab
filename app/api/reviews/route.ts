@@ -16,7 +16,7 @@ type EntryRow = {
 export async function POST(request: Request) {
   try {
     if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
-    const auth = await requireAppUser(request, ["superadmin", "mentor"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = (await request.json()) as Record<string, unknown>;

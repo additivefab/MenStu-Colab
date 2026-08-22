@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     if (!assertSameOrigin(request)) {
       return Response.json({ error: "请求来源无效" }, { status: 403 });
     }
-    const auth = await requireAppUser(request, ["superadmin", "admin", "mentor"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin"]);
     if ("response" in auth) return auth.response;
     const body = (await request.json()) as { studentId?: string };
     const studentId = body.studentId?.trim() ?? "";

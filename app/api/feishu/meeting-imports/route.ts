@@ -38,7 +38,7 @@ function importSourceType(value: string) {
 
 export async function GET(request: Request) {
   try {
-    const auth = await requireAppUser(request, ["superadmin", "admin"]);
+    const auth = await requireAppUser(request, ["superadmin"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const d1 = getD1();
@@ -74,7 +74,7 @@ export async function PATCH(request: Request) {
   let createdProgressId: number | null = null;
   try {
     if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
-    const auth = await requireAppUser(request, ["superadmin", "admin"]);
+    const auth = await requireAppUser(request, ["superadmin"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = (await request.json()) as Record<string, unknown>;

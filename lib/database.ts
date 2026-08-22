@@ -307,6 +307,9 @@ export async function ensureDatabase() {
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_evidence_import ON progress_evidence_sources(source_import_id)"),
   ]);
 
+  // 业务层将 mentor 映射为管理员（导师）；保留旧存储值可避免回滚时权限被放大。
+  await d1.prepare("UPDATE app_users SET role = 'mentor' WHERE role = 'admin'").run();
+
   await ensureColumn("app_user_role_events", "request_id", "TEXT");
   await d1.batch([
     d1.prepare("UPDATE app_user_role_events SET request_id = 'legacy-' || id WHERE request_id IS NULL OR request_id = ''"),

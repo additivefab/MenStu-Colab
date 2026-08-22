@@ -64,6 +64,7 @@ export const appUsers = sqliteTable(
     displayName: text("display_name").notNull(),
     avatarUrl: text("avatar_url").notNull().default(""),
     email: text("email").notNull().default(""),
+    // `mentor` remains an internal storage value for rollback-safe scoped admins.
     role: text("role", { enum: ["superadmin", "admin", "mentor", "student", "pending"] })
       .notNull()
       .default("pending"),

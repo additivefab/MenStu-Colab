@@ -120,7 +120,7 @@ async function listRequests(user: AppUser) {
       .all<MeetingRequestRow>();
     return results;
   }
-  if (user.role === "mentor") {
+  if (user.role === "admin") {
     const { results } = await d1.prepare(`${selectFields}
       WHERE EXISTS (
         SELECT 1 FROM mentor_student_assignments assignment
@@ -148,7 +148,7 @@ async function scopedRequest(user: AppUser, id: number) {
       .bind(id, user.studentId, user.id)
       .first<ExistingRequest>();
   }
-  if (user.role === "mentor") {
+  if (user.role === "admin") {
     return d1.prepare(`${fields}
       WHERE id = ? AND EXISTS (
         SELECT 1 FROM mentor_student_assignments assignment
@@ -164,7 +164,7 @@ async function scopedRequest(user: AppUser, id: number) {
 
 export async function GET(request: Request) {
   try {
-    const auth = await requireAppUser(request, ["superadmin", "admin", "mentor", "student"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin", "student"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     return Response.json({ requests: await listRequests(auth.user) });
@@ -252,7 +252,7 @@ export async function PATCH(request: Request) {
     if (!assertSameOrigin(request)) {
       return Response.json({ error: "请求来源无效" }, { status: 403 });
     }
-    const auth = await requireAppUser(request, ["superadmin", "admin", "mentor", "student"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin", "student"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = (await request.json()) as Record<string, unknown>;
@@ -283,7 +283,7 @@ export async function PATCH(request: Request) {
       }
     } else {
       if (action !== "confirm" && action !== "decline") {
-        return Response.json({ error: "管理与导师账号只能确认或拒绝预约" }, { status: 403 });
+        return Response.json({ error: "管理员账号只能确认或拒绝预约" }, { status: 403 });
       }
       if (existing.status !== "requested") {
         return Response.json({ error: "只有待处理预约可以确认或拒绝" }, { status: 409 });
@@ -296,7 +296,7 @@ export async function PATCH(request: Request) {
     const nextStatus = action === "confirm" ? "confirmed" : action === "decline" ? "declined" : "cancelled";
     const nextNote = action === "cancel" ? (responseNote || "学生取消预约") : responseNote;
     const d1 = getD1();
-    const permissionGuard = auth.user.role === "mentor"
+    const permissionGuard = auth.user.role === "admin"
       ? `AND EXISTS (
           SELECT 1 FROM mentor_student_assignments assignment
           WHERE assignment.mentor_user_id = ?
@@ -320,7 +320,7 @@ export async function PATCH(request: Request) {
       expectedVersion,
       existing.status,
     ];
-    if (auth.user.role === "mentor") values.push(auth.user.id);
+    if (auth.user.role === "admin") values.push(auth.user.id);
     if (auth.user.role === "student") values.push(auth.user.studentId!, auth.user.id);
     const updated = await statement.bind(...values).first();
     if (!updated) {

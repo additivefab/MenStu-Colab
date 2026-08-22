@@ -62,7 +62,7 @@ async function readOutputs(studentId: string) {
 
 export async function GET(request: Request) {
   try {
-    const auth = await requireAppUser(request, ["superadmin", "admin", "mentor"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const studentId = new URL(request.url).searchParams.get("studentId")?.trim() ?? "";
@@ -79,14 +79,14 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
-    const auth = await requireAppUser(request, ["admin"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const values = outputInput(await request.json() as Record<string, unknown>);
-    if (auth.user.role === "student" && auth.user.studentId !== values.studentId) {
-      return Response.json({ error: "学生只能登记自己的科研成果" }, { status: 403 });
-    }
     const d1 = getD1();
+    if (!(await canViewStudent(auth.user, values.studentId))) {
+      return Response.json({ error: "当前账号无权为该学生登记科研成果" }, { status: 403 });
+    }
     const student = await d1.prepare("SELECT id FROM students WHERE id = ? AND active = 1")
       .bind(values.studentId).first();
     if (!student) return Response.json({ error: "学生不存在或已停用" }, { status: 404 });
@@ -127,7 +127,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
-    const auth = await requireAppUser(request, ["admin"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = await request.json() as Record<string, unknown>;

@@ -4,14 +4,14 @@ import { ensureDatabase, getD1 } from "./database";
 const SESSION_COOKIE = "tanyan_session";
 const SESSION_DAYS = 14;
 
-export type AppRole = "superadmin" | "admin" | "mentor" | "student" | "pending";
+export type AppRole = "superadmin" | "admin" | "student" | "pending";
 
 export function isAdminRole(role: AppRole) {
   return role === "superadmin" || role === "admin";
 }
 
 export function isReviewerRole(role: AppRole) {
-  return role === "superadmin" || role === "mentor";
+  return role === "superadmin" || role === "admin";
 }
 
 export type AppUser = {
@@ -159,9 +159,11 @@ async function hashToken(value: string) {
 }
 
 function mapUser(row: UserRow): AppUser {
-  const role: AppRole = ["superadmin", "admin", "mentor", "student", "pending"].includes(row.role)
-    ? row.role as AppRole
-    : "pending";
+  const role: AppRole = row.role === "mentor"
+    ? "admin"
+    : ["superadmin", "admin", "student", "pending"].includes(row.role)
+      ? row.role as AppRole
+      : "pending";
   return {
     id: row.id,
     feishuOpenId: row.feishu_open_id,
@@ -182,7 +184,7 @@ export async function createFeishuSession(info: FeishuUserInfo) {
     FROM app_users WHERE feishu_open_id = ?`).bind(openId).first<UserRow>();
 
   if (!row) {
-    const adminCount = await d1.prepare("SELECT COUNT(*) AS count FROM app_users WHERE role IN ('superadmin', 'admin') AND active = 1").first<{ count: number }>();
+    const adminCount = await d1.prepare("SELECT COUNT(*) AS count FROM app_users WHERE role IN ('superadmin', 'admin', 'mentor') AND active = 1").first<{ count: number }>();
     const isConfiguredAdmin = Boolean(config.adminOpenId && config.adminOpenId === openId);
     const isFirstAdmin = config.allowFirstAdmin && (adminCount?.count ?? 0) === 0;
     const initialRole: AppRole = isConfiguredAdmin || isFirstAdmin ? "admin" : "pending";
@@ -203,7 +205,7 @@ export async function createFeishuSession(info: FeishuUserInfo) {
     if (row && initialRole === "admin") {
       const requestId = crypto.randomUUID();
       const [updateResult] = await d1.batch([
-        d1.prepare("UPDATE app_users SET role = 'admin' WHERE id = ? AND role = 'pending'").bind(row.id),
+        d1.prepare("UPDATE app_users SET role = 'mentor' WHERE id = ? AND role = 'pending'").bind(row.id),
         d1.prepare(`INSERT INTO app_user_role_events
           (target_user_id, actor_user_id, request_id, from_role, to_role, detail)
           SELECT ?, ?, ?, 'pending', 'admin', ? WHERE changes() > 0`)
@@ -219,7 +221,9 @@ export async function createFeishuSession(info: FeishuUserInfo) {
         FROM app_users WHERE id = ?`).bind(row.id).first<UserRow>();
     }
   } else {
-    const configuredRole = mapUser(row).role;
+      const configuredRole = ["superadmin", "admin", "mentor", "student", "pending"].includes(row.role)
+        ? row.role
+        : "pending";
     row = await d1.prepare(`UPDATE app_users SET
       feishu_union_id = ?, feishu_user_id = ?, display_name = ?, avatar_url = ?, email = ?,
       role = ?, last_login_at = CURRENT_TIMESTAMP
@@ -299,7 +303,7 @@ export async function requireAppUser(request: Request, roles?: AppRole[]) {
   const user = await getAppUser(request);
   if (!user) return { response: authError(401, "FEISHU_AUTH_REQUIRED", "请从飞书工作台打开并完成登录") } as const;
   if (user.role === "pending") {
-    return { response: authError(403, "FEISHU_ACCOUNT_PENDING", "账号已验证，等待导师分配系统角色") } as const;
+    return { response: authError(403, "FEISHU_ACCOUNT_PENDING", "账号已验证，等待超级管理员授权") } as const;
   }
   if (roles && !roles.includes(user.role)) {
     return { response: authError(403, "FORBIDDEN", "当前账号没有此操作权限") } as const;

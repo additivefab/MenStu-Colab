@@ -13,7 +13,7 @@ type ManagedUserRow = {
   last_login_at: string;
 };
 
-const userRoles = new Set<UserRole>(["superadmin", "admin", "mentor", "student", "pending"]);
+const userRoles = new Set<UserRole>(["superadmin", "admin", "student", "pending"]);
 
 export async function GET(request: Request) {
   const auth = await requireAppUser(request, ["superadmin", "admin"]);
@@ -23,11 +23,13 @@ export async function GET(request: Request) {
   const bootstrapOpenId = getFeishuConfig().superAdminOpenId;
   const [users, assignments, superAdminCount, bootstrapTarget] = await Promise.all([
     d1.prepare(`SELECT
-      u.id, u.display_name, u.avatar_url, u.email, u.role, u.student_id,
+      u.id, u.display_name, u.avatar_url, u.email,
+      CASE WHEN u.role = 'mentor' THEN 'admin' ELSE u.role END AS role,
+      u.student_id,
       u.last_login_at, s.display_name AS student_name
       FROM app_users u LEFT JOIN students s ON s.id = u.student_id
       WHERE u.active = 1
-      ORDER BY CASE u.role WHEN 'superadmin' THEN 0 WHEN 'admin' THEN 1 WHEN 'mentor' THEN 2 WHEN 'pending' THEN 3 ELSE 4 END,
+      ORDER BY CASE u.role WHEN 'superadmin' THEN 0 WHEN 'admin' THEN 1 WHEN 'mentor' THEN 1 WHEN 'pending' THEN 2 ELSE 3 END,
       u.display_name`)
       .all<ManagedUserRow>(),
     d1.prepare(`SELECT mentor_user_id, student_id FROM mentor_student_assignments
@@ -38,15 +40,28 @@ export async function GET(request: Request) {
     d1.prepare("SELECT id FROM app_users WHERE feishu_open_id = ? AND active = 1")
       .bind(bootstrapOpenId).first<{ id: number }>(),
   ]);
-  const bootstrapPending = auth.user.role === "admin" && Number(superAdminCount?.count ?? 0) === 0;
+  const activeSuperAdmins = Number(superAdminCount?.count ?? 0);
+  const bootstrapPending = auth.user.role === "admin" && activeSuperAdmins === 0;
+  if (auth.user.role === "admin" && !bootstrapPending) {
+    return Response.json({ error: "只有超级管理员可以管理账号角色" }, { status: 403 });
+  }
+  const visibleUsers = auth.user.role === "superadmin"
+    ? users.results
+    : users.results.filter((user) => user.id === auth.user.id);
   return Response.json({
     viewer: { id: auth.user.id, role: auth.user.role },
     superadmin_bootstrap_pending: bootstrapPending,
-    can_bootstrap_superadmin: bootstrapPending && Boolean(bootstrapOpenId && bootstrapTarget?.id),
-    bootstrap_superadmin_user_id: bootstrapPending && bootstrapOpenId ? bootstrapTarget?.id ?? null : null,
-    users: users.results.map((user) => ({
+    can_bootstrap_superadmin: bootstrapPending
+      && Boolean(bootstrapOpenId)
+      && bootstrapTarget?.id === auth.user.id,
+    bootstrap_superadmin_user_id: bootstrapPending
+      && bootstrapOpenId
+      && bootstrapTarget?.id === auth.user.id
+      ? auth.user.id
+      : null,
+    users: visibleUsers.map((user) => ({
       ...user,
-      mentor_student_ids: assignments.results
+      admin_student_ids: assignments.results
         .filter((item) => item.mentor_user_id === user.id)
         .map((item) => item.student_id),
     })),
@@ -67,28 +82,39 @@ export async function PATCH(request: Request) {
     const userId = Number(body.userId);
     const role = body.role;
     const studentId = body.studentId?.trim() || null;
-    const mentorStudentIds = Array.isArray(body.studentIds)
+    const adminStudentIds = Array.isArray(body.studentIds)
       ? Array.from(new Set(body.studentIds.map((item) => String(item).trim()).filter(Boolean)))
       : [];
     if (!Number.isInteger(userId) || !role || !userRoles.has(role)) {
       return Response.json({ error: "角色参数无效" }, { status: 400 });
     }
-    if (mentorStudentIds.length > 100) return Response.json({ error: "导师分配学生数量超出限制" }, { status: 400 });
     if (role === "student" && !studentId) {
       return Response.json({ error: "学生账号必须绑定学生记录" }, { status: 400 });
     }
+    if (adminStudentIds.length > 100) return Response.json({ error: "管理员分配学生数量超出限制" }, { status: 400 });
 
     await ensureDatabase();
     const d1 = getD1();
     const [existing, superAdminCount] = await Promise.all([
-      d1.prepare("SELECT id, feishu_open_id, role, student_id FROM app_users WHERE id = ? AND active = 1")
-        .bind(userId).first<{ id: number; feishu_open_id: string; role: UserRole; student_id: string | null }>(),
+      d1.prepare(`SELECT id, feishu_open_id,
+        CASE WHEN role = 'mentor' THEN 'admin' ELSE role END AS role,
+        role AS storage_role, student_id
+        FROM app_users WHERE id = ? AND active = 1`)
+        .bind(userId).first<{
+          id: number;
+          feishu_open_id: string;
+          role: UserRole;
+          storage_role: string;
+          student_id: string | null;
+        }>(),
       d1.prepare("SELECT COUNT(*) AS count FROM app_users WHERE role = 'superadmin' AND active = 1")
         .first<{ count: number }>(),
     ]);
     if (!existing) return Response.json({ error: "用户不存在" }, { status: 404 });
 
     const activeSuperAdmins = Number(superAdminCount?.count ?? 0);
+    const bootstrapOpenId = getFeishuConfig().superAdminOpenId;
+    const bootstrapTargetVerified = Boolean(bootstrapOpenId && existing.feishu_open_id === bootstrapOpenId);
     const roleDecision = decideRoleChange({
       callerRole: auth.user.role,
       callerUserId: auth.user.id,
@@ -96,16 +122,19 @@ export async function PATCH(request: Request) {
       targetRole: existing.role,
       nextRole: role,
       activeSuperAdmins,
+      bootstrapTargetVerified,
     });
     if (!roleDecision.allowed) {
       return Response.json({ error: roleDecision.error }, { status: roleDecision.status });
     }
-    const bootstrapOpenId = getFeishuConfig().superAdminOpenId;
     if (roleDecision.bootstrapSuperAdmin && (!bootstrapOpenId || existing.feishu_open_id !== bootstrapOpenId)) {
       return Response.json({ error: "首次超级管理员只能授予预先绑定的已核验飞书账号" }, { status: 403 });
     }
+    if (roleDecision.bootstrapSuperAdmin && request.headers.get("origin") !== new URL(request.url).origin) {
+      return Response.json({ error: "首次超级管理员授权必须来自当前系统页面" }, { status: 403 });
+    }
 
-    const idsToValidate = role === "student" && studentId ? [studentId] : role === "mentor" ? mentorStudentIds : [];
+    const idsToValidate = role === "student" && studentId ? [studentId] : role === "admin" ? adminStudentIds : [];
     if (idsToValidate.length) {
       const placeholders = idsToValidate.map(() => "?").join(",");
       const valid = await d1.prepare(`SELECT id FROM students WHERE active = 1 AND id IN (${placeholders})`)
@@ -123,16 +152,21 @@ export async function PATCH(request: Request) {
     const nextStudentId = role === "student"
       ? studentId
       : role === "admin" || role === "superadmin" ? existing.student_id : null;
-    const auditDetail = role === "mentor"
-      ? `保存导师授权：${mentorStudentIds.length} 名学生`
-      : roleDecision.bootstrapSuperAdmin ? "首次超级管理员授予" : "保存账号角色";
+    if (role === existing.role && nextStudentId === existing.student_id && role !== "admin") {
+      return Response.json({ message: "账号角色无需更新" });
+    }
+    const auditDetail = roleDecision.bootstrapSuperAdmin
+      ? "首次超级管理员本人初始化"
+      : role === "admin" ? `保存管理员（导师）授权：${adminStudentIds.length} 名学生` : "保存账号角色";
     const roleChangeRequestId = crypto.randomUUID();
+    const nextStorageRole = role === "admin" ? "mentor" : role;
     const updateGuards = [
       "role = ?",
-      "EXISTS (SELECT 1 FROM app_users actor WHERE actor.id = ? AND actor.active = 1 AND actor.role = ?)",
+      `EXISTS (SELECT 1 FROM app_users actor WHERE actor.id = ? AND actor.active = 1
+        AND CASE WHEN actor.role = 'mentor' THEN 'admin' ELSE actor.role END = ?)`,
     ];
     const updateBindings: Array<string | number | null> = [
-      role, nextStudentId, userId, existing.role, auth.user.id, auth.user.role,
+      nextStorageRole, nextStudentId, userId, existing.storage_role, auth.user.id, auth.user.role,
     ];
     if (roleDecision.bootstrapSuperAdmin) {
       updateGuards.push("feishu_open_id = ?");
@@ -143,6 +177,14 @@ export async function PATCH(request: Request) {
     if (removingSuperAdmin) {
       updateGuards.push("(SELECT COUNT(*) FROM app_users WHERE role = 'superadmin' AND active = 1) > 1");
     }
+    const assignmentDelete = role === "admin" && adminStudentIds.length
+      ? d1.prepare(`DELETE FROM mentor_student_assignments
+          WHERE mentor_user_id = ? AND student_id NOT IN (${adminStudentIds.map(() => "?").join(",")})
+          AND EXISTS (SELECT 1 FROM app_user_role_events WHERE request_id = ?)`)
+        .bind(userId, ...adminStudentIds, roleChangeRequestId)
+      : d1.prepare(`DELETE FROM mentor_student_assignments WHERE mentor_user_id = ?
+          AND EXISTS (SELECT 1 FROM app_user_role_events WHERE request_id = ?)`)
+        .bind(userId, roleChangeRequestId);
     const statements = [
       d1.prepare(`UPDATE app_users SET role = ?, student_id = ?
         WHERE id = ? AND active = 1 AND ${updateGuards.join(" AND ")}`)
@@ -151,16 +193,15 @@ export async function PATCH(request: Request) {
         (target_user_id, actor_user_id, request_id, from_role, to_role, detail)
         SELECT ?, ?, ?, ?, ?, ? WHERE changes() > 0`)
         .bind(userId, auth.user.id, roleChangeRequestId, existing.role, role, auditDetail),
-      d1.prepare(`DELETE FROM mentor_student_assignments WHERE mentor_user_id = ?
-        AND EXISTS (SELECT 1 FROM app_user_role_events WHERE request_id = ?)`)
-        .bind(userId, roleChangeRequestId),
+      assignmentDelete,
     ];
-    if (role === "mentor") {
-      statements.push(...mentorStudentIds.map((assignedStudentId) =>
+    if (role === "admin") {
+      statements.push(...adminStudentIds.map((assignedStudentId) =>
         d1.prepare(`INSERT INTO mentor_student_assignments
           (mentor_user_id, student_id, relationship, can_review, active)
           SELECT ?, ?, 'primary', 1, 1
-          WHERE EXISTS (SELECT 1 FROM app_user_role_events WHERE request_id = ?)`)
+          WHERE EXISTS (SELECT 1 FROM app_user_role_events WHERE request_id = ?)
+          ON CONFLICT(mentor_user_id, student_id) DO UPDATE SET active = 1`)
           .bind(userId, assignedStudentId, roleChangeRequestId),
       ));
     }
@@ -174,9 +215,7 @@ export async function PATCH(request: Request) {
       return Response.json({ error }, { status: 409 });
     }
     return Response.json({
-      message: role === "mentor"
-        ? `导师角色已更新，当前负责 ${mentorStudentIds.length} 名学生`
-        : role === "superadmin" ? "超级管理员权限已授予并写入审计记录" : "账号角色已更新并写入审计记录",
+      message: role === "superadmin" ? "超级管理员权限已授予并写入审计记录" : "账号角色已更新并写入审计记录",
     });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "更新失败" }, { status: 500 });

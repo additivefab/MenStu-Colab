@@ -310,12 +310,12 @@ button.primary { border: 0; background: var(--blue); color: white; box-shadow: 0
 .bound-student { color: #4b607b; font-size: 10px; }
 .account-role-editor { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(150px, 1fr)); gap: 9px; }
 .account-role-editor > label { display: grid; gap: 5px; color: #69788b; font-size: 8px; font-weight: 800; }
-.mentor-assignment { grid-column: 1 / -1; margin: 0; padding: 10px; border: 1px solid #dfe6ef; border-radius: 9px; }
-.mentor-assignment legend { padding: 0 5px; color: #596b81; font-size: 8px; font-weight: 800; }
-.mentor-assignment > div { max-height: 155px; display: grid; grid-template-columns: repeat(4, minmax(95px, 1fr)); gap: 5px; overflow-y: auto; }
-.mentor-assignment label { min-width: 0; padding: 6px 7px; display: grid; grid-template-columns: auto 1fr auto; gap: 5px; align-items: center; border-radius: 6px; background: #f7f9fc; color: #40536c; font-size: 8px; }
-.mentor-assignment input { margin: 0; }
-.mentor-assignment small { color: #94a0af; font-size: 7px; }
+.admin-assignment { grid-column: 1 / -1; margin: 0; padding: 10px; border: 1px solid #dfe6ef; border-radius: 9px; }
+.admin-assignment legend { padding: 0 5px; color: #596b81; font-size: 8px; font-weight: 800; }
+.admin-assignment > div { max-height: 155px; display: grid; grid-template-columns: repeat(4, minmax(95px, 1fr)); gap: 5px; overflow-y: auto; }
+.admin-assignment label { min-width: 0; padding: 6px 7px; display: grid; grid-template-columns: auto 1fr auto; gap: 5px; align-items: center; border-radius: 6px; background: #f7f9fc; color: #40536c; font-size: 8px; }
+.admin-assignment input { margin: 0; }
+.admin-assignment small { color: #94a0af; font-size: 7px; }
 .account-message { padding: 10px 20px; color: #496477; background: #f5f8fb; border-top: 1px solid #e8edf2; font-size: 9px; }
 .account-bootstrap-note { margin: 12px 20px 0; padding: 12px 14px; display: flex; gap: 8px 16px; align-items: baseline; border: 1px solid #f0d991; border-radius: 10px; background: #fff9e8; color: #72520d; }
 .account-bootstrap-note b { font-size: 12px; white-space: nowrap; }
@@ -761,7 +761,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .data-boundaries { grid-template-columns: 1fr; }
   .account-row { grid-template-columns: 1fr auto; }
   .account-role-editor, .bound-student { grid-column: 1 / -1; grid-row: 2; }
-  .mentor-assignment > div { grid-template-columns: repeat(2, minmax(95px, 1fr)); }
+  .admin-assignment > div { grid-template-columns: repeat(2, minmax(95px, 1fr)); }
   .form-row { grid-template-columns: 1fr; }
   .proposal-admin-layout, .proposal-form-grid, .proposal-detail-grid, .proposal-history-grid { grid-template-columns: 1fr; }
   .proposal-flow { width: 100%; overflow-x: auto; }
@@ -856,7 +856,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-output-form .wide { grid-column: auto; }
   .student-output-form-actions { align-items: stretch; flex-direction: column; }
   .student-output-form-actions button { width: 100%; }
-  .mentor-assignment > div { grid-template-columns: 1fr; }
+  .admin-assignment > div { grid-template-columns: 1fr; }
   .modal { padding: 23px 18px; }
   .modal-layer { padding: 10px; }
   .student-primary-actions { grid-template-columns: 1fr; }

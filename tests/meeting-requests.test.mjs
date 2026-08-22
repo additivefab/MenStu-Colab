@@ -13,6 +13,8 @@ test("meeting request route enforces ownership, reviewer scope, transitions, ori
   assert.match(source, /requireAppUser\(request, \["student"\]\)/);
   assert.match(source, /m\.student_id = \? AND m\.requested_by_user_id = \?/);
   assert.match(source, /assignment\.active = 1 AND assignment\.can_review = 1/);
+  assert.match(source, /user\.role === "admin"/);
+  assert.doesNotMatch(source, /user\.role === "mentor"/);
   assert.match(source, /action !== "cancel"/);
   assert.match(source, /action !== "confirm" && action !== "decline"/);
   assert.match(source, /existing\.status !== "requested" && existing\.status !== "confirmed"/);
@@ -54,7 +56,7 @@ test("0009 meeting request migration constrains records and supports non-leaking
     INSERT INTO students (id, display_name)
       VALUES ('student-a', '学生甲'), ('student-b', '学生乙');
     INSERT INTO app_users (id, display_name)
-      VALUES (1, '学生甲账号'), (2, '学生乙账号'), (3, '导师账号'), (4, '管理员账号');
+      VALUES (1, '学生甲账号'), (2, '学生乙账号'), (3, '管理员（导师）账号'), (4, '超级管理员账号');
     INSERT INTO mentor_student_assignments
       (mentor_user_id, student_id, can_review, active)
       VALUES (3, 'student-a', 1, 1), (3, 'student-b', 0, 1);
@@ -70,14 +72,14 @@ test("0009 meeting request migration constrains records and supports non-leaking
     WHERE student_id = ? AND requested_by_user_id = ? ORDER BY id`).all("student-a", 1);
   assert.deepEqual(studentRows.map((row) => row.id), [1]);
 
-  const mentorRows = database.prepare(`SELECT m.id FROM meeting_requests m
+  const adminRows = database.prepare(`SELECT m.id FROM meeting_requests m
     WHERE EXISTS (
       SELECT 1 FROM mentor_student_assignments assignment
       WHERE assignment.mentor_user_id = ?
         AND assignment.student_id = m.student_id
         AND assignment.active = 1 AND assignment.can_review = 1
     ) ORDER BY m.id`).all(3);
-  assert.deepEqual(mentorRows.map((row) => row.id), [1]);
+  assert.deepEqual(adminRows.map((row) => row.id), [1]);
 
   const update = database.prepare(`UPDATE meeting_requests SET
     status = 'confirmed', handled_by_user_id = 4, response_note = '时间可行',

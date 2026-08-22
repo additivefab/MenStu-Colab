@@ -174,10 +174,10 @@ type MeetingRequest = {
   version: number;
 };
 
-type ViewerRole = "superadmin" | "admin" | "mentor" | "student";
+type ViewerRole = "superadmin" | "admin" | "student";
 
 function isReviewerRole(role: ViewerRole) {
-  return role === "superadmin" || role === "mentor";
+  return role === "superadmin" || role === "admin";
 }
 
 type DashboardData = {
@@ -286,7 +286,7 @@ export default function Dashboard() {
         return;
       }
       if (response.status === 403 && payload.code === "FEISHU_ACCOUNT_PENDING") {
-        setAuthGate({ kind: "pending", message: payload.error || "账号等待导师分配角色" });
+        setAuthGate({ kind: "pending", message: payload.error || "账号等待系统授权" });
         return;
       }
       if (response.status === 503 && payload.code === "FEISHU_NOT_CONFIGURED") {
@@ -404,13 +404,11 @@ export default function Dashboard() {
     </>;
   }
 
-  const visibleNavItems = data?.viewer.role === "mentor"
-      ? navItems.filter((item) => ["overview", "students", "proposals", "reviews", "meetings"].includes(item.id))
-      : navItems;
+  const visibleNavItems = navItems;
 
   const viewerRoleLabel = data?.viewer.role === "superadmin"
     ? "超级管理员"
-    : data?.viewer.role === "admin" ? "系统管理员" : data?.viewer.role === "mentor" ? "导师" : "学生";
+    : data?.viewer.role === "admin" ? "管理员（导师）" : "学生";
 
   return (
     <main className="app-shell">
@@ -440,12 +438,12 @@ export default function Dashboard() {
             <p className="eyebrow">{today}</p>
             <h1>{view === "overview" ? data?.viewer.role === "student" ? "我的科研进展" : "科研进展驾驶舱" : navItems.find((item) => item.id === view)?.label}</h1>
             <p className="subtitle">
-              {view === "overview" ? data?.viewer.role === "student" ? "查看自己的培养计划、证据进展和下一步行动。" : "只关注新增证据、研究结论和需要您决策的事项。" : view === "proposals" ? "学生主写、导师确认，每次修订均保留版本与审核记录。" : "以阶段内是否产生可验证的新信息为核心。"}
+              {view === "overview" ? data?.viewer.role === "student" ? "查看自己的培养计划、证据进展和下一步行动。" : "只关注新增证据、研究结论和需要您决策的事项。" : view === "proposals" ? "由管理员代录、授权管理员或超级管理员确认，每次修订均保留版本与审核记录。" : "以阶段内是否产生可验证的新信息为核心。"}
             </p>
           </div>
           <div className="top-actions">
             <button className="feishu connected" onClick={() => setFeishuOpen(true)}><i />飞书已登录</button>
-            {data && (data.viewer.role === "admin" || data.viewer.role === "student")
+            {data && (data.viewer.role === "superadmin" || data.viewer.role === "admin" || data.viewer.role === "student")
               ? <button className="primary" onClick={() => setSubmitOpen(true)}>＋ 提交进展</button> : null}
           </div>
         </header>
@@ -779,7 +777,7 @@ function StaffMeetingRequests() {
   }
 
   return <section className="panel staff-meeting-requests">
-    <PanelHeader title="学生会议预约" subtitle="导师只看到已分配学生；管理员与超级管理员可全局协调" count={requests.filter((item) => item.status === "requested").length} />
+    <PanelHeader title="学生会议预约" subtitle="管理员（导师）只处理已分配且可审核的学生；超级管理员可全局协调" count={requests.filter((item) => item.status === "requested").length} />
     <div className="staff-meeting-list">{requests.map((item) => <article key={item.id}>
       <div className="staff-meeting-main"><span className={`meeting-state ${item.status}`}>{meetingStatusLabels[item.status]}</span><strong>{item.student_name} · {item.topic}</strong><small>{item.preferred_date} {item.preferred_time} · {item.duration_minutes} 分钟</small>{item.note ? <p>{item.note}</p> : null}{item.response_note ? <p>回复：{item.response_note}</p> : null}</div>
       {item.status === "requested" ? <div className="staff-meeting-actions"><label>回复意见<textarea rows={2} value={notes[item.id] || ""} onChange={(event) => setNotes((current) => ({ ...current, [item.id]: event.target.value }))} maxLength={2000} placeholder="拒绝时必填；确认时可选" /></label><div><button disabled={busy === item.id} onClick={() => void handle(item, "decline")}>拒绝预约</button><button className="primary" disabled={busy === item.id} onClick={() => void handle(item, "confirm")}>确认时间</button></div></div> : null}
@@ -804,7 +802,7 @@ function OverviewMetrics({ data }: { data: DashboardData }) {
     </section>;
   }
   return <section className="metric-grid" aria-label="课题组概况">
-    <article className="metric"><span>{data.viewer.role === "mentor" ? "负责学生" : "在组学生"}</span><strong>{data.metrics.total}</strong><small>{data.metrics.doctors} 博士 · {data.metrics.masters} 硕士</small></article>
+    <article className="metric"><span>{data.viewer.role === "admin" ? "负责学生" : "在组学生"}</span><strong>{data.metrics.total}</strong><small>{data.metrics.doctors} 博士 · {data.metrics.masters} 硕士</small></article>
     <article className="metric"><span>科研成果与资产</span><strong>{data.metrics.outputs}</strong><small className="positive">论文、数据、软件、专利与交付物</small></article>
     <article className="metric"><span>待我处理</span><strong>{data.metrics.pending + data.metrics.proposalPending + data.metrics.blocked}</strong><small>证据 {data.metrics.pending} · 方案 {data.metrics.proposalPending} · 节点 {data.metrics.blocked}</small></article>
     <article className="metric attention"><span>需要关注</span><strong>{data.metrics.attention}</strong><small>黄 {data.metrics.riskCounts.黄色 ?? 0} · 橙 {data.metrics.riskCounts.橙色 ?? 0} · 红 {data.metrics.riskCounts.红色 ?? 0}</small></article>
@@ -841,7 +839,7 @@ function ActionBoard({ data, onReviews, onProposals }: { data: DashboardData; on
   ];
 
   return <section className="panel action-board">
-    <div className="action-board-head"><div><span>ROLE WORKSPACE</span><h2>{isStudent ? "我的下一步" : data.viewer.role === "superadmin" ? "超级管理员行动台" : data.viewer.role === "mentor" ? "导师行动台" : "科研管理行动台"}</h2><p>{isStudent ? "把等待反馈、当前状态和下次更新集中在一个入口。" : "先处理等待决策的事项，再跟进风险和即将到期的更新。"}</p></div><small>只给行动排序，不对学生综合评分</small></div>
+    <div className="action-board-head"><div><span>ROLE WORKSPACE</span><h2>{isStudent ? "我的下一步" : data.viewer.role === "superadmin" ? "超级管理员行动台" : "管理员（导师）行动台"}</h2><p>{isStudent ? "把等待反馈、当前状态和下次更新集中在一个入口。" : "先处理等待决策的事项，再跟进风险和即将到期的更新。"}</p></div><small>只给行动排序，不对学生综合评分</small></div>
     <div className="action-board-grid">
       <article><header><i className="review">审</i><div><strong>{isStudent ? "等待导师反馈" : "待我处理"}</strong><span>{isStudent ? data.pending.length : staffTasks.length} 项</span></div></header><div className="action-items">
         {isStudent ? data.pending.slice(0, 4).map((entry) => <Link key={entry.id} href={`/students/${encodeURIComponent(entry.student_id)}#evidence`}><span><b>{entry.display_name}</b><small>{entry.title}</small></span><em>查看</em></Link>) : staffTasks.slice(0, 4).map((task) => task.href ? <Link key={task.key} href={task.href}><span><b>{task.student}</b><small>{task.title}</small></span><em>{task.label}</em></Link> : <button key={task.key} onClick={task.action === "proposals" ? onProposals : onReviews}><span><b>{task.student}</b><small>{task.title}</small></span><em>{task.label}</em></button>)}
@@ -914,6 +912,7 @@ function ProposalWorkspace({ viewer, students, onToast }: {
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [authorStudentId, setAuthorStudentId] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -938,62 +937,59 @@ function ProposalWorkspace({ viewer, students, onToast }: {
     return () => window.clearTimeout(timer);
   }, [load]);
 
-  const ownProposal = viewer.studentId ? proposals.find((item) => item.student_id === viewer.studentId) : undefined;
-  const ownStudent = viewer.studentId ? students.find((item) => item.id === viewer.studentId) : undefined;
+  const effectiveAuthorStudentId = students.some((student) => student.id === authorStudentId)
+    ? authorStudentId
+    : students[0]?.id ?? "";
+  const authorStudent = students.find((item) => item.id === effectiveAuthorStudentId);
+  const authorProposal = authorStudent ? proposals.find((item) => item.student_id === authorStudent.id) : undefined;
   const selected = proposals.find((item) => item.id === selectedId);
-  const canAuthorProposal = viewer.role === "admin";
-  const showEditor = Boolean(canAuthorProposal && ownStudent && (editing || (viewer.role === "student" && !ownProposal)));
-  const editable = canAuthorProposal && (!ownProposal || ownProposal.status === "draft" || ownProposal.status === "changes_requested");
+  const canAuthorProposal = viewer.role === "superadmin" || viewer.role === "admin";
+  const showEditor = Boolean(canAuthorProposal && authorStudent && editing);
+  const editable = canAuthorProposal && (!authorProposal || authorProposal.status === "draft" || authorProposal.status === "changes_requested");
 
   if (loading) return <div className="proposal-loading">正在读取研究方案与版本记录…</div>;
   if (error) return <div className="error-state"><strong>研究方案暂时未加载</strong><span>{error}</span><button onClick={() => void load()}>重试</button></div>;
 
   return <div className="proposal-workspace">
     <section className="proposal-principle">
-      <div><span>TUM 流程借鉴</span><h2>学生主写，导师确认，方案与执行证据保持可追溯</h2><p>AI 可以检查结构、遗漏和风险，但不能代写最终方案，也不能替代导师作出正式评价。</p></div>
+      <div><span>TUM 流程借鉴</span><h2>管理员代录，授权管理员或超级管理员确认，方案与执行证据保持可追溯</h2><p>AI 可以检查结构、遗漏和风险，但不能代写最终方案，也不能替代负责人作出正式评价。</p></div>
       <div className="proposal-flow"><b>草稿</b><i>→</i><b>提交</b><i>→</i><b>批注修订</b><i>→</i><b>确认冻结</b></div>
     </section>
 
-    {viewer.studentId && ownStudent ? <section className="panel own-proposal-card">
-      <PanelHeader title="我的研究方案" subtitle={`${ownStudent.name} · ${ownStudent.gradeYear}级${ownStudent.degree}`} />
+    {canAuthorProposal && authorStudent ? <section className="panel own-proposal-card">
+      <PanelHeader title="代录研究方案" subtitle="仅限当前权限范围内的学生；提交后须由另一位有权人员审核" />
       <div className="own-proposal-body">
         <div>
-          <span className={`proposal-status ${ownProposal?.status ?? "draft"}`}>{proposalStatusMeta[ownProposal?.status ?? "draft"].label}</span>
-          <strong>{ownProposal?.title || "尚未建立研究方案"}</strong>
-          <small>{ownProposal ? `${proposalStatusMeta[ownProposal.status].hint} · 当前第 ${ownProposal.current_version || 0} 版` : "从科学问题、技术路线和培养节点开始撰写"}</small>
+          <label>选择学生<select value={effectiveAuthorStudentId} onChange={(event) => { setAuthorStudentId(event.target.value); setEditing(false); }}>{students.map((student) => <option value={student.id} key={student.id}>{student.name} · {student.gradeYear}级{student.degree}</option>)}</select></label>
+          <span className={`proposal-status ${authorProposal?.status ?? "draft"}`}>{proposalStatusMeta[authorProposal?.status ?? "draft"].label}</span>
+          <strong>{authorProposal?.title || "尚未建立研究方案"}</strong>
+          <small>{authorProposal ? `${proposalStatusMeta[authorProposal.status].hint} · 当前第 ${authorProposal.current_version || 0} 版` : "从科学问题、技术路线和培养节点开始代录"}</small>
         </div>
-        {editable ? <button className="primary" onClick={() => setEditing(true)}>{ownProposal ? "继续编辑" : "开始撰写"}</button> : null}
+        {editable ? <button className="primary" onClick={() => setEditing(true)}>{authorProposal ? "继续编辑" : "开始代录"}</button> : null}
       </div>
-      {ownProposal?.status === "changes_requested" && ownProposal.reviewer_note ? <div className="proposal-review-note"><b>导师修改意见</b><p>{ownProposal.reviewer_note}</p></div> : null}
+      {authorProposal?.status === "changes_requested" && authorProposal.reviewer_note ? <div className="proposal-review-note"><b>导师修改意见</b><p>{authorProposal.reviewer_note}</p></div> : null}
     </section> : null}
 
-    {showEditor && ownStudent ? <ProposalEditor
-      student={ownStudent}
-      proposal={ownProposal}
+    {showEditor && authorStudent ? <ProposalEditor
+      student={authorStudent}
+      proposal={authorProposal}
       onCancel={() => setEditing(false)}
       onSaved={async (message) => { onToast(message); setEditing(false); await load(); }}
     /> : null}
 
-    {viewer.role === "student" && ownProposal && !showEditor ? <ProposalDetail
-      proposal={ownProposal}
-      canReview={false}
-      onToast={onToast}
-      onRefresh={load}
-    /> : null}
-
     {viewer.role !== "student" ? <section className="proposal-admin-layout">
       <div className="panel proposal-list-panel">
-        <PanelHeader title={viewer.role === "mentor" ? "负责学生的研究方案" : "全部研究方案"} subtitle="优先显示待审核与待修改方案" count={proposals.length} />
+        <PanelHeader title={viewer.role === "admin" ? "负责学生的研究方案" : "全部研究方案"} subtitle="优先显示待审核与待修改方案" count={proposals.length} />
         <div className="proposal-list">
           {proposals.map((proposal) => <button key={proposal.id} className={selectedId === proposal.id ? "selected" : ""} onClick={() => setSelectedId(proposal.id)}>
             <span className={`proposal-status ${proposal.status}`}>{proposalStatusMeta[proposal.status].label}</span>
             <strong>{proposal.student_name}</strong>
             <small>{proposal.title} · 第 {proposal.current_version || 0} 版</small>
           </button>)}
-          {!proposals.length ? <div className="empty-small">学生提交研究方案后会显示在这里。</div> : null}
+          {!proposals.length ? <div className="empty-small">管理员为负责学生建立研究方案后会显示在这里。</div> : null}
         </div>
       </div>
-      <div>{selected ? <ProposalDetail proposal={selected} canReview={selected.can_review} onToast={onToast} onRefresh={load} /> : <div className="empty-state"><span>◇</span><strong>暂无研究方案</strong><small>学生可以在自己的飞书账号中开始撰写。</small></div>}</div>
+      <div>{selected ? <ProposalDetail proposal={selected} canReview={selected.can_review} onToast={onToast} onRefresh={load} /> : <div className="empty-state"><span>◇</span><strong>暂无研究方案</strong><small>由管理员为负责学生建立并代录研究方案。</small></div>}</div>
     </section> : null}
   </div>;
 }
@@ -1130,7 +1126,7 @@ function ProposalDetail({ proposal, canReview, onToast, onRefresh }: {
     {proposal.reviewer_note ? <div className="proposal-review-note"><b>导师意见</b><p>{proposal.reviewer_note}</p></div> : null}
     <div className="proposal-detail-grid">{details.map(([label, value]) => <section key={label}><span>{label}</span><p>{value}</p></section>)}</div>
 
-    <section className="proposal-milestones"><div className="section-title"><div><h3>培养节点</h3><p>方案确认后，学生和管理员可以更新执行状态；完成必须另有证据记录。</p></div><b>{proposal.milestones.filter((item) => item.status === "completed").length}/{proposal.milestones.length}</b></div>
+    <section className="proposal-milestones"><div className="section-title"><div><h3>培养节点</h3><p>方案确认后，授权管理员或超级管理员可以更新执行状态；完成必须另有证据记录。</p></div><b>{proposal.milestones.filter((item) => item.status === "completed").length}/{proposal.milestones.length}</b></div>
       <div className="milestone-timeline">{proposal.milestones.map((milestone, index) => <div className={`milestone-item ${milestone.status}`} key={milestone.id}><i>{index + 1}</i><div><strong>{milestone.title}</strong><small>目标日期：{milestone.target_date || "待补充"}</small><p>{milestone.evidence_target || "尚未填写验收证据"}</p></div>{proposal.status === "approved" ? <select aria-label={`${milestone.title}状态`} value={milestone.status} disabled={busy === `milestone-${milestone.id}`} onChange={(event) => void updateMilestone(milestone.id, event.target.value as MilestoneStatus)}>{Object.entries(milestoneStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : <span>{milestoneStatusLabels[milestone.status]}</span>}</div>)}</div>
     </section>
 
@@ -1141,7 +1137,7 @@ function ProposalDetail({ proposal, canReview, onToast, onRefresh }: {
 }
 
 function FeishuModal({ viewer, onClose, onLogout }: { viewer: DashboardData["viewer"]; onClose: () => void; onLogout: () => Promise<void> }) {
-  const roleLabel = viewer.role === "superadmin" ? "超级管理员" : viewer.role === "admin" ? "管理员" : viewer.role === "mentor" ? "导师" : "学生";
+  const roleLabel = viewer.role === "superadmin" ? "超级管理员" : viewer.role === "admin" ? "管理员（导师）" : "学生";
   return <div className="modal-layer" role="presentation"><div className="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="feishu-dialog-title"><button className="close" aria-label="关闭" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2 id="feishu-dialog-title">{viewer.name}，飞书身份已验证</h2><p>当前角色：{roleLabel}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按每名学生的 7/14/21/30 天周期发送</small></span><em>下一步</em></div><div><b>3</b><span><strong>智能纪要个人进展</strong><small>自动识别学生姓名并把科研部分拆成独立进展</small></span><em className="done">已接入</em></div></div><div className="safe-banner">普通聊天会在接收时立即过滤且不落库；纪要只能在学生归属明确时自动建个人进展，正式评价由对应主导师或超级管理员完成。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
 }
 
@@ -1157,7 +1153,7 @@ function MeetingView({ viewer, students, onRemind }: { viewer: DashboardData["vi
     .filter((student) => student.risk.level !== "正常" || student.cadenceDays - daysSinceLatestSubmission(student) <= 7)
     .sort((a, b) => b.risk.days - a.risk.days)
     .slice(0, 6);
-  return <div className="meeting-workspace"><div className="meeting-grid"><section className="panel"><PanelHeader title="未来 7 天更新提醒" subtitle="按个人需要设置，最长不超过 30 天" count={due.length} /><div className="reminder-list">{due.map(({ student, remaining }) => <div key={student.id}><span>{remaining < 0 ? `逾期 ${Math.abs(remaining)} 天` : remaining === 0 ? "今天" : `${remaining} 天后`}</span><strong>{student.name}</strong><small>{student.cadenceDays} 天周期 · {student.stage}</small><button disabled={busy === student.id} onClick={async () => { setBusy(student.id); await onRemind(student); setBusy(null); }}>{busy === student.id ? "发送中…" : "飞书提醒"}</button></div>)}{!due.length ? <div className="empty-small">未来 7 天没有需要提醒的学生</div> : null}</div></section><section className="panel meeting-rule"><PanelHeader title="组会建议" subtitle="不是固定轮转，而是优先解决阻塞" /><div className="meeting-summary"><span>{agenda.length}</span><strong>名学生建议进入本周议程</strong><p>系统只根据连续无进展时间和个人更新周期排序，不自动评价学生。</p><button className="primary" onClick={() => setAgendaOpen((current) => !current)}>{agendaOpen ? "收起议程" : "生成本周议程"}</button>{agendaOpen ? <div className="agenda-list">{agenda.map((student, index) => <Link key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><b>{index + 1}</b><span><strong>{student.name}</strong><small>{student.risk.level !== "正常" ? `${student.risk.days} 天无实质性进展，优先确认阻塞与决策` : `进入 ${student.cadenceDays} 天更新窗口，核对本周期证据`}</small></span></Link>)}{!agenda.length ? <p>本周暂无需要优先讨论的学生。</p> : null}</div> : null}</div></section></div><StaffMeetingRequests />{viewer.role === "superadmin" || viewer.role === "admin" ? <FeishuMeetingImports students={students} /> : null}</div>;
+  return <div className="meeting-workspace"><div className="meeting-grid"><section className="panel"><PanelHeader title="未来 7 天更新提醒" subtitle="按个人需要设置，最长不超过 30 天" count={due.length} /><div className="reminder-list">{due.map(({ student, remaining }) => <div key={student.id}><span>{remaining < 0 ? `逾期 ${Math.abs(remaining)} 天` : remaining === 0 ? "今天" : `${remaining} 天后`}</span><strong>{student.name}</strong><small>{student.cadenceDays} 天周期 · {student.stage}</small><button disabled={busy === student.id} onClick={async () => { setBusy(student.id); await onRemind(student); setBusy(null); }}>{busy === student.id ? "发送中…" : "飞书提醒"}</button></div>)}{!due.length ? <div className="empty-small">未来 7 天没有需要提醒的学生</div> : null}</div></section><section className="panel meeting-rule"><PanelHeader title="组会建议" subtitle="不是固定轮转，而是优先解决阻塞" /><div className="meeting-summary"><span>{agenda.length}</span><strong>名学生建议进入本周议程</strong><p>系统只根据连续无进展时间和个人更新周期排序，不自动评价学生。</p><button className="primary" onClick={() => setAgendaOpen((current) => !current)}>{agendaOpen ? "收起议程" : "生成本周议程"}</button>{agendaOpen ? <div className="agenda-list">{agenda.map((student, index) => <Link key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><b>{index + 1}</b><span><strong>{student.name}</strong><small>{student.risk.level !== "正常" ? `${student.risk.days} 天无实质性进展，优先确认阻塞与决策` : `进入 ${student.cadenceDays} 天更新窗口，核对本周期证据`}</small></span></Link>)}{!agenda.length ? <p>本周暂无需要优先讨论的学生。</p> : null}</div> : null}</div></section></div><StaffMeetingRequests />{viewer.role === "superadmin" ? <FeishuMeetingImports students={students} /> : null}</div>;
 }
 
 function FeishuMeetingImports({ students }: { students: Student[] }) {
@@ -1220,7 +1216,7 @@ function SettingsView({ viewer, onFeishu, students, onRosterImported }: {
   onRosterImported: () => Promise<void>;
 }) {
   return <div className="settings-grid">
-    {viewer.role === "admin" ? <RosterImport students={students} onImported={onRosterImported} /> : null}
+    {viewer.role === "superadmin" ? <RosterImport students={students} onImported={onRosterImported} /> : null}
     <section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、提醒与 AI 会议总结导入" /><div className="setting-body"><span className="status-pill safe">智能拆分已启用</span><p>普通聊天即时过滤；智能纪要会按学生姓名和汇报分段生成个人进展，归属不明确时才进入备用人工区。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section>
     <section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><button>稍后连接 GitHub App</button></div></section>
     <section className="panel setting-card"><PanelHeader title="开源流程参考" subtitle="TUM · Moodle · OSIRIS · eLabFTW" /><div className="setting-body"><span className="status-pill safe">模式已吸收</span><p>采用方案版本、角色权限、待办审核、成果台账与证据溯源等成熟模式；未复制第三方界面或业务代码。</p><div className="reference-links"><a href="https://github.com/ls1intum/thesis-management" target="_blank" rel="noreferrer">TUM</a><a href="https://github.com/moodle/moodle" target="_blank" rel="noreferrer">Moodle</a><a href="https://github.com/OSIRIS-Solutions/osiris" target="_blank" rel="noreferrer">OSIRIS</a><a href="https://github.com/elabftw/elabftw" target="_blank" rel="noreferrer">eLabFTW</a></div></div></section>
@@ -1247,7 +1243,7 @@ function RosterImport({ students, onImported }: { students: Student[]; onImporte
     } finally { setBusy(false); }
   }
 
-  return <section className="panel setting-card"><PanelHeader title="真实学生名册" subtitle="仅管理员可以执行导入" /><div className="setting-body"><span className="status-pill safe">{imported ? "已导入 26 人" : "等待导入"}</span><p>{imported ? "12 名博士生、14 名硕士生已纳入管理；演示记录已停用归档。" : "导入已确认的 26 人名册，并保留现有演示数据作为停用归档。"}</p><button className="primary" disabled={busy || imported} onClick={() => void importRoster()}>{busy ? "正在导入…" : imported ? "名册已导入" : "导入已确认名册"}</button>{message ? <small>{message}</small> : null}</div></section>;
+  return <section className="panel setting-card"><PanelHeader title="真实学生名册" subtitle="仅超级管理员可以执行导入" /><div className="setting-body"><span className="status-pill safe">{imported ? "已导入 26 人" : "等待导入"}</span><p>{imported ? "12 名博士生、14 名硕士生已纳入管理；演示记录已停用归档。" : "导入已确认的 26 人名册，并保留现有演示数据作为停用归档。"}</p><button className="primary" disabled={busy || imported} onClick={() => void importRoster()}>{busy ? "正在导入…" : imported ? "名册已导入" : "导入已确认名册"}</button>{message ? <small>{message}</small> : null}</div></section>;
 }
 
 type ManagedUser = {
@@ -1255,17 +1251,16 @@ type ManagedUser = {
   display_name: string;
   avatar_url: string;
   email: string;
-  role: "superadmin" | "admin" | "mentor" | "student" | "pending";
+  role: "superadmin" | "admin" | "student" | "pending";
   student_id: string | null;
   student_name: string | null;
-  mentor_student_ids: string[];
+  admin_student_ids: string[];
   last_login_at: string;
 };
 
 const managedRoleLabels: Record<ManagedUser["role"], string> = {
   superadmin: "超级管理员",
-  admin: "管理员",
-  mentor: "导师",
+  admin: "管理员（导师）",
   student: "学生",
   pending: "等待授权",
 };
@@ -1274,12 +1269,13 @@ function AccountManagement({ viewer, students }: { viewer: DashboardData["viewer
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [choices, setChoices] = useState<Record<number, string>>({});
   const [roleChoices, setRoleChoices] = useState<Record<number, ManagedUser["role"]>>({});
-  const [mentorChoices, setMentorChoices] = useState<Record<number, string[]>>({});
+  const [adminChoices, setAdminChoices] = useState<Record<number, string[]>>({});
   const [busy, setBusy] = useState<number | null>(null);
   const [message, setMessage] = useState("");
   const [bootstrapPending, setBootstrapPending] = useState(false);
   const [canBootstrapSuperAdmin, setCanBootstrapSuperAdmin] = useState(false);
   const [bootstrapSuperAdminUserId, setBootstrapSuperAdminUserId] = useState<number | null>(null);
+  const [available, setAvailable] = useState(true);
 
   const loadUsers = useCallback(async () => {
     const response = await fetch("/api/users", { cache: "no-store" });
@@ -1290,7 +1286,12 @@ function AccountManagement({ viewer, students }: { viewer: DashboardData["viewer
       bootstrap_superadmin_user_id?: number | null;
       error?: string;
     };
+    if (response.status === 403 && viewer.role === "admin") {
+      setAvailable(false);
+      return;
+    }
     if (!response.ok) throw new Error(payload.error || "账号列表加载失败");
+    setAvailable(true);
     const nextUsers = payload.users ?? [];
     setBootstrapPending(Boolean(payload.superadmin_bootstrap_pending));
     setCanBootstrapSuperAdmin(Boolean(payload.can_bootstrap_superadmin));
@@ -1298,16 +1299,16 @@ function AccountManagement({ viewer, students }: { viewer: DashboardData["viewer
     setUsers(nextUsers);
     setRoleChoices(Object.fromEntries(nextUsers.map((user) => [user.id, user.role])));
     setChoices(Object.fromEntries(nextUsers.map((user) => [user.id, user.student_id || students[0]?.id || ""])));
-    setMentorChoices(Object.fromEntries(nextUsers.map((user) => [user.id, user.mentor_student_ids ?? []])));
-  }, [students]);
+    setAdminChoices(Object.fromEntries(nextUsers.map((user) => [user.id, user.admin_student_ids ?? []])));
+  }, [students, viewer.role]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadUsers().catch((error: Error) => setMessage(error.message)), 0);
     return () => window.clearTimeout(timer);
   }, [loadUsers]);
 
-  async function updateUser(user: ManagedUser) {
-    const role = roleChoices[user.id] || user.role;
+  async function updateUser(user: ManagedUser, forcedRole?: ManagedUser["role"]) {
+    const role = forcedRole || roleChoices[user.id] || user.role;
     if (
       role !== user.role
       && ([role, user.role].includes("superadmin") || [role, user.role].includes("admin"))
@@ -1322,7 +1323,7 @@ function AccountManagement({ viewer, students }: { viewer: DashboardData["viewer
           userId: user.id,
           role,
           studentId: role === "student" ? choices[user.id] || students[0]?.id : null,
-          studentIds: role === "mentor" ? mentorChoices[user.id] || [] : [],
+          studentIds: role === "admin" ? adminChoices[user.id] || [] : [],
         }),
       });
       const payload = (await response.json()) as { error?: string; message?: string };
@@ -1334,27 +1335,32 @@ function AccountManagement({ viewer, students }: { viewer: DashboardData["viewer
     } finally { setBusy(null); }
   }
 
+  if (!available) return null;
+
   return <section className="panel account-panel">
     <PanelHeader title="飞书账号与高权限授权" subtitle="成员先完成一次飞书登录，再按已核验账号授予角色；所有高权变更均写入审计" count={users.length} />
-    {bootstrapPending ? <div className="account-bootstrap-note"><b>首次超级管理员待授予</b><span>{canBootstrapSuperAdmin ? "于兴华的已核验飞书账号已绑定为唯一初始化目标；只能在该账号上选择“超级管理员”，成功一次后入口自动关闭。" : "请于兴华先用本人飞书账号登录一次；系统维护者核验并绑定其唯一账号标识前，任何账号都不能成为首位超级管理员。"}</span></div> : null}
+    {bootstrapPending ? <div className="account-bootstrap-note"><b>首次超级管理员待初始化</b><span>{canBootstrapSuperAdmin ? "当前已核验管理员账号已绑定为唯一初始化目标；仅可将本人一次性升级为超级管理员，成功后入口自动关闭。" : "系统维护者核验并预绑定当前管理员的唯一飞书账号标识前，不能初始化首位超级管理员。"}</span></div> : null}
     <div className="account-list">{users.map((user) => {
       const selectedRole = roleChoices[user.id] || user.role;
-      const assigned = mentorChoices[user.id] || [];
+      const assigned = adminChoices[user.id] || [];
       const isSelf = user.id === viewer.id;
-      const isProtectedRole = user.role === "superadmin" || user.role === "admin";
-      const canEdit = !isSelf && (viewer.role === "superadmin" || !isProtectedRole);
+      const canBootstrapSelf = isSelf
+        && viewer.role === "admin"
+        && user.role === "admin"
+        && canBootstrapSuperAdmin
+        && user.id === bootstrapSuperAdminUserId;
+      const canEdit = !isSelf && viewer.role === "superadmin";
       const badge = managedRoleLabels[user.role];
       return <div className="account-row" key={user.id}>
         <div className="account-person"><div className="mini-avatar">{user.display_name.slice(0, 1)}</div><span><strong>{user.display_name}</strong><small>{user.email || "飞书成员"}</small></span></div>
-        {!canEdit ? <><span className={`status-pill ${user.role === "pending" ? "pending" : "safe"}`}>{badge}{isSelf ? " · 当前账号" : ""}</span>{user.student_name ? <span className="bound-student">本人学生记录：{user.student_name}</span> : null}</> : <>
+        {canBootstrapSelf ? <><span className="status-pill safe">{badge} · 当前账号</span>{user.student_name ? <span className="bound-student">本人学生记录：{user.student_name}</span> : null}<button className="bind" disabled={busy === user.id} onClick={() => void updateUser(user, "superadmin")}>{busy === user.id ? "初始化中…" : "一次性初始化为超级管理员"}</button></> : !canEdit ? <><span className={`status-pill ${user.role === "pending" ? "pending" : "safe"}`}>{badge}{isSelf ? " · 当前账号" : ""}</span>{user.student_name ? <span className="bound-student">本人学生记录：{user.student_name}</span> : null}</> : <>
           <div className="account-role-editor">
             <label>角色<select value={selectedRole} onChange={(event) => setRoleChoices((current) => ({ ...current, [user.id]: event.target.value as ManagedUser["role"] }))}>
-              <option value="pending">等待授权</option><option value="student">学生</option><option value="mentor">导师</option>
-              {viewer.role === "superadmin" ? <option value="admin">管理员</option> : null}
-              {viewer.role === "superadmin" || (canBootstrapSuperAdmin && user.id === bootstrapSuperAdminUserId) ? <option value="superadmin">超级管理员</option> : null}
+              <option value="pending">等待授权</option><option value="student">学生</option><option value="admin">管理员（导师）</option>
+              {viewer.role === "superadmin" ? <option value="superadmin">超级管理员</option> : null}
             </select></label>
             {selectedRole === "student" ? <label>绑定学生<select value={choices[user.id] || students[0]?.id || ""} onChange={(event) => setChoices((current) => ({ ...current, [user.id]: event.target.value }))}>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label> : null}
-            {selectedRole === "mentor" ? <fieldset className="mentor-assignment"><legend>负责学生（{assigned.length}）</legend><div>{students.map((student) => <label key={student.id}><input type="checkbox" checked={assigned.includes(student.id)} onChange={(event) => setMentorChoices((current) => ({ ...current, [user.id]: event.target.checked ? [...(current[user.id] || []), student.id] : (current[user.id] || []).filter((id) => id !== student.id) }))} /><span>{student.name}</span><small>{student.degree}</small></label>)}</div></fieldset> : null}
+            {selectedRole === "admin" ? <fieldset className="admin-assignment"><legend>负责学生（{assigned.length}）</legend><div>{students.map((student) => <label key={student.id}><input type="checkbox" checked={assigned.includes(student.id)} onChange={(event) => setAdminChoices((current) => ({ ...current, [user.id]: event.target.checked ? [...(current[user.id] || []), student.id] : (current[user.id] || []).filter((id) => id !== student.id) }))} /><span>{student.name}</span><small>{student.degree}</small></label>)}</div></fieldset> : null}
           </div>
           <button className="bind" disabled={busy === user.id || (selectedRole === "student" && !students.length)} onClick={() => void updateUser(user)}>{busy === user.id ? "保存中…" : selectedRole === "superadmin" ? "授予超级管理员" : "保存授权"}</button>
         </>}
