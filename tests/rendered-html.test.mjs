@@ -13,16 +13,15 @@ async function render(pathname = "/") {
   );
 }
 
-test("server-renders the research progress application shell", async () => {
+test("server-renders a neutral authenticated application shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, /<title>探研｜科研进展管理系统<\/title>/i);
-  assert.match(html, /科研进展驾驶舱/);
-  assert.match(html, /飞书已登录/);
-  assert.match(html, /AI 数据边界已启用/);
+  assert.match(html, /loading-grid/);
+  assert.doesNotMatch(html, /科研进展驾驶舱|学生个人工作台|系统设置/);
 });
 
 test("server-renders the standalone student overview route", async () => {
@@ -58,6 +57,10 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   ]);
 
   assert.match(dashboard, /完整代码由本地 Agent 读取/);
+  assert.match(dashboard, /学生个人工作台/);
+  assert.match(dashboard, /提交本周进展/);
+  assert.match(dashboard, /预约导师会议/);
+  assert.ok(dashboard.indexOf('data?.viewer.role === "student"') < dashboard.indexOf('className="app-shell"'));
   assert.match(dashboard, /不会把 App Secret、飞书访问凭证或完整代码发送给云端 GPT/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS progress_entries/);
   assert.match(feishuAuth, /crypto\.subtle\.digest\("SHA-256"/);
@@ -71,12 +74,14 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(rosterImport, /assertSameOrigin/);
   assert.match(rosterImport, /confirmedRoster/);
   assert.match(rosterImport, /counts\?\.total !== 26/);
-  assert.match(proposals, /requireAppUser\(request, \["admin", "student"\]\)/);
+  assert.match(proposals, /requireAppUser\(request, \["admin"\]\)/);
+  assert.doesNotMatch(proposals, /requireAppUser\(request, \["superadmin", "admin", "mentor", "student"\]\)/);
   assert.match(proposals, /assertSameOrigin/);
-  assert.match(proposals, /管理员只能撰写与本人绑定的研究方案/);
+  assert.match(proposals, /const studentId = cleanText\(body\.studentId, "学生", 80\)/);
+  assert.doesNotMatch(proposals, /管理员只能撰写与本人绑定的研究方案/);
   assert.match(proposals, /research_proposal_versions/);
   assert.match(proposals, /proposal_audit_events/);
-  assert.match(proposals, /只有对应主导师可以审核研究方案/);
+  assert.match(proposals, /只有对应主导师或超级管理员可以审核研究方案/);
   assert.match(proposalMigration, /CREATE TABLE `research_proposals`/);
   assert.match(proposalMigration, /CREATE UNIQUE INDEX `idx_proposal_versions_proposal_number`/);
   assert.match(dashboard, /飞书 AI 会议总结自动归档/);
@@ -84,6 +89,7 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /导师行动台/);
   assert.match(dashboard, /未来 7 天更新/);
   assert.match(studentOverview, /科研培养流程图/);
+  assert.match(studentOverview, /window\.location\.replace\("\/"\)/);
   assert.match(studentOverview, /个人进展与证据链/);
   assert.match(studentOverview, /培养计划进度/);
   assert.match(studentOverview, /最近 8 周证据活动/);
@@ -111,8 +117,9 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(feishuBridge, /--proto/);
   assert.match(feishuBridge, /=https/);
   assert.doesNotMatch(feishuBridge, /fetch\(relayUrl/);
-  assert.match(meetingImports, /requireAppUser\(request, \["admin"\]\)/);
+  assert.match(meetingImports, /requireAppUser\(request, \["superadmin", "admin"\]\)/);
   assert.match(meetingImports, /assertSameOrigin/);
+  assert.match(meetingImports, /review_status, submitted_by_user_id, updated_at/);
   assert.match(meetingImports, /VALUES \(\?, '组会'/);
   assert.match(meetingImports, /raw_content = '', extracted_text = ''/);
   assert.match(meetingImports, /chat_id = '', sender_id = '', sender_type = '', raw_content = ''/);

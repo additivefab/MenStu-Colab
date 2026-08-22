@@ -4,7 +4,15 @@ import { ensureDatabase, getD1 } from "./database";
 const SESSION_COOKIE = "tanyan_session";
 const SESSION_DAYS = 14;
 
-export type AppRole = "admin" | "mentor" | "student" | "pending";
+export type AppRole = "superadmin" | "admin" | "mentor" | "student" | "pending";
+
+export function isAdminRole(role: AppRole) {
+  return role === "superadmin" || role === "admin";
+}
+
+export function isReviewerRole(role: AppRole) {
+  return role === "superadmin" || role === "mentor";
+}
 
 export type AppUser = {
   id: number;
@@ -48,6 +56,7 @@ export function getFeishuConfig() {
     appId: values.FEISHU_APP_ID?.trim() ?? "",
     appSecret: values.FEISHU_APP_SECRET?.trim() ?? "",
     allowFirstAdmin: values.FEISHU_ALLOW_FIRST_ADMIN === "true",
+    superAdminOpenId: values.FEISHU_SUPERADMIN_OPEN_ID?.trim() ?? "",
     adminOpenId: values.FEISHU_ADMIN_OPEN_ID?.trim() ?? "",
     verificationToken: values.FEISHU_VERIFICATION_TOKEN?.trim() ?? "",
     encryptKey: values.FEISHU_ENCRYPT_KEY?.trim() ?? "",
@@ -150,7 +159,7 @@ async function hashToken(value: string) {
 }
 
 function mapUser(row: UserRow): AppUser {
-  const role: AppRole = ["admin", "mentor", "student", "pending"].includes(row.role)
+  const role: AppRole = ["superadmin", "admin", "mentor", "student", "pending"].includes(row.role)
     ? row.role as AppRole
     : "pending";
   return {
@@ -173,10 +182,10 @@ export async function createFeishuSession(info: FeishuUserInfo) {
     FROM app_users WHERE feishu_open_id = ?`).bind(openId).first<UserRow>();
 
   if (!row) {
-    const adminCount = await d1.prepare("SELECT COUNT(*) AS count FROM app_users WHERE role = 'admin' AND active = 1").first<{ count: number }>();
+    const adminCount = await d1.prepare("SELECT COUNT(*) AS count FROM app_users WHERE role IN ('superadmin', 'admin') AND active = 1").first<{ count: number }>();
     const isConfiguredAdmin = Boolean(config.adminOpenId && config.adminOpenId === openId);
     const isFirstAdmin = config.allowFirstAdmin && (adminCount?.count ?? 0) === 0;
-    const role: AppRole = isConfiguredAdmin || isFirstAdmin ? "admin" : "pending";
+    const initialRole: AppRole = isConfiguredAdmin || isFirstAdmin ? "admin" : "pending";
     row = await d1.prepare(`INSERT INTO app_users
       (feishu_open_id, feishu_union_id, feishu_user_id, display_name, avatar_url, email, role)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -188,12 +197,32 @@ export async function createFeishuSession(info: FeishuUserInfo) {
         info.name ?? info.en_name ?? "飞书用户",
         info.avatar_url ?? info.avatar_thumb ?? "",
         info.enterprise_email ?? info.email ?? "",
-        role,
+        "pending",
       )
       .first<UserRow>();
+    if (row && initialRole === "admin") {
+      const requestId = crypto.randomUUID();
+      const [updateResult] = await d1.batch([
+        d1.prepare("UPDATE app_users SET role = 'admin' WHERE id = ? AND role = 'pending'").bind(row.id),
+        d1.prepare(`INSERT INTO app_user_role_events
+          (target_user_id, actor_user_id, request_id, from_role, to_role, detail)
+          SELECT ?, ?, ?, 'pending', 'admin', ? WHERE changes() > 0`)
+          .bind(
+            row.id,
+            row.id,
+            requestId,
+            isConfiguredAdmin ? "预绑定 Open ID 初始化管理员" : "受限可用范围内初始化首位管理员",
+          ),
+      ]);
+      if (!updateResult.meta.changes) throw new Error("管理员初始化状态已变化，请重新登录");
+      row = await d1.prepare(`SELECT id, feishu_open_id, display_name, avatar_url, email, role, student_id
+        FROM app_users WHERE id = ?`).bind(row.id).first<UserRow>();
+    }
   } else {
+    const configuredRole = mapUser(row).role;
     row = await d1.prepare(`UPDATE app_users SET
-      feishu_union_id = ?, feishu_user_id = ?, display_name = ?, avatar_url = ?, email = ?, last_login_at = CURRENT_TIMESTAMP
+      feishu_union_id = ?, feishu_user_id = ?, display_name = ?, avatar_url = ?, email = ?,
+      role = ?, last_login_at = CURRENT_TIMESTAMP
       WHERE id = ?
       RETURNING id, feishu_open_id, display_name, avatar_url, email, role, student_id`)
       .bind(
@@ -202,6 +231,7 @@ export async function createFeishuSession(info: FeishuUserInfo) {
         info.name ?? info.en_name ?? row.display_name,
         info.avatar_url ?? info.avatar_thumb ?? row.avatar_url,
         info.enterprise_email ?? info.email ?? row.email,
+        configuredRole,
         row.id,
       )
       .first<UserRow>();

@@ -4,6 +4,7 @@ import test from "node:test";
 import { roleCanViewStudent, scopeSql } from "../lib/access-policy.ts";
 
 test("student data access defaults to deny outside the explicit role scope", () => {
+  assert.equal(roleCanViewStudent({ role: "superadmin", studentId: null }, "student-a", []), true);
   assert.equal(roleCanViewStudent({ role: "admin", studentId: null }, "student-a", []), true);
   assert.equal(roleCanViewStudent({ role: "student", studentId: "student-a" }, "student-a", []), true);
   assert.equal(roleCanViewStudent({ role: "student", studentId: "student-a" }, "student-b", []), false);

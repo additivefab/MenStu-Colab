@@ -317,6 +317,9 @@ button.primary { border: 0; background: var(--blue); color: white; box-shadow: 0
 .mentor-assignment input { margin: 0; }
 .mentor-assignment small { color: #94a0af; font-size: 7px; }
 .account-message { padding: 10px 20px; color: #496477; background: #f5f8fb; border-top: 1px solid #e8edf2; font-size: 9px; }
+.account-bootstrap-note { margin: 12px 20px 0; padding: 12px 14px; display: flex; gap: 8px 16px; align-items: baseline; border: 1px solid #f0d991; border-radius: 10px; background: #fff9e8; color: #72520d; }
+.account-bootstrap-note b { font-size: 12px; white-space: nowrap; }
+.account-bootstrap-note span { font-size: 11px; line-height: 1.55; }
 .setting-link { display: inline-flex; min-height: 36px; align-items: center; border: 1px solid #dfe5ec; border-radius: 8px; padding: 0 12px; color: #315fae; background: white; text-decoration: none; font-size: 10px; font-weight: 700; }
 .reference-links { display: flex; flex-wrap: wrap; gap: 6px; }
 .reference-links a { min-height: 31px; padding: 0 9px; display: inline-flex; align-items: center; border: 1px solid #dfe5ec; border-radius: 7px; color: #315fae; background: white; text-decoration: none; font-size: 8px; font-weight: 800; }
@@ -622,6 +625,79 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-page-state p { margin: 0; color: #8b97a7; font-size: 11px; }
 .student-page-state a { color: #2e67bf; font-size: 11px; font-weight: 700; }
 
+.student-portal-shell { min-height: 100vh; padding: 28px max(24px, calc((100vw - 1180px) / 2)) 48px; color: #172033; background: radial-gradient(circle at 12% 0%, #e8f2ff 0, transparent 32%), #f6f8fb; }
+.student-portal-header { display: flex; align-items: center; justify-content: space-between; }
+.student-portal-header .brand { display: flex; align-items: center; gap: 11px; padding: 0; }
+.student-portal-header .brand strong, .student-portal-header .brand span { display: block; }
+.student-portal-header .brand strong { font-size: 17px; }
+.student-portal-header .brand span { color: #8190a4; font-size: 11px; }
+.student-account { display: flex; align-items: center; gap: 10px; }
+.student-account > div strong, .student-account > div small { display: block; }
+.student-account > div small { color: #8b97a8; font-size: 12px; }
+.student-account > button { min-height: 44px; padding: 0 14px; border: 1px solid #dbe3ed; border-radius: 10px; color: #65748a; background: #fff; }
+.student-portal-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; margin-top: 28px; padding: 38px 40px; border-radius: 24px; color: #fff; background: linear-gradient(135deg, #173767, #245fa9 58%, #3984d5); box-shadow: 0 18px 45px rgba(37, 78, 133, .18); }
+.student-portal-kicker { color: #acd4ff; font-size: 10px; font-weight: 800; letter-spacing: .16em; }
+.student-portal-hero h1 { margin: 9px 0 7px; font-size: clamp(25px, 3vw, 38px); letter-spacing: -.04em; }
+.student-portal-hero p { margin: 0; color: #d7e8fb; font-size: 13px; }
+.student-primary-actions { display: flex; gap: 10px; flex: 0 0 auto; }
+.student-primary-actions button { min-height: 46px; padding: 0 19px; border: 1px solid rgba(255,255,255,.45); border-radius: 12px; color: #fff; background: rgba(255,255,255,.08); font-weight: 750; }
+.student-primary-actions button.primary { color: #20538f; background: #fff; }
+.student-portal-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 18px 0; }
+.student-portal-summary article { padding: 19px 21px; border: 1px solid #e4eaf1; border-radius: 16px; background: rgba(255,255,255,.92); }
+.student-portal-summary span, .student-portal-summary strong, .student-portal-summary small { display: block; }
+.student-portal-summary span { color: #7e8b9e; font-size: 12px; font-weight: 750; }
+.student-portal-summary strong { margin: 6px 0 4px; font-size: 24px; }
+.student-portal-summary small { color: #8c98a8; font-size: 12px; }
+.student-portal-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr); gap: 18px; align-items: start; }
+.student-portal-panel { overflow: hidden; border: 1px solid #e1e8f0; border-radius: 19px; background: #fff; box-shadow: 0 10px 28px rgba(56, 78, 108, .07); }
+.student-portal-panel-head { display: flex; justify-content: space-between; padding: 23px 25px 18px; border-bottom: 1px solid #edf1f5; }
+.student-portal-panel-head span { color: #3971ba; font-size: 11px; font-weight: 800; letter-spacing: .13em; }
+.student-portal-panel-head h2 { margin: 5px 0 3px; font-size: 19px; }
+.student-portal-panel-head p { margin: 0; color: #8793a4; font-size: 13px; }
+.student-portal-panel-head > b { color: #2e6dbc; font-size: 20px; }
+.student-progress-feed-list { padding: 5px 24px 18px; }
+.student-progress-feed-list > article { padding: 18px 1px; border-bottom: 1px solid #edf1f5; }
+.student-progress-feed-list > article:last-child { border-bottom: 0; }
+.student-progress-feed-list > article > div:first-child { display: flex; align-items: center; justify-content: space-between; }
+.student-state, .meeting-state { display: inline-flex; padding: 4px 8px; border-radius: 99px; color: #6b7788; background: #eef2f6; font-size: 12px; font-weight: 800; }
+.student-state.accepted, .meeting-state.confirmed { color: #177451; background: #e8f7f0; }
+.student-state.changes_requested, .meeting-state.requested { color: #9a6213; background: #fff4d9; }
+.student-state.rejected, .meeting-state.declined, .meeting-state.cancelled { color: #9b4e57; background: #fbecef; }
+.student-progress-feed-list time { color: #98a3b1; font-size: 12px; }
+.student-progress-feed-list h3 { margin: 10px 0 1px; font-size: 15px; }
+.student-progress-feed-list > article > small { color: #3f76b9; font-size: 12px; font-weight: 750; }
+.student-progress-feed-list > article > p { margin: 8px 0 0; color: #56667b; font-size: 13px; line-height: 1.7; }
+.student-progress-feed-list blockquote { display: grid; gap: 4px; margin: 12px 0 0; padding: 11px 13px; border: 0; border-left: 3px solid #e1a636; border-radius: 0 9px 9px 0; color: #66553a; background: #fff9eb; font-size: 12px; }
+.student-progress-feed-list details { margin-top: 12px; }
+.student-progress-feed-list summary { color: #2f6dbd; font-size: 12px; font-weight: 750; cursor: pointer; }
+.student-progress-feed-list form, .student-meeting-form { display: grid; gap: 11px; margin-top: 12px; }
+.student-progress-feed-list label, .student-meeting-form label, .staff-meeting-actions label { display: grid; gap: 5px; color: #68778a; font-size: 12px; font-weight: 700; }
+.student-progress-feed-list input, .student-progress-feed-list textarea, .student-meeting-form input, .student-meeting-form select, .student-meeting-form textarea, .staff-meeting-actions input, .staff-meeting-actions textarea { width: 100%; min-height: 44px; padding: 10px 11px; border: 1px solid #d9e1ea; border-radius: 9px; color: #28384e; background: #fbfcfe; font-size: 14px; font-family: inherit; resize: vertical; }
+.student-progress-feed-list form button { justify-self: start; min-height: 40px; }
+.student-portal-empty { padding: 32px 10px; color: #8c98a8; font-size: 11px; text-align: center; }
+.student-meeting-form { margin: 0; padding: 19px 24px; border-bottom: 1px solid #edf1f5; }
+.student-meeting-form > div { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.student-meeting-form button { min-height: 44px; }
+.student-meeting-message { margin: 12px 24px 0; color: #9b4e57; font-size: 12px; }
+.student-meeting-history { padding: 19px 24px 23px; }
+.student-meeting-history > h3 { margin: 0 0 10px; font-size: 13px; }
+.student-meeting-history > article { display: grid; gap: 6px; padding: 13px 0; border-top: 1px solid #edf1f5; }
+.student-meeting-history > article > div { display: flex; align-items: center; justify-content: space-between; }
+.student-meeting-history time, .student-meeting-history small, .student-meeting-history > p { color: #8a96a6; font-size: 12px; }
+.student-meeting-history > article > strong { font-size: 13px; }
+.student-meeting-history > article > p { margin: 0; color: #68778a; font-size: 12px; }
+.student-meeting-history button { justify-self: start; min-height: 44px; padding: 0 13px; border: 1px solid #dce4ed; border-radius: 8px; color: #7a5660; background: #fff; font-size: 12px; }
+.student-portal-boundary { margin-top: 18px; color: #8390a1; font-size: 12px; text-align: center; }
+.staff-meeting-requests { margin-top: 18px; }
+.staff-meeting-list { padding: 0 23px 20px; }
+.staff-meeting-list > article { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, .7fr); gap: 20px; padding: 17px 0; border-top: 1px solid #edf1f5; }
+.staff-meeting-main { display: grid; align-content: start; justify-items: start; gap: 6px; }
+.staff-meeting-main strong { font-size: 12px; }
+.staff-meeting-main small, .staff-meeting-main p { margin: 0; color: #7d899a; font-size: 10px; line-height: 1.55; }
+.staff-meeting-actions { display: grid; gap: 8px; }
+.staff-meeting-actions > div { display: flex; justify-content: flex-end; gap: 8px; }
+.staff-meeting-actions button { min-height: 38px; }
+
 @media (max-width: 1100px) {
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
   .student-next-action { grid-template-columns: 1fr 1fr; }
@@ -639,6 +715,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-page-grid { grid-template-columns: 1fr; }
   .student-page-side { grid-template-columns: 1fr 1fr; }
   .student-page-side > section:first-child { grid-column: 1 / -1; }
+  .student-portal-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 780px) {
@@ -751,6 +828,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-milestones h3 { font-size: 14px; }
   .student-milestones p { font-size: 12px; }
   .student-milestones select { min-height: 44px; font-size: 12px; }
+  .student-portal-shell { padding: 18px 15px 36px; }
+  .student-portal-header { align-items: flex-start; }
+  .student-account > div { display: none; }
+  .student-portal-hero { align-items: stretch; flex-direction: column; margin-top: 18px; padding: 28px 22px; }
+  .student-primary-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .student-primary-actions button { min-height: 46px; }
+  .student-portal-summary { grid-template-columns: 1fr; }
+  .student-portal-panel-head { padding-inline: 18px; }
+  .student-progress-feed-list, .student-meeting-history { padding-inline: 18px; }
+  .student-meeting-form { padding-inline: 18px; }
+  .staff-meeting-list { padding-inline: 15px; }
+  .staff-meeting-list > article { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 480px) {
@@ -770,4 +859,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .mentor-assignment > div { grid-template-columns: 1fr; }
   .modal { padding: 23px 18px; }
   .modal-layer { padding: 10px; }
+  .student-primary-actions { grid-template-columns: 1fr; }
+  .student-meeting-form > div { grid-template-columns: 1fr; }
 }

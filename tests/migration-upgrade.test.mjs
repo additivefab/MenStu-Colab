@@ -3,15 +3,15 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-test("0006 upgrades the real legacy schema without losing review or Feishu provenance", async () => {
+test("0009 upgrades the real legacy schema and remains idempotent after runtime table creation", async () => {
   const migrationDirectory = new URL("../drizzle/", import.meta.url);
   const names = (await readdir(migrationDirectory))
-    .filter((name) => /^000[0-6]_.*\.sql$/.test(name))
+    .filter((name) => /^000[0-9]_.*\.sql$/.test(name))
     .sort();
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
 
-  for (const name of names.filter((item) => !item.startsWith("0006_"))) {
+  for (const name of names.filter((item) => !item.startsWith("0006_") && !item.startsWith("0007_") && !item.startsWith("0008_") && !item.startsWith("0009_"))) {
     database.exec(await readFile(new URL(name, migrationDirectory), "utf8"));
   }
   database.exec(`
@@ -27,7 +27,14 @@ test("0006 upgrades the real legacy schema without losing review or Feishu prove
       VALUES (1, 'student-upgrade', 1);
   `);
 
-  database.exec(await readFile(new URL(names.find((item) => item.startsWith("0006_")), migrationDirectory), "utf8"));
+  const businessMigration = await readFile(new URL(names.find((item) => item.startsWith("0006_")), migrationDirectory), "utf8");
+  const roleMigration = await readFile(new URL(names.find((item) => item.startsWith("0007_")), migrationDirectory), "utf8");
+  const roleIndexMigration = await readFile(new URL(names.find((item) => item.startsWith("0008_")), migrationDirectory), "utf8");
+  const meetingMigration = await readFile(new URL(names.find((item) => item.startsWith("0009_")), migrationDirectory), "utf8");
+  database.exec(businessMigration);
+  database.exec(roleMigration);
+  database.exec(roleIndexMigration);
+  database.exec(meetingMigration);
   const progress = database.prepare(`SELECT status, review_status, assessment, updated_at
     FROM progress_entries WHERE student_id = ?`).get("student-upgrade");
   assert.equal(progress.status, "substantive");
@@ -42,6 +49,16 @@ test("0006 upgrades the real legacy schema without losing review or Feishu prove
   assert.equal(source.source_ref, "");
   assert.equal(source.source_import_id, 1);
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM progress_audit_events").get().count, 1);
+  database.exec(`
+    INSERT INTO app_users (id, feishu_open_id, display_name, role)
+      VALUES (9001, 'open-admin', '现有管理员', 'admin'), (9002, 'open-superadmin', '超级管理员', 'superadmin');
+    INSERT INTO app_user_role_events (target_user_id, actor_user_id, request_id, from_role, to_role, detail)
+      VALUES (9002, 9001, 'migration-test', 'pending', 'superadmin', '迁移测试');
+  `);
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM app_user_role_events").get().count, 1);
+  database.exec(roleMigration);
+  database.exec(roleIndexMigration);
+  database.exec(meetingMigration);
   assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
   database.close();
 });

@@ -36,6 +36,7 @@ type ProgressRow = {
   reviewer_note: string;
   reviewer_name: string | null;
   reviewed_by_user_id: number | null;
+  submitted_by_user_id: number | null;
   submitted_at: string;
   reviewed_at: string | null;
 };
@@ -76,7 +77,7 @@ type WorkflowTask = {
 
 export async function GET(request: Request) {
   try {
-    const auth = await requireAppUser(request, ["admin", "mentor", "student"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin", "mentor", "student"]);
     if ("response" in auth) return auth.response;
     const viewer = auth.user;
     if (viewer.role === "student" && !viewer.studentId) {
@@ -116,7 +117,8 @@ export async function GET(request: Request) {
       const placeholders = studentIds.map(() => "?").join(",");
       const progress = await d1.prepare(`SELECT p.id, p.student_id, p.kind, p.title, p.summary, p.evidence,
         p.literature_ref, p.git_url, p.status, p.review_status, p.assessment,
-        p.reviewer_note, p.reviewed_by_user_id, reviewer.display_name AS reviewer_name, p.submitted_at, p.reviewed_at
+        p.reviewer_note, p.reviewed_by_user_id, p.submitted_by_user_id,
+        reviewer.display_name AS reviewer_name, p.submitted_at, p.reviewed_at
         FROM progress_entries p
         LEFT JOIN app_users reviewer ON reviewer.id = p.reviewed_by_user_id
         WHERE p.student_id IN (${placeholders})
@@ -162,7 +164,8 @@ export async function GET(request: Request) {
       .map((entry) => ({
         ...entry,
         display_name: nameById.get(entry.student_id) ?? entry.student_id,
-        can_finalize: viewer.role === "mentor" && (
+        can_finalize: entry.submitted_by_user_id !== viewer.id
+          && (viewer.role === "superadmin" || viewer.role === "mentor") && (
           entry.review_status === "submitted" || entry.reviewed_by_user_id === viewer.id
         ),
       }));
@@ -185,6 +188,52 @@ export async function GET(request: Request) {
       risk: riskFromDate(row.last_substantive_at ?? row.tracking_started_at),
       progress: mappedProgress.filter((entry) => entry.student_id === row.id),
     }));
+
+    if (viewer.role === "student") {
+      return Response.json({
+        viewer: {
+          id: viewer.id,
+          name: viewer.displayName,
+          avatarUrl: viewer.avatarUrl,
+          role: viewer.role,
+          studentId: viewer.studentId,
+        },
+        students: students.map((student) => ({
+          id: student.id,
+          name: student.name,
+          degree: student.degree,
+          gradeYear: student.gradeYear,
+          stage: student.stage,
+          cadenceDays: student.cadenceDays,
+          currentFocus: student.currentFocus,
+          progress: student.progress.map((entry) => ({
+            id: entry.id,
+            kind: entry.kind,
+            title: entry.title,
+            summary: entry.summary,
+            evidence: entry.evidence,
+            literature_ref: entry.literature_ref,
+            git_url: entry.git_url,
+            review_status: entry.review_status,
+            reviewer_note: entry.reviewer_note,
+            submitted_at: entry.submitted_at,
+          })),
+        })),
+        pending: [],
+        workflowTasks: [],
+        metrics: {
+          total: 1,
+          doctors: 0,
+          masters: 0,
+          pending: 0,
+          proposalPending: 0,
+          blocked: 0,
+          outputs: 0,
+          attention: 0,
+          riskCounts: {},
+        },
+      });
+    }
 
     const workflowTasks: WorkflowTask[] = [];
     if (studentIds.length) {
@@ -235,6 +284,7 @@ export async function GET(request: Request) {
 
     return Response.json({
       viewer: {
+        id: viewer.id,
         name: viewer.displayName,
         avatarUrl: viewer.avatarUrl,
         role: viewer.role,

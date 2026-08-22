@@ -123,6 +123,34 @@ export async function ensureDatabase() {
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS app_user_role_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      target_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      actor_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      request_id TEXT NOT NULL UNIQUE,
+      from_role TEXT NOT NULL,
+      to_role TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS meeting_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id TEXT NOT NULL REFERENCES students(id),
+      requested_by_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      preferred_date TEXT NOT NULL,
+      preferred_time TEXT NOT NULL,
+      duration_minutes INTEGER NOT NULL CHECK (duration_minutes IN (15, 30, 45, 60)),
+      topic TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'requested'
+        CHECK (status IN ('requested', 'confirmed', 'declined', 'cancelled')),
+      handled_by_user_id INTEGER REFERENCES app_users(id),
+      response_note TEXT NOT NULL DEFAULT '',
+      handled_at TEXT,
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS progress_audit_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       progress_entry_id INTEGER NOT NULL REFERENCES progress_entries(id),
@@ -255,6 +283,11 @@ export async function ensureDatabase() {
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_mentor_student_unique ON mentor_student_assignments(mentor_user_id, student_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_mentor_active_students ON mentor_student_assignments(mentor_user_id, active, student_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_active_mentors ON mentor_student_assignments(student_id, active, mentor_user_id)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_user_role_events_target ON app_user_role_events(target_user_id, created_at)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_user_role_events_actor ON app_user_role_events(actor_user_id, created_at)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_requests_student_created ON meeting_requests(student_id, created_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_requests_requester_created ON meeting_requests(requested_by_user_id, created_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_requests_status_schedule ON meeting_requests(status, preferred_date, preferred_time)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_audit_entry_created ON progress_audit_events(progress_entry_id, created_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_research_proposals_student_unique ON research_proposals(student_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_proposals_status_updated ON research_proposals(status, updated_at DESC)"),
@@ -272,6 +305,12 @@ export async function ensureDatabase() {
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_feishu_summary_link_student ON feishu_meeting_summary_links(student_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_evidence_entry ON progress_evidence_sources(progress_entry_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_evidence_import ON progress_evidence_sources(source_import_id)"),
+  ]);
+
+  await ensureColumn("app_user_role_events", "request_id", "TEXT");
+  await d1.batch([
+    d1.prepare("UPDATE app_user_role_events SET request_id = 'legacy-' || id WHERE request_id IS NULL OR request_id = ''"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_role_events_request ON app_user_role_events(request_id)"),
   ]);
 
   await ensureColumn("progress_entries", "review_status", "TEXT NOT NULL DEFAULT 'submitted'");

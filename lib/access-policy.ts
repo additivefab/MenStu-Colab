@@ -9,7 +9,7 @@ type ScopedUser = {
 };
 
 export function roleCanViewStudent(user: ScopedUser, studentId: string, assignedStudentIds: string[]) {
-  if (user.role === "admin") return true;
+  if (user.role === "superadmin" || user.role === "admin") return true;
   if (user.role === "student") return Boolean(user.studentId && user.studentId === studentId);
   if (user.role === "mentor") return assignedStudentIds.includes(studentId);
   return false;

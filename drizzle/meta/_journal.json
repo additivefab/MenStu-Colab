@@ -50,6 +50,27 @@
       "when": 1787391166591,
       "tag": "0006_boring_nehzno",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1787394332560,
+      "tag": "0007_magical_hobgoblin",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1787394673215,
+      "tag": "0008_dear_steve_rogers",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1787395967474,
+      "tag": "0009_high_black_widow",
+      "breakpoints": true
     }
   ]
 }

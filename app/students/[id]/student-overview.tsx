@@ -7,7 +7,7 @@ type ProgressStatus = "pending" | "substantive" | "supporting" | "supplement" | 
 type ReviewStatus = "submitted" | "in_review" | "accepted" | "changes_requested" | "rejected";
 type ProposalStatus = "draft" | "submitted" | "changes_requested" | "approved";
 type MilestoneStatus = "pending" | "in_progress" | "completed" | "blocked";
-type ViewerRole = "admin" | "mentor" | "student";
+type ViewerRole = "superadmin" | "admin" | "mentor" | "student";
 
 type StudentProgress = {
   id: number;
@@ -201,15 +201,20 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
-    await Promise.all([
-      fetch("/api/dashboard", { cache: "no-store" }),
-      fetch("/api/proposals", { cache: "no-store" }),
-      fetch(`/api/research-outputs?studentId=${encodeURIComponent(studentId)}`, { cache: "no-store" }),
-    ]).then(async ([dashboardResponse, proposalResponse, outputResponse]) => {
+    try {
+      const dashboardResponse = await fetch("/api/dashboard", { cache: "no-store" });
       const dashboard = (await dashboardResponse.json()) as { viewer?: { role: ViewerRole }; students?: Student[]; error?: string };
+      if (!dashboardResponse.ok) throw new Error(dashboard.error || "学生信息读取失败");
+      if (dashboard.viewer?.role === "student") {
+        window.location.replace("/");
+        return;
+      }
+      const [proposalResponse, outputResponse] = await Promise.all([
+        fetch("/api/proposals", { cache: "no-store" }),
+        fetch(`/api/research-outputs?studentId=${encodeURIComponent(studentId)}`, { cache: "no-store" }),
+      ]);
       const proposals = (await proposalResponse.json()) as { proposals?: Proposal[]; error?: string };
       const outputPayload = (await outputResponse.json()) as { outputs?: ResearchOutput[]; error?: string };
-      if (!dashboardResponse.ok) throw new Error(dashboard.error || "学生信息读取失败");
       if (!proposalResponse.ok) throw new Error(proposals.error || "研究方案读取失败");
       if (!outputResponse.ok) throw new Error(outputPayload.error || "科研成果读取失败");
       const matched = dashboard.students?.find((item) => item.id === studentId) ?? null;
@@ -218,11 +223,11 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       setViewerRole(dashboard.viewer?.role ?? null);
       setProposal(proposals.proposals?.find((item) => item.student_id === studentId) ?? null);
       setOutputs(outputPayload.outputs ?? []);
-    }).catch((loadError) => {
+    } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "学生信息读取失败");
-    }).finally(() => {
+    } finally {
       setLoading(false);
-    });
+    }
   }, [studentId]);
 
   useEffect(() => {
@@ -440,8 +445,8 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     </section>
 
     <section className="student-page-panel student-output-panel" id="outputs">
-      <div className="student-section-head"><div><span>RESEARCH OUTPUTS</span><h2>科研成果与资产</h2><p>成果有独立生命周期，不再混入日常进展；每次变更都保留审计记录。</p></div>{viewerRole !== "mentor" ? <button className="student-output-add" type="button" onClick={() => setOutputOpen((current) => !current)}>{outputOpen ? "收起" : "＋ 登记成果"}</button> : <em>{outputs.length}</em>}</div>
-      {outputOpen && viewerRole !== "mentor" ? <form className="student-output-form" onSubmit={createOutput}>
+      <div className="student-section-head"><div><span>RESEARCH OUTPUTS</span><h2>科研成果与资产</h2><p>成果有独立生命周期，不再混入日常进展；每次变更都保留审计记录。</p></div>{viewerRole === "admin" ? <button className="student-output-add" type="button" onClick={() => setOutputOpen((current) => !current)}>{outputOpen ? "收起" : "＋ 登记成果"}</button> : <em>{outputs.length}</em>}</div>
+      {outputOpen && viewerRole === "admin" ? <form className="student-output-form" onSubmit={createOutput}>
         <label>成果类型<select name="outputType" required defaultValue="paper">{Object.entries(outputTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label>当前阶段<select name="lifecycleStatus" required defaultValue="planned">{Object.entries(outputLifecycleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label className="wide">成果名称<input name="title" required maxLength={300} placeholder="论文、数据集、软件、专利或报告名称" /></label>
@@ -454,7 +459,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       </form> : null}
       {outputMessage ? <p className="student-output-message" role="status">{outputMessage}</p> : null}
       <div className="student-output-grid">{outputs.map((output) => <article key={output.id}>
-        <div><span>{outputTypeLabels[output.output_type]}</span>{viewerRole !== "mentor" ? <select aria-label={`${output.title}成果阶段`} value={output.lifecycle_status} disabled={outputUpdateBusy === output.id} onChange={(event) => void updateOutputLifecycle(output, event.target.value as ResearchOutput["lifecycle_status"])}>{Object.entries(outputLifecycleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : <em className={output.lifecycle_status}>{outputLifecycleLabels[output.lifecycle_status]}</em>}</div>
+        <div><span>{outputTypeLabels[output.output_type]}</span>{viewerRole === "admin" ? <select aria-label={`${output.title}成果阶段`} value={output.lifecycle_status} disabled={outputUpdateBusy === output.id} onChange={(event) => void updateOutputLifecycle(output, event.target.value as ResearchOutput["lifecycle_status"])}>{Object.entries(outputLifecycleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : <em className={output.lifecycle_status}>{outputLifecycleLabels[output.lifecycle_status]}</em>}</div>
         <h3>{output.title}</h3>
         <p>{output.summary || "尚未填写成果说明"}</p>
         <dl>{output.venue ? <div><dt>发布位置</dt><dd>{output.venue}</dd></div> : null}{output.identifier ? <div><dt>标识符</dt><dd>{output.identifier}</dd></div> : null}{output.milestone_title ? <div><dt>关联节点</dt><dd>{output.milestone_title}</dd></div> : null}</dl>
@@ -468,10 +473,10 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         <div className="student-section-head"><div><span>EVIDENCE & REVIEW</span><h2>个人进展与证据链</h2><p>飞书智能纪要和学生主动提交均归入这里；来源、审核和评价分开记录。</p></div><em>{student.progress.length}</em></div>
         <div className="student-progress-timeline">{student.progress.map((entry) => <article key={entry.id}>
           <div className="student-timeline-marker"><i /><span>{dateText(entry.submitted_at)}</span></div>
-          <div className="student-timeline-card"><div><span className={`status-pill review-${entry.review_status}`}>{reviewLabels[entry.review_status]}</span><small>{entry.kind} · #{entry.id}</small></div><h3>{entry.title}</h3><p>{entry.summary}</p><dl><div><dt>核验证据</dt><dd>{entry.evidence || "尚未填写"}</dd></div>{entry.assessment ? <div><dt>导师判断</dt><dd>{entry.assessment === "substantive" ? "实质性进展" : "支持性工作"}{entry.reviewer_name ? ` · ${entry.reviewer_name}` : ""}</dd></div> : null}{entry.reviewer_note ? <div><dt>导师意见</dt><dd>{entry.reviewer_note}</dd></div> : null}</dl>
+          <div className="student-timeline-card"><div><span className={`status-pill review-${entry.review_status}`}>{reviewLabels[entry.review_status]}</span><small>{entry.kind} · #{entry.id}</small></div><h3>{entry.title}</h3><p>{entry.summary}</p><dl><div><dt>核验证据</dt><dd>{entry.evidence || "尚未填写"}</dd></div>{entry.assessment ? <div><dt>审核判断</dt><dd>{entry.assessment === "substantive" ? "实质性进展" : "支持性工作"}{entry.reviewer_name ? ` · ${entry.reviewer_name}` : ""}</dd></div> : null}{entry.reviewer_note ? <div><dt>审核意见</dt><dd>{entry.reviewer_note}</dd></div> : null}</dl>
             <div className="student-evidence-sources" aria-label="证据来源">{entry.evidence_sources.map((source) => <span key={source.id}><b>{source.label}</b>{source.source_ref ? source.source_type === "git" || source.source_type === "url" ? <a href={source.source_ref} target="_blank" rel="noreferrer">打开 ↗</a> : <small>{source.source_ref}</small> : null}{source.content_sha256 ? <em>指纹 {source.content_sha256}</em> : null}</span>)}{!entry.evidence_sources.length ? <span><b>历史文本证据</b><small>补证时将建立结构化来源</small></span> : null}</div>
             {entry.audit.length ? <details className="student-progress-audit"><summary>查看审核轨迹（{entry.audit.length}）</summary>{entry.audit.map((event) => <div key={event.id}><i /><span><strong>{event.actor_name || (event.actor_type === "system" ? "系统" : "未知人员")} · {reviewLabels[event.to_status as ReviewStatus] || event.action}</strong><small>{dateText(event.created_at)}{event.note ? ` · ${event.note}` : ""}</small></span></div>)}</details> : null}
-            {entry.review_status === "changes_requested" && viewerRole !== "mentor" ? <details className="student-resubmit"><summary>补充证据并重新提交</summary><form onSubmit={(event) => void resubmitProgress(event, entry)}><label>更新后的结论<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label><label>补充核验证据<textarea name="evidence" rows={3} required defaultValue={entry.evidence} /></label>{entry.kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required defaultValue={entry.literature_ref} /></label> : <input type="hidden" name="literatureRef" value={entry.literature_ref || ""} />}<label>Git 链接（可选）<input name="gitUrl" type="url" defaultValue={entry.git_url} placeholder="仅支持 https://" /></label>{progressMessage[entry.id] ? <p role="status">{progressMessage[entry.id]}</p> : null}<button className="primary" disabled={progressBusy === entry.id}>{progressBusy === entry.id ? "提交中…" : "保留原记录并重新提交"}</button></form></details> : null}
+            {entry.review_status === "changes_requested" && (viewerRole === "admin" || viewerRole === "student") ? <details className="student-resubmit"><summary>补充证据并重新提交</summary><form onSubmit={(event) => void resubmitProgress(event, entry)}><label>更新后的结论<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label><label>补充核验证据<textarea name="evidence" rows={3} required defaultValue={entry.evidence} /></label>{entry.kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required defaultValue={entry.literature_ref} /></label> : <input type="hidden" name="literatureRef" value={entry.literature_ref || ""} />}<label>Git 链接（可选）<input name="gitUrl" type="url" defaultValue={entry.git_url} placeholder="仅支持 https://" /></label>{progressMessage[entry.id] ? <p role="status">{progressMessage[entry.id]}</p> : null}<button className="primary" disabled={progressBusy === entry.id}>{progressBusy === entry.id ? "提交中…" : "保留原记录并重新提交"}</button></form></details> : null}
           </div>
         </article>)}{!student.progress.length ? <div className="student-empty">尚无个人进展记录</div> : null}</div>
       </section>
@@ -484,7 +489,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
 
         <section className="student-page-panel" id="milestones">
           <div className="student-section-head"><div><span>MILESTONES</span><h2>培养节点</h2><p>方案确认后的执行路线。</p></div></div>
-          <div className="student-milestones">{proposal?.milestones.map((milestone, index) => <article key={milestone.id} className={milestone.status}><i>{index + 1}</i><div><span>{milestoneLabels[milestone.status]}</span><h3>{milestone.title}</h3><p>{milestone.evidence_target || "尚未填写验收证据"}</p><small>目标：{milestone.target_date || "待确定"}</small>{proposal.status === "approved" ? <select aria-label={`${milestone.title}状态`} value={milestone.status} disabled={milestoneBusy === milestone.id} onChange={(event) => void updateMilestone(milestone.id, event.target.value as MilestoneStatus)}>{Object.entries(milestoneLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : null}</div></article>)}{!proposal?.milestones.length ? <div className="student-empty">尚无培养节点</div> : null}</div>
+          <div className="student-milestones">{proposal?.milestones.map((milestone, index) => <article key={milestone.id} className={milestone.status}><i>{index + 1}</i><div><span>{milestoneLabels[milestone.status]}</span><h3>{milestone.title}</h3><p>{milestone.evidence_target || "尚未填写验收证据"}</p><small>目标：{milestone.target_date || "待确定"}</small>{proposal.status === "approved" && viewerRole !== "student" ? <select aria-label={`${milestone.title}状态`} value={milestone.status} disabled={milestoneBusy === milestone.id} onChange={(event) => void updateMilestone(milestone.id, event.target.value as MilestoneStatus)}>{Object.entries(milestoneLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : null}</div></article>)}{!proposal?.milestones.length ? <div className="student-empty">尚无培养节点</div> : null}</div>
           {milestoneMessage ? <p className="student-output-message" role="status">{milestoneMessage}</p> : null}
         </section>
 

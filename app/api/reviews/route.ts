@@ -10,12 +10,13 @@ type EntryRow = {
   student_id: string;
   review_status: ReviewStatus;
   reviewed_by_user_id: number | null;
+  submitted_by_user_id: number | null;
 };
 
 export async function POST(request: Request) {
   try {
     if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
-    const auth = await requireAppUser(request, ["mentor"]);
+    const auth = await requireAppUser(request, ["superadmin", "mentor"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = (await request.json()) as Record<string, unknown>;
@@ -31,11 +32,14 @@ export async function POST(request: Request) {
     }
 
     const d1 = getD1();
-    const entry = await d1.prepare(`SELECT id, student_id, review_status, reviewed_by_user_id
+    const entry = await d1.prepare(`SELECT id, student_id, review_status, reviewed_by_user_id, submitted_by_user_id
       FROM progress_entries WHERE id = ?`).bind(id).first<EntryRow>();
     if (!entry) return Response.json({ error: "记录不存在" }, { status: 404 });
     if (!(await canReviewStudent(auth.user, entry.student_id))) {
-      return Response.json({ error: "当前导师未被分配审核该学生" }, { status: 403 });
+      return Response.json({ error: "当前账号无权审核该学生" }, { status: 403 });
+    }
+    if (entry.submitted_by_user_id === auth.user.id) {
+      return Response.json({ error: "不能审核由自己提交或代录的进展" }, { status: 403 });
     }
 
     if (action === "start_review") {

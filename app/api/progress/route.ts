@@ -77,10 +77,13 @@ export async function POST(request: Request) {
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = (await request.json()) as Record<string, unknown>;
-    const values = progressInput(body);
-    if (auth.user.role === "student" && auth.user.studentId !== values.studentId) {
-      return Response.json({ error: "学生账号只能提交自己的进展" }, { status: 403 });
+    if (auth.user.role === "student" && !auth.user.studentId) {
+      return Response.json({ error: "学生账号尚未绑定学生记录" }, { status: 403 });
     }
+    const values = progressInput({
+      ...body,
+      studentId: auth.user.role === "student" ? auth.user.studentId : body.studentId,
+    });
 
     const d1 = getD1();
     const student = await d1.prepare("SELECT id FROM students WHERE id = ? AND active = 1")
@@ -153,10 +156,10 @@ export async function PATCH(request: Request) {
       d1.prepare(`UPDATE progress_entries SET
         kind = ?, title = ?, summary = ?, evidence = ?, literature_ref = ?, git_url = ?,
         status = 'pending', review_status = 'submitted', assessment = NULL,
-        reviewer_note = '', reviewed_by_user_id = NULL, reviewed_at = NULL,
+        reviewer_note = '', submitted_by_user_id = ?, reviewed_by_user_id = NULL, reviewed_at = NULL,
         updated_at = CURRENT_TIMESTAMP
         WHERE id = ? AND review_status = 'changes_requested'`)
-        .bind(values.kind, values.title, values.summary, values.evidence, values.literatureRef, values.gitUrl, id),
+        .bind(values.kind, values.title, values.summary, values.evidence, values.literatureRef, values.gitUrl, auth.user.id, id),
       ...(await evidenceStatements(id, auth.user.id, values, true)),
       d1.prepare(`INSERT INTO progress_audit_events
         (progress_entry_id, actor_user_id, actor_type, action, from_status, to_status, note)

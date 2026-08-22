@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     if (!assertSameOrigin(request)) {
       return Response.json({ error: "请求来源无效" }, { status: 403 });
     }
-    const auth = await requireAppUser(request, ["admin", "mentor"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin", "mentor"]);
     if ("response" in auth) return auth.response;
     const body = (await request.json()) as { studentId?: string };
     const studentId = body.studentId?.trim() ?? "";
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
 
     await ensureDatabase();
     if (!(await canViewStudent(auth.user, studentId))) {
-      return Response.json({ error: "当前导师未负责该学生" }, { status: 403 });
+      return Response.json({ error: "当前账号无权访问该学生" }, { status: 403 });
     }
     const recipient = await getD1().prepare(`SELECT
       u.feishu_open_id, s.display_name, s.cadence_days, s.stage

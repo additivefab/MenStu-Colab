@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const students = sqliteTable("students", {
   id: text("id").primaryKey(),
@@ -64,7 +64,7 @@ export const appUsers = sqliteTable(
     displayName: text("display_name").notNull(),
     avatarUrl: text("avatar_url").notNull().default(""),
     email: text("email").notNull().default(""),
-    role: text("role", { enum: ["admin", "mentor", "student", "pending"] })
+    role: text("role", { enum: ["superadmin", "admin", "mentor", "student", "pending"] })
       .notNull()
       .default("pending"),
     studentId: text("student_id").references(() => students.id),
@@ -100,6 +100,79 @@ export const mentorStudentAssignments = sqliteTable(
     uniqueIndex("idx_mentor_student_unique").on(table.mentorUserId, table.studentId),
     index("idx_mentor_active_students").on(table.mentorUserId, table.active, table.studentId),
     index("idx_student_active_mentors").on(table.studentId, table.active, table.mentorUserId),
+  ],
+);
+
+export const appUserRoleEvents = sqliteTable(
+  "app_user_role_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    targetUserId: integer("target_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    actorUserId: integer("actor_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    requestId: text("request_id").notNull(),
+    fromRole: text("from_role").notNull(),
+    toRole: text("to_role").notNull(),
+    detail: text("detail").notNull().default(""),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_app_user_role_events_request").on(table.requestId),
+    index("idx_app_user_role_events_target").on(table.targetUserId, table.createdAt),
+    index("idx_app_user_role_events_actor").on(table.actorUserId, table.createdAt),
+  ],
+);
+
+export const meetingRequests = sqliteTable(
+  "meeting_requests",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    studentId: text("student_id")
+      .notNull()
+      .references(() => students.id),
+    requestedByUserId: integer("requested_by_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    preferredDate: text("preferred_date").notNull(),
+    preferredTime: text("preferred_time").notNull(),
+    durationMinutes: integer("duration_minutes").notNull(),
+    topic: text("topic").notNull(),
+    note: text("note").notNull().default(""),
+    status: text("status", {
+      enum: ["requested", "confirmed", "declined", "cancelled"],
+    })
+      .notNull()
+      .default("requested"),
+    handledByUserId: integer("handled_by_user_id").references(() => appUsers.id),
+    responseNote: text("response_note").notNull().default(""),
+    handledAt: text("handled_at"),
+    version: integer("version").notNull().default(1),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    check(
+      "meeting_requests_duration_check",
+      sql`${table.durationMinutes} IN (15, 30, 45, 60)`,
+    ),
+    check(
+      "meeting_requests_status_check",
+      sql`${table.status} IN ('requested', 'confirmed', 'declined', 'cancelled')`,
+    ),
+    check("meeting_requests_version_check", sql`${table.version} >= 1`),
+    index("idx_meeting_requests_student_created").on(table.studentId, table.createdAt),
+    index("idx_meeting_requests_requester_created").on(
+      table.requestedByUserId,
+      table.createdAt,
+    ),
+    index("idx_meeting_requests_status_schedule").on(
+      table.status,
+      table.preferredDate,
+      table.preferredTime,
+    ),
   ],
 );
 

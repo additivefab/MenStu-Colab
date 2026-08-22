@@ -62,7 +62,7 @@ async function readOutputs(studentId: string) {
 
 export async function GET(request: Request) {
   try {
-    const auth = await requireAppUser(request, ["admin", "mentor", "student"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin", "mentor"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const studentId = new URL(request.url).searchParams.get("studentId")?.trim() ?? "";
@@ -79,7 +79,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
-    const auth = await requireAppUser(request, ["admin", "student"]);
+    const auth = await requireAppUser(request, ["admin"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const values = outputInput(await request.json() as Record<string, unknown>);
@@ -127,7 +127,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
-    const auth = await requireAppUser(request, ["admin", "student"]);
+    const auth = await requireAppUser(request, ["admin"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = await request.json() as Record<string, unknown>;

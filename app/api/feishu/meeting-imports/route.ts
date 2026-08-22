@@ -38,7 +38,7 @@ function importSourceType(value: string) {
 
 export async function GET(request: Request) {
   try {
-    const auth = await requireAppUser(request, ["admin"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const d1 = getD1();
@@ -74,7 +74,7 @@ export async function PATCH(request: Request) {
   let createdProgressId: number | null = null;
   try {
     if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
-    const auth = await requireAppUser(request, ["admin"]);
+    const auth = await requireAppUser(request, ["superadmin", "admin"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = (await request.json()) as Record<string, unknown>;
@@ -111,9 +111,9 @@ export async function PATCH(request: Request) {
     if (existing) return Response.json({ error: "该总结已经关联过这名学生" }, { status: 409 });
 
     const progress = await d1.prepare(`INSERT INTO progress_entries
-      (student_id, kind, title, summary, evidence, status, review_status, updated_at)
-      VALUES (?, '组会', ?, ?, ?, 'pending', 'submitted', CURRENT_TIMESTAMP) RETURNING id`)
-      .bind(studentId, title, source.extracted_text, "飞书 AI 会议总结 · 人工确认归属")
+      (student_id, kind, title, summary, evidence, status, review_status, submitted_by_user_id, updated_at)
+      VALUES (?, '组会', ?, ?, ?, 'pending', 'submitted', ?, CURRENT_TIMESTAMP) RETURNING id`)
+      .bind(studentId, title, source.extracted_text, "飞书 AI 会议总结 · 人工确认归属", auth.user.id)
       .first<{ id: number }>();
     if (!progress?.id) throw new Error("无法建立进展草稿");
     createdProgressId = progress.id;
