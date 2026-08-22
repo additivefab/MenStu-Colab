@@ -3,7 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-test("0010 merges the formal roles with rollback-safe scoped-admin storage and remains idempotent", async () => {
+test("0010 upgrades roles before 0011 adds safe, constrained student identity bindings", async () => {
   const migrationDirectory = new URL("../drizzle/", import.meta.url);
   const names = (await readdir(migrationDirectory))
     .filter((name) => /^\d{4}_.*\.sql$/.test(name))
@@ -11,7 +11,7 @@ test("0010 merges the formal roles with rollback-safe scoped-admin storage and r
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
 
-  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_"].some((prefix) => item.startsWith(prefix)))) {
+  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_"].some((prefix) => item.startsWith(prefix)))) {
     database.exec(await readFile(new URL(name, migrationDirectory), "utf8"));
   }
   database.exec(`
@@ -32,6 +32,7 @@ test("0010 merges the formal roles with rollback-safe scoped-admin storage and r
   const roleIndexMigration = await readFile(new URL(names.find((item) => item.startsWith("0008_")), migrationDirectory), "utf8");
   const meetingMigration = await readFile(new URL(names.find((item) => item.startsWith("0009_")), migrationDirectory), "utf8");
   const roleMergeMigration = await readFile(new URL(names.find((item) => item.startsWith("0010_")), migrationDirectory), "utf8");
+  const identityBindingMigration = await readFile(new URL(names.find((item) => item.startsWith("0011_")), migrationDirectory), "utf8");
   database.exec(businessMigration);
   database.exec(roleMigration);
   database.exec(roleIndexMigration);
@@ -83,6 +84,85 @@ test("0010 merges the formal roles with rollback-safe scoped-admin storage and r
   database.exec(meetingMigration);
   database.exec(roleMergeMigration);
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM app_users WHERE role = 'admin'").get().count, 0);
+  assert.equal(database.prepare(`SELECT COUNT(*) AS count FROM sqlite_master
+    WHERE type = 'table' AND name IN (
+      'student_identity_binding_batches',
+      'student_feishu_identity_bindings'
+    )`).get().count, 0);
+
+  database.exec(identityBindingMigration);
+  assert.deepEqual(
+    database.prepare(`SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name IN (
+        'student_identity_binding_batches',
+        'student_feishu_identity_bindings'
+      ) ORDER BY name`).all().map((row) => row.name),
+    ["student_feishu_identity_bindings", "student_identity_binding_batches"],
+  );
+
+  const batchColumns = database.prepare("PRAGMA table_info('student_identity_binding_batches')")
+    .all().map((column) => column.name);
+  assert.deepEqual(batchColumns, [
+    "id",
+    "actor_user_id",
+    "request_id",
+    "record_count",
+    "detail",
+    "created_at",
+  ]);
+  const bindingColumns = database.prepare("PRAGMA table_info('student_feishu_identity_bindings')")
+    .all().map((column) => column.name);
+  assert.deepEqual(bindingColumns, [
+    "student_id",
+    "feishu_open_id",
+    "batch_id",
+    "verified_by_user_id",
+    "verification_method",
+    "contact_kind",
+    "active",
+    "created_at",
+  ]);
+  const forbiddenContactColumns = /^(?:contact_value|email|mobile|phone|telephone)$/i;
+  assert.deepEqual(
+    [...batchColumns, ...bindingColumns].filter((column) => forbiddenContactColumns.test(column)),
+    [],
+  );
+
+  assert.throws(
+    () => database.exec(`INSERT INTO student_identity_binding_batches
+      (actor_user_id, request_id, record_count, detail)
+      VALUES (9002, 'invalid-record-count', 25, 'must be rejected')`),
+    /CHECK constraint failed: student_identity_binding_batches_record_count/,
+  );
+  database.exec(`INSERT INTO student_identity_binding_batches
+    (actor_user_id, request_id, record_count, detail)
+    VALUES (9002, 'identity-upgrade-test', 26, 'valid batch')`);
+  assert.throws(
+    () => database.exec(`INSERT INTO student_identity_binding_batches
+      (actor_user_id, request_id, record_count, detail)
+      VALUES (9002, 'identity-upgrade-test', 26, 'duplicate request')`),
+    /UNIQUE constraint failed: student_identity_binding_batches\.request_id/,
+  );
+
+  database.exec(`
+    INSERT INTO students (id, display_name, degree, grade_year, stage, cadence_days, current_focus, active)
+      VALUES ('student-upgrade-2', '迁移测试二号', '博士', 2025, '实验', 14, '验证唯一约束', 1);
+    INSERT INTO student_feishu_identity_bindings
+      (student_id, feishu_open_id, batch_id, verified_by_user_id, contact_kind)
+      VALUES ('student-upgrade', 'open-student-shared', 1, 9002, 'email');
+  `);
+  assert.throws(
+    () => database.exec(`INSERT INTO student_feishu_identity_bindings
+      (student_id, feishu_open_id, batch_id, verified_by_user_id, contact_kind)
+      VALUES ('student-upgrade-2', 'open-student-shared', 1, 9002, 'mobile')`),
+    /UNIQUE constraint failed: student_feishu_identity_bindings\.feishu_open_id/,
+  );
+  assert.throws(
+    () => database.exec(`INSERT INTO student_feishu_identity_bindings
+      (student_id, feishu_open_id, batch_id, verified_by_user_id, contact_kind)
+      VALUES ('student-upgrade', 'open-student-second', 1, 9002, 'mobile')`),
+    /UNIQUE constraint failed: student_feishu_identity_bindings\.student_id/,
+  );
   assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
   database.close();
 });

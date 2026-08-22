@@ -127,6 +127,41 @@ export const appUserRoleEvents = sqliteTable(
   ],
 );
 
+export const studentIdentityBindingBatches = sqliteTable(
+  "student_identity_binding_batches",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    actorUserId: integer("actor_user_id").notNull().references(() => appUsers.id),
+    requestId: text("request_id").notNull(),
+    recordCount: integer("record_count").notNull(),
+    detail: text("detail").notNull().default(""),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_student_identity_binding_batches_request").on(table.requestId),
+    check("student_identity_binding_batches_record_count", sql`${table.recordCount} = 26`),
+  ],
+);
+
+export const studentFeishuIdentityBindings = sqliteTable(
+  "student_feishu_identity_bindings",
+  {
+    studentId: text("student_id").primaryKey().references(() => students.id),
+    feishuOpenId: text("feishu_open_id").notNull(),
+    batchId: integer("batch_id").notNull().references(() => studentIdentityBindingBatches.id),
+    verifiedByUserId: integer("verified_by_user_id").notNull().references(() => appUsers.id),
+    verificationMethod: text("verification_method").notNull().default("feishu_contact_batch_get_id"),
+    contactKind: text("contact_kind", { enum: ["email", "mobile", "existing_login"] }).notNull(),
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_student_identity_bindings_open_id").on(table.feishuOpenId),
+    index("idx_student_identity_bindings_batch").on(table.batchId),
+    check("student_identity_bindings_contact_kind", sql`${table.contactKind} IN ('email', 'mobile', 'existing_login')`),
+  ],
+);
+
 export const meetingRequests = sqliteTable(
   "meeting_requests",
   {

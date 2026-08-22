@@ -175,6 +175,55 @@ function mapUser(row: UserRow): AppUser {
   };
 }
 
+async function autoBindVerifiedStudent(row: UserRow) {
+  if (row.role !== "pending" || row.student_id) return row;
+  const d1 = getD1();
+  const binding = await d1.prepare(`SELECT b.student_id, b.verified_by_user_id
+    FROM student_feishu_identity_bindings b
+    INNER JOIN students s ON s.id = b.student_id
+    WHERE b.feishu_open_id = ? AND b.active = 1 AND s.active = 1`)
+    .bind(row.feishu_open_id)
+    .first<{ student_id: string; verified_by_user_id: number }>();
+  if (!binding) return row;
+
+  const requestId = crypto.randomUUID();
+  await d1.batch([
+    d1.prepare(`UPDATE OR IGNORE app_users
+      SET role = 'student', student_id = ?, last_login_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND role = 'pending' AND student_id IS NULL
+        AND EXISTS (SELECT 1 FROM students WHERE id = ? AND active = 1)
+        AND EXISTS (
+          SELECT 1 FROM student_feishu_identity_bindings
+          WHERE student_id = ? AND feishu_open_id = ? AND active = 1
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM app_users
+          WHERE student_id = ? AND id <> ?
+        )`)
+      .bind(
+        binding.student_id,
+        row.id,
+        binding.student_id,
+        binding.student_id,
+        row.feishu_open_id,
+        binding.student_id,
+        row.id,
+      ),
+    d1.prepare(`INSERT INTO app_user_role_events
+      (target_user_id, actor_user_id, request_id, from_role, to_role, detail)
+      SELECT ?, ?, ?, 'pending', 'student', ? WHERE changes() > 0`)
+      .bind(
+        row.id,
+        binding.verified_by_user_id,
+        requestId,
+        `已核验飞书 Open ID 预绑定，首次登录自动绑定 ${binding.student_id}`,
+      ),
+  ]);
+
+  return await d1.prepare(`SELECT id, feishu_open_id, display_name, avatar_url, email, role, student_id
+    FROM app_users WHERE id = ?`).bind(row.id).first<UserRow>() ?? row;
+}
+
 export async function createFeishuSession(info: FeishuUserInfo) {
   await ensureDatabase();
   const d1 = getD1();
@@ -191,6 +240,13 @@ export async function createFeishuSession(info: FeishuUserInfo) {
     row = await d1.prepare(`INSERT INTO app_users
       (feishu_open_id, feishu_union_id, feishu_user_id, display_name, avatar_url, email, role)
       VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(feishu_open_id) DO UPDATE SET
+        feishu_union_id = excluded.feishu_union_id,
+        feishu_user_id = excluded.feishu_user_id,
+        display_name = excluded.display_name,
+        avatar_url = excluded.avatar_url,
+        email = excluded.email,
+        last_login_at = CURRENT_TIMESTAMP
       RETURNING id, feishu_open_id, display_name, avatar_url, email, role, student_id`)
       .bind(
         openId,
@@ -204,8 +260,16 @@ export async function createFeishuSession(info: FeishuUserInfo) {
       .first<UserRow>();
     if (row && initialRole === "admin") {
       const requestId = crypto.randomUUID();
-      const [updateResult] = await d1.batch([
-        d1.prepare("UPDATE app_users SET role = 'mentor' WHERE id = ? AND role = 'pending'").bind(row.id),
+      const firstAdminGuard = isConfiguredAdmin
+        ? ""
+        : `AND NOT EXISTS (
+            SELECT 1 FROM app_users
+            WHERE role IN ('superadmin', 'admin', 'mentor') AND active = 1
+          )`;
+      await d1.batch([
+        d1.prepare(`UPDATE app_users SET role = 'mentor'
+          WHERE id = ? AND role = 'pending' AND student_id IS NULL
+          ${firstAdminGuard}`).bind(row.id),
         d1.prepare(`INSERT INTO app_user_role_events
           (target_user_id, actor_user_id, request_id, from_role, to_role, detail)
           SELECT ?, ?, ?, 'pending', 'admin', ? WHERE changes() > 0`)
@@ -216,7 +280,6 @@ export async function createFeishuSession(info: FeishuUserInfo) {
             isConfiguredAdmin ? "预绑定 Open ID 初始化管理员" : "受限可用范围内初始化首位管理员",
           ),
       ]);
-      if (!updateResult.meta.changes) throw new Error("管理员初始化状态已变化，请重新登录");
       row = await d1.prepare(`SELECT id, feishu_open_id, display_name, avatar_url, email, role, student_id
         FROM app_users WHERE id = ?`).bind(row.id).first<UserRow>();
     }
@@ -241,6 +304,7 @@ export async function createFeishuSession(info: FeishuUserInfo) {
       .first<UserRow>();
   }
   if (!row) throw new Error("无法建立飞书用户记录");
+  row = await autoBindVerifiedStudent(row);
 
   const token = randomToken();
   const tokenHash = await hashToken(token);

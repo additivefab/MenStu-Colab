@@ -1217,6 +1217,7 @@ function SettingsView({ viewer, onFeishu, students, onRosterImported }: {
 }) {
   return <div className="settings-grid">
     {viewer.role === "superadmin" ? <RosterImport students={students} onImported={onRosterImported} /> : null}
+    {viewer.role === "superadmin" ? <StudentAccessSetup /> : null}
     <section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、提醒与 AI 会议总结导入" /><div className="setting-body"><span className="status-pill safe">智能拆分已启用</span><p>普通聊天即时过滤；智能纪要会按学生姓名和汇报分段生成个人进展，归属不明确时才进入备用人工区。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section>
     <section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><button>稍后连接 GitHub App</button></div></section>
     <section className="panel setting-card"><PanelHeader title="开源流程参考" subtitle="TUM · Moodle · OSIRIS · eLabFTW" /><div className="setting-body"><span className="status-pill safe">模式已吸收</span><p>采用方案版本、角色权限、待办审核、成果台账与证据溯源等成熟模式；未复制第三方界面或业务代码。</p><div className="reference-links"><a href="https://github.com/ls1intum/thesis-management" target="_blank" rel="noreferrer">TUM</a><a href="https://github.com/moodle/moodle" target="_blank" rel="noreferrer">Moodle</a><a href="https://github.com/OSIRIS-Solutions/osiris" target="_blank" rel="noreferrer">OSIRIS</a><a href="https://github.com/elabftw/elabftw" target="_blank" rel="noreferrer">eLabFTW</a></div></div></section>
@@ -1244,6 +1245,96 @@ function RosterImport({ students, onImported }: { students: Student[]; onImporte
   }
 
   return <section className="panel setting-card"><PanelHeader title="真实学生名册" subtitle="仅超级管理员可以执行导入" /><div className="setting-body"><span className="status-pill safe">{imported ? "已导入 26 人" : "等待导入"}</span><p>{imported ? "12 名博士生、14 名硕士生已纳入管理；演示记录已停用归档。" : "导入已确认的 26 人名册，并保留现有演示数据作为停用归档。"}</p><button className="primary" disabled={busy || imported} onClick={() => void importRoster()}>{busy ? "正在导入…" : imported ? "名册已导入" : "导入已确认名册"}</button>{message ? <small>{message}</small> : null}</div></section>;
+}
+
+type StudentAccessRow = {
+  id: string;
+  name: string;
+  verified: boolean;
+  source: "email" | "mobile" | "existing_login" | null;
+  status: "verified" | "existing_login" | "contact_required" | "conflict";
+};
+
+function StudentAccessSetup() {
+  const [students, setStudents] = useState<StudentAccessRow[]>([]);
+  const [configuredCount, setConfiguredCount] = useState(0);
+  const [complete, setComplete] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const formRef = useRef<HTMLFormElement>(null);
+  const requestIdRef = useRef("");
+
+  const load = useCallback(async () => {
+    const response = await fetch("/api/admin/student-access", { cache: "no-store" });
+    const payload = await response.json() as {
+      students?: StudentAccessRow[];
+      configured_count?: number;
+      complete?: boolean;
+      error?: string;
+    };
+    if (!response.ok) throw new Error(payload.error || "学生飞书身份状态加载失败");
+    setStudents(payload.students ?? []);
+    setConfiguredCount(payload.configured_count ?? 0);
+    setComplete(Boolean(payload.complete));
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load().catch((error: Error) => setMessage(error.message)), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const required = students.filter((student) => student.status === "contact_required");
+    if (!required.length || students.some((student) => student.status === "conflict")) return;
+    const form = new FormData(formElement);
+    const contacts = required.map((student) => ({
+      studentId: student.id,
+      kind: String(form.get(`kind-${student.id}`) || "email") as "email" | "mobile",
+      value: String(form.get(`value-${student.id}`) || "").trim(),
+    }));
+    if (contacts.some((item) => !item.value)) {
+      setMessage("请填写所有待核验学生的飞书普通联系邮箱或手机号");
+      return;
+    }
+    if (!window.confirm(`将一次性向飞书核验 ${contacts.length} 名学生的联系信息，并为完整的 26 人名册预绑定登录权限。联系方式不会保存。确认执行吗？`)) return;
+    setBusy(true); setMessage("");
+    requestIdRef.current ||= crypto.randomUUID();
+    try {
+      const response = await fetch("/api/admin/student-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId: requestIdRef.current, contacts }),
+      });
+      const payload = await response.json() as { error?: string; message?: string; verified_count?: number };
+      if (!response.ok) throw new Error(payload.error || "学生飞书身份预绑定失败");
+      formElement.reset();
+      requestIdRef.current = "";
+      setMessage(payload.message || `已预核验 ${payload.verified_count ?? 26} 名学生`);
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "学生飞书身份预绑定失败");
+    } finally { setBusy(false); }
+  }
+
+  const hasConflict = students.some((student) => student.status === "conflict");
+  const requiredCount = students.filter((student) => student.status === "contact_required").length;
+  return <section className="panel student-access-panel">
+    <PanelHeader title="学生飞书登录权限" subtitle="联系信息只用于向飞书换取本应用 Open ID，不保存姓名匹配结果、邮箱或手机号" count={configuredCount} />
+    <div className="student-access-note"><b>{complete ? "26 / 26 已预绑定" : `${requiredCount} 人待核验`}</b><span>飞书“获取用户 ID”权限已开通。已有真实登录绑定的账号免填；其余学生必须全部核验成功才会整体写入。</span></div>
+    <form ref={formRef} onSubmit={(event) => void submit(event)} autoComplete="off">
+      <div className="student-access-list">{students.map((student) => <label className={`student-access-row ${student.status}`} key={student.id}>
+        <span><strong>{student.name}</strong><small>{student.id}</small></span>
+        {student.status === "contact_required" ? <>
+          <select name={`kind-${student.id}`} aria-label={`${student.name} 联系方式类型`} defaultValue="email"><option value="email">普通联系邮箱</option><option value="mobile">手机号</option></select>
+          <input name={`value-${student.id}`} aria-label={`${student.name} 飞书联系方式`} placeholder="仅用于本次飞书身份核验" autoComplete="off" spellCheck={false} />
+        </> : <span className={`status-pill ${student.status === "conflict" ? "pending" : "safe"}`}>{student.status === "verified" ? "已预绑定" : student.status === "existing_login" ? "已由真实登录核验" : "存在冲突，需人工核对"}</span>}
+      </label>)}</div>
+      <div className="student-access-actions"><span>{hasConflict ? "检测到历史账号冲突，已禁止整批写入。" : complete ? "学生首次登录时会自动进入自己的独立页面。" : `还需填写 ${requiredCount} 名学生。`}</span><button type="button" disabled={busy || complete} onClick={() => { formRef.current?.reset(); requestIdRef.current = ""; setMessage(""); }}>清空全部</button><button className="primary" type="submit" disabled={busy || complete || hasConflict || !requiredCount}>{busy ? "正在向飞书核验…" : complete ? "已全部开通" : "核验并预绑定 26 人"}</button></div>
+    </form>
+    {message ? <div className="account-message" role="status">{message}</div> : null}
+  </section>;
 }
 
 type ManagedUser = {

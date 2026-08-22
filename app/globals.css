@@ -287,6 +287,22 @@ button.primary { border: 0; background: var(--blue); color: white; box-shadow: 0
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; max-width: 960px; }
 .setting-card:last-child { grid-column: 1 / -1; }
 .account-panel { grid-column: 1 / -1; }
+.student-access-panel { grid-column: 1 / -1; }
+.student-access-note { margin: 12px 20px; padding: 12px 14px; display: flex; align-items: baseline; gap: 12px; border: 1px solid #cfe5da; border-radius: 9px; color: #587268; background: #f0f8f4; }
+.student-access-note b { flex: 0 0 auto; color: #277657; font-size: 11px; }
+.student-access-note span { font-size: 9px; line-height: 1.65; }
+.student-access-list { max-height: 440px; overflow: auto; border-top: 1px solid #edf0f4; }
+.student-access-row { min-height: 55px; padding: 9px 20px; display: grid; grid-template-columns: minmax(180px, .8fr) minmax(135px, .5fr) minmax(240px, 1.2fr); gap: 10px; align-items: center; border-bottom: 1px solid #eef1f4; }
+.student-access-row > span:first-child strong, .student-access-row > span:first-child small { display: block; }
+.student-access-row > span:first-child strong { font-size: 10px; }
+.student-access-row > span:first-child small { margin-top: 3px; color: #909cab; font-size: 8px; }
+.student-access-row select, .student-access-row input { min-width: 0; height: 34px; padding: 0 9px; border: 1px solid #dfe5ec; border-radius: 8px; color: #34445a; background: #fbfcfd; font-size: 9px; }
+.student-access-row > .status-pill { grid-column: 2 / -1; justify-self: start; }
+.student-access-row.conflict { background: #fffaf0; }
+.student-access-actions { padding: 14px 20px; display: flex; align-items: center; justify-content: flex-end; gap: 9px; }
+.student-access-actions span { margin-right: auto; color: #758397; font-size: 9px; }
+.student-access-actions button { min-height: 34px; padding: 0 11px; border: 1px solid #dfe5ec; border-radius: 8px; background: white; font-size: 9px; font-weight: 700; }
+.student-access-actions button.primary { border-color: var(--blue); color: white; background: var(--blue); }
 .setting-body { padding: 22px; }
 .setting-body > p { color: #768497; font-size: 10px; line-height: 1.8; min-height: 54px; }
 .setting-body > button { min-height: 36px; border: 1px solid #dfe5ec; background: white; border-radius: 8px; padding: 0 12px; font-size: 10px; font-weight: 700; }
@@ -758,6 +774,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .settings-grid { grid-template-columns: 1fr; }
   .setting-card:last-child { grid-column: auto; }
   .account-panel { grid-column: auto; }
+  .student-access-panel { grid-column: auto; }
+  .student-access-note { align-items: flex-start; flex-direction: column; }
+  .student-access-row { grid-template-columns: 1fr; padding-inline: 15px; }
+  .student-access-row > .status-pill { grid-column: auto; }
+  .student-access-actions { align-items: stretch; flex-direction: column; }
+  .student-access-actions span { margin-right: 0; }
   .data-boundaries { grid-template-columns: 1fr; }
   .account-row { grid-template-columns: 1fr auto; }
   .account-role-editor, .bound-student { grid-column: 1 / -1; grid-row: 2; }

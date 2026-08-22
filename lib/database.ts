@@ -133,6 +133,24 @@ export async function ensureDatabase() {
       detail TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS student_identity_binding_batches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      request_id TEXT NOT NULL UNIQUE,
+      record_count INTEGER NOT NULL CHECK (record_count = 26),
+      detail TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS student_feishu_identity_bindings (
+      student_id TEXT PRIMARY KEY REFERENCES students(id),
+      feishu_open_id TEXT NOT NULL UNIQUE,
+      batch_id INTEGER NOT NULL REFERENCES student_identity_binding_batches(id),
+      verified_by_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      verification_method TEXT NOT NULL DEFAULT 'feishu_contact_batch_get_id',
+      contact_kind TEXT NOT NULL CHECK (contact_kind IN ('email', 'mobile', 'existing_login')),
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS meeting_requests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id TEXT NOT NULL REFERENCES students(id),
@@ -285,6 +303,8 @@ export async function ensureDatabase() {
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_active_mentors ON mentor_student_assignments(student_id, active, mentor_user_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_user_role_events_target ON app_user_role_events(target_user_id, created_at)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_user_role_events_actor ON app_user_role_events(actor_user_id, created_at)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_identity_bindings_open_id ON student_feishu_identity_bindings(feishu_open_id)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_identity_bindings_batch ON student_feishu_identity_bindings(batch_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_requests_student_created ON meeting_requests(student_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_requests_requester_created ON meeting_requests(requested_by_user_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_requests_status_schedule ON meeting_requests(status, preferred_date, preferred_time)"),
