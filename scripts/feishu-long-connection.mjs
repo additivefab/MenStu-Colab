@@ -50,6 +50,7 @@ function postRelayWithCurl(rawBody, timestamp, nonce, signature) {
     const child = spawn(curlBin, [
       "--silent",
       "--show-error",
+      "--http1.1",
       "--max-time",
       "12",
       "--proto",

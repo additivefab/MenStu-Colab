@@ -88,6 +88,7 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(feishuBridge, /\.slice\(0, 60_000\)/);
   assert.match(feishuBridge, /detectMeetingSummary\(content\)/);
   assert.match(feishuBridge, /spawn\(curlBin/);
+  assert.match(feishuBridge, /--http1\.1/);
   assert.match(feishuBridge, /--proto/);
   assert.match(feishuBridge, /=https/);
   assert.doesNotMatch(feishuBridge, /fetch\(relayUrl/);
