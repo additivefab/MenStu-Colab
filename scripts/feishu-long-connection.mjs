@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
 import * as Lark from "@larksuiteoapi/node-sdk";
 
 import {
@@ -13,10 +14,12 @@ const appId = process.env.FEISHU_APP_ID?.trim() ?? "";
 const appSecret = process.env.FEISHU_APP_SECRET?.trim() ?? "";
 const siteUrl = process.env.TANYAN_SITE_URL?.trim() || "https://progress.tz-ndt.com";
 const relayUrl = new URL("/api/feishu/long-connection", siteUrl);
+const curlBin = process.env.TANYAN_CURL_BIN?.trim() || "/usr/bin/curl";
 
 if (!/^cli_[0-9a-fA-F]{16}$/.test(appId) || !appSecret) {
   throw new Error("请配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET");
 }
+if (relayUrl.protocol !== "https:") throw new Error("TANYAN_SITE_URL 必须使用 HTTPS");
 
 const pending = new Map();
 const historyScans = new Map();
@@ -41,22 +44,69 @@ function relaySignature(rawBody, timestamp, nonce) {
     .digest("hex");
 }
 
+function postRelayWithCurl(rawBody, timestamp, nonce, signature) {
+  return new Promise((resolve, reject) => {
+    const statusMarker = "\n__TANYAN_HTTP_STATUS__:";
+    const child = spawn(curlBin, [
+      "--silent",
+      "--show-error",
+      "--max-time",
+      "12",
+      "--proto",
+      "=https",
+      "--request",
+      "POST",
+      "--header",
+      "content-type: application/json",
+      "--header",
+      `x-tanyan-timestamp: ${timestamp}`,
+      "--header",
+      `x-tanyan-nonce: ${nonce}`,
+      "--header",
+      `x-tanyan-signature: ${signature}`,
+      "--data-binary",
+      "@-",
+      "--write-out",
+      `${statusMarker}%{http_code}`,
+      relayUrl.href,
+    ], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let outputTooLarge = false;
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      if (stdout.length > 16_384) {
+        outputTooLarge = true;
+        child.kill();
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      if (stderr.length < 4_096) stderr += chunk;
+    });
+    child.on("error", (error) => reject(new Error(`无法启动系统 HTTPS 客户端：${error.message}`)));
+    child.on("close", (code) => {
+      if (outputTooLarge) return reject(new Error("站点响应内容异常"));
+      const markerIndex = stdout.lastIndexOf(statusMarker);
+      const status = markerIndex >= 0 ? Number(stdout.slice(markerIndex + statusMarker.length)) : 0;
+      if (code !== 0) return reject(new Error(stderr.trim() || `HTTPS 客户端退出码 ${code}`));
+      if (!Number.isInteger(status) || status < 200 || status >= 300) {
+        return reject(new Error(`站点返回 HTTP ${status || "未知"}`));
+      }
+      resolve();
+    });
+    child.stdin.on("error", () => {});
+    child.stdin.end(rawBody);
+  });
+}
+
 async function forwardOnce(event) {
   const rawBody = JSON.stringify(event);
   const timestamp = String(Math.floor(Date.now() / 1000));
   const nonce = randomBytes(18).toString("base64url");
-  const response = await fetch(relayUrl, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-tanyan-timestamp": timestamp,
-      "x-tanyan-nonce": nonce,
-      "x-tanyan-signature": relaySignature(rawBody, timestamp, nonce),
-    },
-    body: rawBody,
-    signal: AbortSignal.timeout(12_000),
-  });
-  if (!response.ok) throw new Error(`站点返回 HTTP ${response.status}`);
+  await postRelayWithCurl(rawBody, timestamp, nonce, relaySignature(rawBody, timestamp, nonce));
 }
 
 async function forwardWithRetry(event) {
