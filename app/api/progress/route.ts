@@ -1,9 +1,16 @@
 import { canViewStudent } from "../../../lib/authorization";
 import { ensureDatabase, getD1 } from "../../../lib/database";
 import { assertSameOrigin, requireAppUser } from "../../../lib/feishu-auth";
-import { sha256Text, validateHttpsUrl } from "../../../lib/progress-evidence";
+import {
+  AttachmentInputError,
+  attachmentStorageKey,
+  validateProgressFiles,
+} from "../../../lib/progress-attachments";
+import { sha256Bytes, sha256Text, validateHttpsUrl } from "../../../lib/progress-evidence";
+import { getProgressFileBucket } from "../../../lib/progress-file-storage";
 
 const allowedKinds = new Set(["文献", "实验", "算法", "数据", "论文", "复现", "项目", "组会"]);
+const studentSubmissionKinds = new Set(["论文", "项目"]);
 
 class InputError extends Error {}
 
@@ -48,7 +55,7 @@ async function evidenceStatements(
   return statements;
 }
 
-function progressInput(body: Record<string, unknown>) {
+function progressInput(body: Record<string, unknown>, hasAttachments = false) {
   const studentId = clean(body.studentId, "学生", 80);
   const kind = clean(body.kind, "进展类型", 20);
   const title = clean(body.title, "进展标题", 160);
@@ -62,11 +69,85 @@ function progressInput(body: Record<string, unknown>) {
   } catch (error) {
     throw new InputError(error instanceof Error ? error.message : "Git 链接格式无效");
   }
-  if (!studentId || !allowedKinds.has(kind) || !title || !summary || !evidence) {
-    throw new InputError("请完整填写学生、类型、进展、结论和证据");
+  if (!studentId || !allowedKinds.has(kind) || !title || !summary || (!evidence && !hasAttachments)) {
+    throw new InputError("请完整填写学生、类型、进展、结论，并提供文字证据或附件");
   }
   if (kind === "文献" && !literatureRef) throw new InputError("文献进展需要填写论文题目或 DOI");
   return { studentId, kind, title, summary, evidence, literatureRef, gitUrl };
+}
+
+async function requestInput(request: Request) {
+  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!contentType.startsWith("multipart/form-data")) {
+    return { body: (await request.json()) as Record<string, unknown>, files: [] as File[] };
+  }
+  const form = await request.formData();
+  const body: Record<string, unknown> = {};
+  for (const [key, value] of form.entries()) {
+    if (typeof value === "string") body[key] = value;
+  }
+  const files = form.getAll("attachments").filter((value): value is File =>
+    typeof value !== "string" && value.size > 0,
+  );
+  return { body, files };
+}
+
+async function storeAttachments(progressId: number, studentId: string, userId: number, files: File[]) {
+  const validated = validateProgressFiles(files);
+  if (!validated.length) return [] as number[];
+  const d1 = getD1();
+  const bucket = getProgressFileBucket();
+  const storedKeys: string[] = [];
+  const attachmentIds: number[] = [];
+  try {
+    for (const item of validated) {
+      const bytes = await item.file.arrayBuffer();
+      const contentSha256 = await sha256Bytes(bytes);
+      const storageKey = attachmentStorageKey(studentId, progressId, item.fileName);
+      await bucket.put(storageKey, bytes, {
+        httpMetadata: { contentType: item.contentType },
+        customMetadata: { studentId, progressId: String(progressId) },
+      });
+      storedKeys.push(storageKey);
+      const row = await d1.prepare(`INSERT INTO progress_attachments
+        (progress_entry_id, storage_key, file_name, content_type, size_bytes, content_sha256, uploaded_by_user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+        .bind(progressId, storageKey, item.fileName, item.contentType, item.file.size, contentSha256, userId)
+        .first<{ id: number }>();
+      if (!row?.id) throw new Error("无法保存附件信息");
+      attachmentIds.push(row.id);
+      await d1.prepare(`INSERT INTO progress_evidence_sources
+        (progress_entry_id, source_type, label, source_ref, content_sha256, created_by_user_id)
+        VALUES (?, 'attachment', ?, ?, ?, ?)`)
+        .bind(progressId, `附件：${item.fileName}`, `/api/progress/files?id=${row.id}`, contentSha256, userId)
+        .run();
+    }
+    return attachmentIds;
+  } catch (error) {
+    await Promise.allSettled(storedKeys.map((key) => bucket.delete(key)));
+    for (const attachmentId of attachmentIds) {
+      await d1.prepare("DELETE FROM progress_evidence_sources WHERE source_type = 'attachment' AND source_ref = ?")
+        .bind(`/api/progress/files?id=${attachmentId}`).run();
+      await d1.prepare("DELETE FROM progress_attachments WHERE id = ?").bind(attachmentId).run();
+    }
+    throw error;
+  }
+}
+
+async function deleteCreatedProgress(progressId: number) {
+  const d1 = getD1();
+  const attachments = await d1.prepare("SELECT storage_key FROM progress_attachments WHERE progress_entry_id = ?")
+    .bind(progressId).all<{ storage_key: string }>();
+  if (attachments.results.length) {
+    const bucket = getProgressFileBucket();
+    await Promise.allSettled(attachments.results.map((item) => bucket.delete(item.storage_key)));
+  }
+  await d1.batch([
+    d1.prepare("DELETE FROM progress_evidence_sources WHERE progress_entry_id = ?").bind(progressId),
+    d1.prepare("DELETE FROM progress_audit_events WHERE progress_entry_id = ?").bind(progressId),
+    d1.prepare("DELETE FROM progress_attachments WHERE progress_entry_id = ?").bind(progressId),
+    d1.prepare("DELETE FROM progress_entries WHERE id = ?").bind(progressId),
+  ]);
 }
 
 export async function POST(request: Request) {
@@ -76,14 +157,18 @@ export async function POST(request: Request) {
     const auth = await requireAppUser(request, ["superadmin", "admin", "student"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
-    const body = (await request.json()) as Record<string, unknown>;
+    const { body, files } = await requestInput(request);
+    validateProgressFiles(files);
     if (auth.user.role === "student" && !auth.user.studentId) {
       return Response.json({ error: "学生账号尚未绑定学生记录" }, { status: 403 });
     }
     const values = progressInput({
       ...body,
       studentId: auth.user.role === "student" ? auth.user.studentId : body.studentId,
-    });
+    }, files.length > 0);
+    if (auth.user.role === "student" && !studentSubmissionKinds.has(values.kind)) {
+      return Response.json({ error: "学生端仅支持提交论文进度或项目进度" }, { status: 400 });
+    }
 
     const d1 = getD1();
     if (auth.user.role !== "student" && !(await canViewStudent(auth.user, values.studentId))) {
@@ -112,16 +197,17 @@ export async function POST(request: Request) {
         VALUES (?, ?, 'user', 'submit', '', 'submitted', '提交进展与核验证据')`)
         .bind(createdId, auth.user.id),
     ]);
+    await storeAttachments(createdId, values.studentId, auth.user.id, files);
     const id = createdId;
     createdId = null;
     return Response.json({ id, message: "已提交，等待导师确认" }, { status: 201 });
   } catch (error) {
     if (createdId) {
-      try { await getD1().prepare("DELETE FROM progress_entries WHERE id = ?").bind(createdId).run(); } catch { /* noop */ }
+      try { await deleteCreatedProgress(createdId); } catch { /* noop */ }
     }
     return Response.json(
       { error: error instanceof Error ? error.message : "提交失败" },
-      { status: error instanceof InputError ? 400 : 500 },
+      { status: error instanceof InputError || error instanceof AttachmentInputError ? 400 : 500 },
     );
   }
 }
@@ -132,7 +218,8 @@ export async function PATCH(request: Request) {
     const auth = await requireAppUser(request, ["superadmin", "admin", "student"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
-    const body = (await request.json()) as Record<string, unknown>;
+    const { body, files } = await requestInput(request);
+    validateProgressFiles(files);
     const id = Number(body.id);
     if (!Number.isInteger(id)) return Response.json({ error: "进展参数无效" }, { status: 400 });
 
@@ -154,7 +241,7 @@ export async function PATCH(request: Request) {
       studentId: existing.student_id,
       kind: body.kind ?? existing.kind,
       title: body.title ?? existing.title,
-    });
+    }, files.length > 0);
     const [result] = await d1.batch([
       d1.prepare(`UPDATE progress_entries SET
         kind = ?, title = ?, summary = ?, evidence = ?, literature_ref = ?, git_url = ?,
@@ -171,11 +258,12 @@ export async function PATCH(request: Request) {
         .bind(id, auth.user.id),
     ]);
     if (!result.meta.changes) return Response.json({ error: "记录状态已变化，请刷新后重试" }, { status: 409 });
+    await storeAttachments(id, existing.student_id, auth.user.id, files);
     return Response.json({ message: "补充证据已重新提交导师审核" });
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "重新提交失败" },
-      { status: error instanceof InputError ? 400 : 500 },
+      { status: error instanceof InputError || error instanceof AttachmentInputError ? 400 : 500 },
     );
   }
 }

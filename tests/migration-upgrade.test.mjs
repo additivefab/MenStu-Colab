@@ -3,7 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-test("0010 upgrades roles before 0011 adds safe, constrained student identity bindings", async () => {
+test("0010 upgrades roles, 0011 binds identities, and 0012 adds progress attachments", async () => {
   const migrationDirectory = new URL("../drizzle/", import.meta.url);
   const names = (await readdir(migrationDirectory))
     .filter((name) => /^\d{4}_.*\.sql$/.test(name))
@@ -11,7 +11,7 @@ test("0010 upgrades roles before 0011 adds safe, constrained student identity bi
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
 
-  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_"].some((prefix) => item.startsWith(prefix)))) {
+  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_"].some((prefix) => item.startsWith(prefix)))) {
     database.exec(await readFile(new URL(name, migrationDirectory), "utf8"));
   }
   database.exec(`
@@ -33,6 +33,7 @@ test("0010 upgrades roles before 0011 adds safe, constrained student identity bi
   const meetingMigration = await readFile(new URL(names.find((item) => item.startsWith("0009_")), migrationDirectory), "utf8");
   const roleMergeMigration = await readFile(new URL(names.find((item) => item.startsWith("0010_")), migrationDirectory), "utf8");
   const identityBindingMigration = await readFile(new URL(names.find((item) => item.startsWith("0011_")), migrationDirectory), "utf8");
+  const attachmentMigration = await readFile(new URL(names.find((item) => item.startsWith("0012_")), migrationDirectory), "utf8");
   database.exec(businessMigration);
   database.exec(roleMigration);
   database.exec(roleIndexMigration);
@@ -163,6 +164,15 @@ test("0010 upgrades roles before 0011 adds safe, constrained student identity bi
       VALUES ('student-upgrade', 'open-student-second', 1, 9002, 'mobile')`),
     /UNIQUE constraint failed: student_feishu_identity_bindings\.student_id/,
   );
+  database.exec(attachmentMigration);
+  assert.deepEqual(
+    database.prepare("PRAGMA table_info('progress_attachments')").all().map((column) => column.name),
+    ["id", "progress_entry_id", "storage_key", "file_name", "content_type", "size_bytes", "content_sha256", "uploaded_by_user_id", "created_at"],
+  );
+  database.exec(`INSERT INTO progress_attachments
+    (progress_entry_id, storage_key, file_name, content_type, size_bytes, content_sha256, uploaded_by_user_id)
+    VALUES (1, 'progress/test/file.pdf', '论文初稿.pdf', 'application/pdf', 128, 'abc123', 9002)`);
+  assert.equal(database.prepare("SELECT file_name FROM progress_attachments WHERE progress_entry_id = 1").get().file_name, "论文初稿.pdf");
   assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
   database.close();
 });

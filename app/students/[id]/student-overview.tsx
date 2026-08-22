@@ -24,6 +24,13 @@ type StudentProgress = {
   reviewer_name: string | null;
   submitted_at: string;
   reviewed_at: string | null;
+  attachments: Array<{
+    id: number;
+    file_name: string;
+    size_bytes: number;
+    content_sha256: string;
+    download_url: string;
+  }>;
   evidence_sources: Array<{
     id: number;
     source_type: string;
@@ -288,12 +295,14 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     event.preventDefault();
     setProgressBusy(entry.id);
     setProgressMessage((current) => ({ ...current, [entry.id]: "" }));
-    const values = Object.fromEntries(new FormData(event.currentTarget));
+    const formData = new FormData(event.currentTarget);
+    formData.set("id", String(entry.id));
+    formData.set("kind", entry.kind);
+    formData.set("title", entry.title);
     try {
       const response = await fetch("/api/progress", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...values, id: entry.id, kind: entry.kind, title: entry.title }),
+        body: formData,
       });
       const payload = (await response.json()) as { error?: string; message?: string };
       if (!response.ok) throw new Error(payload.error || "补充证据提交失败");
@@ -474,9 +483,10 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         <div className="student-progress-timeline">{student.progress.map((entry) => <article key={entry.id}>
           <div className="student-timeline-marker"><i /><span>{dateText(entry.submitted_at)}</span></div>
           <div className="student-timeline-card"><div><span className={`status-pill review-${entry.review_status}`}>{reviewLabels[entry.review_status]}</span><small>{entry.kind} · #{entry.id}</small></div><h3>{entry.title}</h3><p>{entry.summary}</p><dl><div><dt>核验证据</dt><dd>{entry.evidence || "尚未填写"}</dd></div>{entry.assessment ? <div><dt>审核判断</dt><dd>{entry.assessment === "substantive" ? "实质性进展" : "支持性工作"}{entry.reviewer_name ? ` · ${entry.reviewer_name}` : ""}</dd></div> : null}{entry.reviewer_note ? <div><dt>审核意见</dt><dd>{entry.reviewer_note}</dd></div> : null}</dl>
-            <div className="student-evidence-sources" aria-label="证据来源">{entry.evidence_sources.map((source) => <span key={source.id}><b>{source.label}</b>{source.source_ref ? source.source_type === "git" || source.source_type === "url" ? <a href={source.source_ref} target="_blank" rel="noreferrer">打开 ↗</a> : <small>{source.source_ref}</small> : null}{source.content_sha256 ? <em>指纹 {source.content_sha256}</em> : null}</span>)}{!entry.evidence_sources.length ? <span><b>历史文本证据</b><small>补证时将建立结构化来源</small></span> : null}</div>
+            <div className="student-evidence-sources" aria-label="证据来源">{entry.evidence_sources.filter((source) => source.source_type !== "attachment").map((source) => <span key={source.id}><b>{source.label}</b>{source.source_ref ? source.source_type === "git" || source.source_type === "url" ? <a href={source.source_ref} target="_blank" rel="noreferrer">打开 ↗</a> : <small>{source.source_ref}</small> : null}{source.content_sha256 ? <em>指纹 {source.content_sha256}</em> : null}</span>)}{!entry.evidence_sources.some((source) => source.source_type !== "attachment") ? <span><b>历史文本证据</b><small>补证时将建立结构化来源</small></span> : null}</div>
+            {entry.attachments?.length ? <div className="student-attachment-list" aria-label="提交附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><b>{attachment.file_name}</b><small>{Math.max(1, Math.round(attachment.size_bytes / 1024))} KB · 指纹 {attachment.content_sha256}</small></a>)}</div> : null}
             {entry.audit.length ? <details className="student-progress-audit"><summary>查看审核轨迹（{entry.audit.length}）</summary>{entry.audit.map((event) => <div key={event.id}><i /><span><strong>{event.actor_name || (event.actor_type === "system" ? "系统" : "未知人员")} · {reviewLabels[event.to_status as ReviewStatus] || event.action}</strong><small>{dateText(event.created_at)}{event.note ? ` · ${event.note}` : ""}</small></span></div>)}</details> : null}
-            {entry.review_status === "changes_requested" && (viewerRole === "superadmin" || viewerRole === "admin" || viewerRole === "student") ? <details className="student-resubmit"><summary>补充证据并重新提交</summary><form onSubmit={(event) => void resubmitProgress(event, entry)}><label>更新后的结论<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label><label>补充核验证据<textarea name="evidence" rows={3} required defaultValue={entry.evidence} /></label>{entry.kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required defaultValue={entry.literature_ref} /></label> : <input type="hidden" name="literatureRef" value={entry.literature_ref || ""} />}<label>Git 链接（可选）<input name="gitUrl" type="url" defaultValue={entry.git_url} placeholder="仅支持 https://" /></label>{progressMessage[entry.id] ? <p role="status">{progressMessage[entry.id]}</p> : null}<button className="primary" disabled={progressBusy === entry.id}>{progressBusy === entry.id ? "提交中…" : "保留原记录并重新提交"}</button></form></details> : null}
+            {entry.review_status === "changes_requested" && (viewerRole === "superadmin" || viewerRole === "admin" || viewerRole === "student") ? <details className="student-resubmit"><summary>补充证据并重新提交</summary><form onSubmit={(event) => void resubmitProgress(event, entry)}><label>更新后的结论<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label><label>补充核验证据<textarea name="evidence" rows={3} required defaultValue={entry.evidence} /></label>{entry.kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required defaultValue={entry.literature_ref} /></label> : <input type="hidden" name="literatureRef" value={entry.literature_ref || ""} />}<label>Git 链接（可选）<input name="gitUrl" type="url" defaultValue={entry.git_url} placeholder="仅支持 https://" /></label><label>补充附件（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件，单个不超过 20 MB</small></label>{progressMessage[entry.id] ? <p role="status">{progressMessage[entry.id]}</p> : null}<button className="primary" disabled={progressBusy === entry.id}>{progressBusy === entry.id ? "提交中…" : "保留原记录并重新提交"}</button></form></details> : null}
           </div>
         </article>)}{!student.progress.length ? <div className="student-empty">尚无个人进展记录</div> : null}</div>
       </section>

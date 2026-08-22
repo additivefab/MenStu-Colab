@@ -181,6 +181,17 @@ export async function ensureDatabase() {
       note TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS progress_attachments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      progress_entry_id INTEGER NOT NULL REFERENCES progress_entries(id),
+      storage_key TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+      size_bytes INTEGER NOT NULL,
+      content_sha256 TEXT NOT NULL,
+      uploaded_by_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS research_proposals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id TEXT NOT NULL REFERENCES students(id),
@@ -309,6 +320,8 @@ export async function ensureDatabase() {
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_requests_requester_created ON meeting_requests(requested_by_user_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_requests_status_schedule ON meeting_requests(status, preferred_date, preferred_time)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_audit_entry_created ON progress_audit_events(progress_entry_id, created_at DESC)"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_attachments_storage_key ON progress_attachments(storage_key)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_attachments_entry_created ON progress_attachments(progress_entry_id, created_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_research_proposals_student_unique ON research_proposals(student_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_proposals_status_updated ON research_proposals(status, updated_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_proposal_versions_proposal_number ON research_proposal_versions(proposal_id, version_number)"),

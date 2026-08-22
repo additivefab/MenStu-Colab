@@ -182,6 +182,11 @@ button.primary { border: 0; background: var(--blue); color: white; box-shadow: 0
 .evidence-source-list b { color: #395e91; font-size: 8px; }
 .evidence-source-list small, .evidence-source-list em, .evidence-source-list a { color: #8794a5; font-size: 7px; font-style: normal; overflow-wrap: anywhere; }
 .evidence-source-list a { color: #2d67bc; font-weight: 700; }
+.review-attachment-list { display: grid; gap: 7px; margin: 12px 0 16px; }
+.review-attachment-list a { padding: 10px 12px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 9px; border: 1px solid #dce6f2; border-radius: 9px; color: #385777; background: #f8fbff; text-decoration: none; }
+.review-attachment-list a > span { padding: 3px 6px; border-radius: 5px; color: #fff; background: #4778bb; font-size: 8px; font-weight: 800; }
+.review-attachment-list a > b { font-size: 9px; overflow-wrap: anywhere; }
+.review-attachment-list a > small { color: #8995a5; font-size: 7px; }
 .status-pill.reviewing, .status-pill.review-in_review { color: #315fae; background: #eaf2ff; }
 .status-pill.review-accepted { color: #23785a; background: #e9f7f0; }
 .status-pill.review-changes_requested, .status-pill.review-submitted { color: #946616; background: #fff5d8; }
@@ -228,6 +233,7 @@ button.primary { border: 0; background: var(--blue); color: white; box-shadow: 0
 .modal-title p { margin: 0 0 22px; color: #7f8c9e; font-size: 11px; }
 .modal form { display: grid; gap: 14px; }
 .modal form label { display: grid; gap: 6px; color: #44546a; font-size: 10px; font-weight: 700; }
+.modal form label > small { color: #8a96a6; font-size: 9px; font-weight: 500; line-height: 1.5; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .modal input, .modal select, .modal textarea { width: 100%; border: 1px solid #dde3ea; border-radius: 8px; background: #fbfcfd; outline: 0; padding: 10px 11px; color: var(--ink); font-size: 11px; resize: vertical; }
 .modal input:focus, .modal select:focus, .modal textarea:focus { border-color: #7ca3ec; box-shadow: 0 0 0 3px #e8f0ff; }
@@ -655,10 +661,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-portal-kicker { color: #acd4ff; font-size: 10px; font-weight: 800; letter-spacing: .16em; }
 .student-portal-hero h1 { margin: 9px 0 7px; font-size: clamp(25px, 3vw, 38px); letter-spacing: -.04em; }
 .student-portal-hero p { margin: 0; color: #d7e8fb; font-size: 13px; }
-.student-primary-actions { display: flex; gap: 10px; flex: 0 0 auto; }
+.student-primary-actions { max-width: 520px; display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; flex: 0 0 auto; }
 .student-primary-actions button { min-height: 46px; padding: 0 19px; border: 1px solid rgba(255,255,255,.45); border-radius: 12px; color: #fff; background: rgba(255,255,255,.08); font-weight: 750; }
 .student-primary-actions button.primary { color: #20538f; background: #fff; }
-.student-portal-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 18px 0; }
+.student-portal-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 18px 0; }
 .student-portal-summary article { padding: 19px 21px; border: 1px solid #e4eaf1; border-radius: 16px; background: rgba(255,255,255,.92); }
 .student-portal-summary span, .student-portal-summary strong, .student-portal-summary small { display: block; }
 .student-portal-summary span { color: #7e8b9e; font-size: 12px; font-weight: 750; }
@@ -683,6 +689,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-progress-feed-list h3 { margin: 10px 0 1px; font-size: 15px; }
 .student-progress-feed-list > article > small { color: #3f76b9; font-size: 12px; font-weight: 750; }
 .student-progress-feed-list > article > p { margin: 8px 0 0; color: #56667b; font-size: 13px; line-height: 1.7; }
+.student-attachment-list { display: grid !important; gap: 7px; margin-top: 11px; }
+.student-attachment-list a { min-width: 0; padding: 9px 11px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; border: 1px solid #dce6f2; border-radius: 9px; color: #315f94; background: #f7faff; text-decoration: none; }
+.student-attachment-list a > span { font-size: 16px; }
+.student-attachment-list a > b { font-size: 11px; overflow-wrap: anywhere; }
+.student-attachment-list a > small { color: #8a96a6; font-size: 10px; }
 .student-progress-feed-list blockquote { display: grid; gap: 4px; margin: 12px 0 0; padding: 11px 13px; border: 0; border-left: 3px solid #e1a636; border-radius: 0 9px 9px 0; color: #66553a; background: #fff9eb; font-size: 12px; }
 .student-progress-feed-list details { margin-top: 12px; }
 .student-progress-feed-list summary { color: #2f6dbd; font-size: 12px; font-weight: 750; cursor: pointer; }
@@ -856,7 +867,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-portal-hero { align-items: stretch; flex-direction: column; margin-top: 18px; padding: 28px 22px; }
   .student-primary-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .student-primary-actions button { min-height: 46px; }
-  .student-portal-summary { grid-template-columns: 1fr; }
+  .student-portal-summary { grid-template-columns: 1fr 1fr; }
   .student-portal-panel-head { padding-inline: 18px; }
   .student-progress-feed-list, .student-meeting-history { padding-inline: 18px; }
   .student-meeting-form { padding-inline: 18px; }
@@ -882,5 +893,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .modal { padding: 23px 18px; }
   .modal-layer { padding: 10px; }
   .student-primary-actions { grid-template-columns: 1fr; }
+  .student-portal-summary { grid-template-columns: 1fr; }
   .student-meeting-form > div { grid-template-columns: 1fr; }
 }

@@ -2,7 +2,11 @@ export type ReviewStatus = "submitted" | "in_review" | "accepted" | "changes_req
 export type ProgressAssessment = "substantive" | "supporting" | null;
 
 export async function sha256Text(value: string) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return sha256Bytes(new TextEncoder().encode(value));
+}
+
+export async function sha256Bytes(value: BufferSource) {
+  const digest = await crypto.subtle.digest("SHA-256", value);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 

@@ -249,6 +249,29 @@ export const progressAuditEvents = sqliteTable(
   (table) => [index("idx_progress_audit_entry_created").on(table.progressEntryId, table.createdAt)],
 );
 
+export const progressAttachments = sqliteTable(
+  "progress_attachments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    progressEntryId: integer("progress_entry_id")
+      .notNull()
+      .references(() => progressEntries.id),
+    storageKey: text("storage_key").notNull(),
+    fileName: text("file_name").notNull(),
+    contentType: text("content_type").notNull().default("application/octet-stream"),
+    sizeBytes: integer("size_bytes").notNull(),
+    contentSha256: text("content_sha256").notNull(),
+    uploadedByUserId: integer("uploaded_by_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_progress_attachments_storage_key").on(table.storageKey),
+    index("idx_progress_attachments_entry_created").on(table.progressEntryId, table.createdAt),
+  ],
+);
+
 export const researchProposals = sqliteTable(
   "research_proposals",
   {

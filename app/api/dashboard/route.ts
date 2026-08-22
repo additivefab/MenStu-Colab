@@ -52,6 +52,16 @@ type EvidenceSourceRow = {
   created_at: string;
 };
 
+type AttachmentRow = {
+  id: number;
+  progress_entry_id: number;
+  file_name: string;
+  content_type: string;
+  size_bytes: number;
+  content_sha256: string;
+  created_at: string;
+};
+
 type ProgressAuditRow = {
   id: number;
   progress_entry_id: number;
@@ -117,6 +127,7 @@ export async function GET(request: Request) {
         .bind(viewer.id).all<{ student_id: string }>()).results.map((item) => item.student_id));
     let progressRows: ProgressRow[] = [];
     let evidenceRows: EvidenceSourceRow[] = [];
+    let attachmentRows: AttachmentRow[] = [];
     let auditRows: ProgressAuditRow[] = [];
     if (studentIds.length) {
       const placeholders = studentIds.map(() => "?").join(",");
@@ -134,11 +145,15 @@ export async function GET(request: Request) {
       const progressIds = progressRows.map((entry) => entry.id);
       if (progressIds.length) {
         const progressPlaceholders = progressIds.map(() => "?").join(",");
-        const [evidence, audit] = await Promise.all([
+        const [evidence, attachments, audit] = await Promise.all([
           d1.prepare(`SELECT id, progress_entry_id, source_type, label,
             source_ref, content_sha256, occurred_at, created_at
             FROM progress_evidence_sources WHERE progress_entry_id IN (${progressPlaceholders})
             ORDER BY progress_entry_id, created_at, id`).bind(...progressIds).all<EvidenceSourceRow>(),
+          d1.prepare(`SELECT id, progress_entry_id, file_name, content_type,
+            size_bytes, content_sha256, created_at
+            FROM progress_attachments WHERE progress_entry_id IN (${progressPlaceholders})
+            ORDER BY progress_entry_id, created_at, id`).bind(...progressIds).all<AttachmentRow>(),
           d1.prepare(`SELECT a.id, a.progress_entry_id, a.action, a.from_status, a.to_status,
             a.assessment, a.note, a.created_at, a.actor_type, u.display_name AS actor_name
             FROM progress_audit_events a LEFT JOIN app_users u ON u.id = a.actor_user_id
@@ -147,6 +162,7 @@ export async function GET(request: Request) {
             .bind(...progressIds).all<ProgressAuditRow>(),
         ]);
         evidenceRows = evidence.results;
+        attachmentRows = attachments.results;
         auditRows = audit.results;
       }
     }
@@ -159,6 +175,13 @@ export async function GET(request: Request) {
           ...source,
           source_ref: evidenceDisplayRef(source.source_type, source.source_ref),
           content_sha256: source.content_sha256 ? source.content_sha256.slice(0, 12) : "",
+        })),
+      attachments: attachmentRows
+        .filter((attachment) => attachment.progress_entry_id === entry.id)
+        .map((attachment) => ({
+          ...attachment,
+          content_sha256: attachment.content_sha256.slice(0, 12),
+          download_url: `/api/progress/files?id=${attachment.id}`,
         })),
       audit: auditRows.filter((event) => event.progress_entry_id === entry.id).slice(0, 12),
     }));
@@ -219,9 +242,16 @@ export async function GET(request: Request) {
             evidence: entry.evidence,
             literature_ref: entry.literature_ref,
             git_url: entry.git_url,
+            status: entry.status,
             review_status: entry.review_status,
+            assessment: entry.assessment,
             reviewer_note: entry.reviewer_note,
+            reviewer_name: entry.reviewer_name,
             submitted_at: entry.submitted_at,
+            reviewed_at: entry.reviewed_at,
+            evidence_sources: entry.evidence_sources,
+            attachments: entry.attachments,
+            audit: entry.audit,
           })),
         })),
         pending: [],
