@@ -104,6 +104,14 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.doesNotMatch(dashboard, /value="mentor"/);
   assert.match(dashboard, /未来 7 天更新/);
   assert.match(studentOverview, /科研培养流程图/);
+  assert.match(studentOverview, /导师决策视图/);
+  assert.match(studentOverview, /导师指导工作台/);
+  assert.match(studentOverview, /论文推进图谱/);
+  assert.match(studentOverview, /paper-stage-roadmap/);
+  assert.match(studentOverview, /确认实质性进展/);
+  assert.match(studentOverview, /要求补充证据/);
+  assert.match(studentOverview, /\/api\/reviews/);
+  assert.match(studentOverview, /entry\.can_finalize/);
   assert.match(studentOverview, /window\.location\.replace\("\/"\)/);
   assert.match(studentOverview, /个人进展与证据链/);
   assert.match(studentOverview, /培养计划进度/);

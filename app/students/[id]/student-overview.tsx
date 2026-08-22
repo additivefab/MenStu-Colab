@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { paperStageMeta, paperStages, type PaperStage } from "../../../lib/paper-progress";
+import { paperDeadlineState, paperStageMeta, paperStages, type PaperStage } from "../../../lib/paper-progress";
 
 type ProgressStatus = "pending" | "substantive" | "supporting" | "supplement" | "rejected";
 type ReviewStatus = "submitted" | "in_review" | "accepted" | "changes_requested" | "rejected";
@@ -25,6 +25,7 @@ type StudentProgress = {
   reviewer_name: string | null;
   submitted_at: string;
   reviewed_at: string | null;
+  can_finalize?: boolean;
   paper: {
     id: number;
     title: string;
@@ -60,6 +61,22 @@ type StudentProgress = {
     actor_name: string | null;
     actor_type: string;
   }>;
+};
+
+type StudentPaper = {
+  id: number;
+  student_id: string;
+  title: string;
+  paper_type: string;
+  target_venue: string;
+  planned_submission_date: string | null;
+  current_stage: PaperStage;
+  submission_identifier: string;
+  status: "active" | "on_hold" | "accepted" | "published" | "closed";
+  latest_progress_at: string | null;
+  updated_at: string;
+  update_count: number;
+  pending_count: number;
 };
 
 type Student = {
@@ -161,6 +178,14 @@ const proposalLabels: Record<ProposalStatus, string> = {
   approved: "已确认执行",
 };
 
+const paperStatusLabels: Record<StudentPaper["status"], string> = {
+  active: "推进中",
+  on_hold: "暂缓",
+  accepted: "已录用",
+  published: "已发表",
+  closed: "已关闭",
+};
+
 const milestoneLabels: Record<MilestoneStatus, string> = {
   pending: "未开始",
   in_progress: "进行中",
@@ -204,6 +229,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   const [student, setStudent] = useState<Student | null>(null);
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [outputs, setOutputs] = useState<ResearchOutput[]>([]);
+  const [papers, setPapers] = useState<StudentPaper[]>([]);
   const [viewerRole, setViewerRole] = useState<ViewerRole | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -215,13 +241,22 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   const [progressMessage, setProgressMessage] = useState<Record<number, string>>({});
   const [milestoneBusy, setMilestoneBusy] = useState<number | null>(null);
   const [milestoneMessage, setMilestoneMessage] = useState("");
+  const [reviewNotes, setReviewNotes] = useState<Record<number, string>>({});
+  const [reviewBusy, setReviewBusy] = useState<number | null>(null);
+  const [guidanceMessage, setGuidanceMessage] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
       const dashboardResponse = await fetch("/api/dashboard", { cache: "no-store" });
-      const dashboard = (await dashboardResponse.json()) as { viewer?: { role: ViewerRole }; students?: Student[]; error?: string };
+      const dashboard = (await dashboardResponse.json()) as {
+        viewer?: { role: ViewerRole };
+        students?: Student[];
+        papers?: StudentPaper[];
+        pending?: Array<StudentProgress & { can_finalize: boolean }>;
+        error?: string;
+      };
       if (!dashboardResponse.ok) throw new Error(dashboard.error || "学生信息读取失败");
       if (dashboard.viewer?.role === "student") {
         window.location.replace("/");
@@ -237,10 +272,15 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       if (!outputResponse.ok) throw new Error(outputPayload.error || "科研成果读取失败");
       const matched = dashboard.students?.find((item) => item.id === studentId) ?? null;
       if (!matched) throw new Error("学生不存在，或当前账号无权查看该学生");
-      setStudent(matched);
+      const reviewability = new Map((dashboard.pending ?? []).map((entry) => [entry.id, entry.can_finalize]));
+      setStudent({
+        ...matched,
+        progress: matched.progress.map((entry) => ({ ...entry, can_finalize: reviewability.get(entry.id) ?? false })),
+      });
       setViewerRole(dashboard.viewer?.role ?? null);
       setProposal(proposals.proposals?.find((item) => item.student_id === studentId) ?? null);
       setOutputs(outputPayload.outputs ?? []);
+      setPapers((dashboard.papers ?? []).filter((paper) => paper.student_id === studentId));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "学生信息读取失败");
     } finally {
@@ -341,16 +381,58 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     } finally { setMilestoneBusy(null); }
   }
 
+  async function reviewProgress(entry: StudentProgress, action: "start_review" | "substantive" | "supporting" | "supplement" | "rejected") {
+    const note = (reviewNotes[entry.id] || "").trim();
+    if ((action === "supplement" || action === "rejected") && !note) {
+      setGuidanceMessage("需要补充或判定为非进展时，请先写清具体指导意见。");
+      return;
+    }
+    if (!entry.can_finalize) {
+      setGuidanceMessage(entry.reviewer_name ? `该证据正在由 ${entry.reviewer_name} 审核` : "当前账号不能审核这条进展");
+      return;
+    }
+    setReviewBusy(entry.id);
+    setGuidanceMessage("");
+    try {
+      const response = await fetch("/api/reviews", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: entry.id, action, note }),
+      });
+      const payload = (await response.json()) as { error?: string; message?: string };
+      if (!response.ok) throw new Error(payload.error || "指导意见保存失败");
+      setGuidanceMessage(action === "start_review" ? "已接手审核，可继续形成导师判断。" : payload.message || "导师判断与指导意见已保存。");
+      await load();
+    } catch (reviewError) {
+      setGuidanceMessage(reviewError instanceof Error ? reviewError.message : "指导意见保存失败");
+    } finally {
+      setReviewBusy(null);
+    }
+  }
+
   const summary = useMemo(() => {
     const progress = student?.progress ?? [];
     const reviewed = progress.filter((entry) => ["accepted", "changes_requested", "rejected"].includes(entry.review_status)).length;
     const substantive = progress.filter((entry) => entry.assessment === "substantive" || entry.status === "substantive").length;
+    const supporting = progress.filter((entry) => entry.assessment === "supporting" || entry.status === "supporting").length;
+    const returned = progress.filter((entry) => entry.review_status === "changes_requested").length;
+    const rejected = progress.filter((entry) => entry.review_status === "rejected").length;
     const pending = progress.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
+    const evidenceReady = progress.filter((entry) => Boolean(entry.evidence.trim()) && (entry.evidence_sources.length > 0 || entry.attachments.length > 0)).length;
+    const attachmentCount = progress.reduce((count, entry) => count + entry.attachments.length, 0);
+    const sourceCount = progress.reduce((count, entry) => count + entry.evidence_sources.filter((source) => source.source_type !== "attachment").length, 0);
     const completedMilestones = proposal?.milestones.filter((item) => item.status === "completed").length ?? 0;
     return {
       reviewed,
       substantive,
+      supporting,
+      returned,
+      rejected,
       pending,
+      evidenceReady,
+      evidencePercent: progress.length ? Math.round((evidenceReady / progress.length) * 100) : 0,
+      attachmentCount,
+      sourceCount,
       completedMilestones,
       totalMilestones: proposal?.milestones.length ?? 0,
     };
@@ -420,17 +502,22 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     { label: "科研成果", value: `${outputs.length} 项`, note: outputs[0]?.title || "等待登记成果资产", tone: outputs.length ? "green" : "blue" },
     { label: "归档与状态", value: student.risk.level, note: `${student.risk.days} 天距最近实质性进展`, tone: student.risk.level === "正常" ? "green" : "amber" },
   ];
+  const pendingGuidance = student.progress.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review");
 
   return <main className="student-page">
     <nav className="student-page-nav"><Link href="/">← 返回驾驶舱</Link><span>探研 · 学生科研全景</span></nav>
 
     <header className="student-hero">
-      <div className="student-hero-profile"><div className="student-hero-avatar">{student.name.slice(-2)}</div><div><p>{student.gradeYear}级{student.degree} · {student.stage}</p><h1>{student.name}</h1><span className={`risk ${student.risk.level}`}>{student.risk.level}</span></div></div>
+      <div className="student-hero-profile"><div className="student-hero-avatar">{student.name.slice(-2)}</div><div><p>导师决策视图 · {student.gradeYear}级{student.degree}</p><h1>{student.name}</h1><div className="student-hero-tags"><span className={`risk ${student.risk.level}`}>{student.risk.level}</span><span>{student.stage}</span><span>{papers.length} 篇论文</span></div></div></div>
       <div className="student-hero-focus"><span>当前研究重点</span><strong>{student.currentFocus || "尚未填写"}</strong><small>{student.cadenceDays} 天更新周期 · 最近实质性进展 {dateText(student.lastSubstantiveAt)}</small></div>
+      <div className="student-hero-evidence" aria-label={`证据完备度 ${summary.evidencePercent}%`}>
+        <div style={{ background: `conic-gradient(#75d7ad ${summary.evidencePercent * 3.6}deg, rgba(255,255,255,.13) 0)` }}><span><strong>{summary.evidencePercent}%</strong><small>证据完备</small></span></div>
+        <p>{summary.sourceCount} 个来源 · {summary.attachmentCount} 个附件</p>
+      </div>
     </header>
 
     <nav className="student-section-nav" aria-label="学生档案章节">
-      <a href="#workflow">培养流程</a><a href="#outputs">科研成果</a><a href="#evidence">进展证据</a><a href="#proposal">研究方案</a><a href="#audit">审计记录</a>
+      <a href="#guidance">导师指导</a><a href="#papers">论文图谱</a><a href="#workflow">培养流程</a><a href="#evidence">进展证据</a><a href="#outputs">科研成果</a><a href="#proposal">研究方案</a><a href="#audit">审计记录</a>
     </nav>
 
     <section className={`student-next-action ${insights.action.tone}`}>
@@ -438,6 +525,49 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       <div><span>下一培养节点</span><strong>{insights.nextMilestone?.title || "培养节点已完成或待建立"}</strong><small>{insights.nextMilestone ? targetText(insights.nextMilestone.target_date, insights.nextMilestone.status) : "—"}</small></div>
       <div><span>下次更新窗口</span><strong>{insights.updateWindow}</strong><small>{student.cadenceDays} 天个人更新周期</small></div>
       <div><span>档案缺口</span><strong>{insights.missingInformation.length ? insights.missingInformation.join("、") : "核心档案完整"}</strong><small>{insights.missingInformation.length ? "补齐后可形成完整培养闭环" : "重点、方案、节点、证据与成果均可追溯"}</small></div>
+    </section>
+
+    <section className="student-guidance-workbench" id="guidance">
+      <div className="student-guidance-intro">
+        <div><span>MENTOR GUIDANCE DESK</span><h2>导师指导工作台</h2><p>从学生姓名进入后，可直接核验证据、写指导意见并形成审核判断；每次操作都会进入审计链。</p></div>
+        <strong>{pendingGuidance.length}<small>项待指导</small></strong>
+      </div>
+      <div className="student-guidance-steps" aria-label="导师指导闭环"><span><i>1</i><b>看新增结论</b><small>先判断学生本次真正推进了什么</small></span><span><i>2</i><b>核对证据</b><small>检查来源、附件与论文版本</small></span><span><i>3</i><b>给出判断</b><small>明确下一步或要求补充</small></span></div>
+      <div className="student-guidance-list">
+        {pendingGuidance.map((entry) => <article key={entry.id}>
+          <header><div className={`student-guidance-kind ${entry.paper ? "paper" : "general"}`}>{entry.paper ? "论" : entry.kind.slice(0, 1)}</div><div><span>{entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.kind}</span><h3>{entry.paper?.title || entry.title}</h3><small>{dateText(entry.submitted_at)} · {entry.evidence_sources.length} 个来源 · {entry.attachments.length} 个附件</small></div><em className={entry.review_status}>{reviewLabels[entry.review_status]}</em></header>
+          <div className="student-guidance-evidence"><div><span>新增结论</span><p>{entry.summary}</p></div><div><span>核验证据</span><p>{entry.evidence || "尚未填写"}</p></div>{entry.paper ? <div><span>下一行动</span><p>{entry.paper.next_action} · {entry.paper.next_action_due_date}</p></div> : null}</div>
+          <div className="student-guidance-assets" aria-label="待审核证据材料">
+            {entry.evidence_sources.filter((source) => source.source_type !== "attachment").map((source) => <span key={source.id}><b>{source.label}</b>{source.source_ref ? source.source_type === "git" || source.source_type === "url" ? <a href={source.source_ref} target="_blank" rel="noreferrer">打开来源 ↗</a> : <small>{source.source_ref}</small> : null}</span>)}
+            {entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><b>附件 · {attachment.file_name}</b><small>{Math.max(1, Math.round(attachment.size_bytes / 1024))} KB · 指纹 {attachment.content_sha256}</small></a>)}
+            {!entry.evidence_sources.some((source) => source.source_type !== "attachment") && !entry.attachments.length ? <span><b>仅有文本证据</b><small>如不足以判断，可要求学生补充来源或文件。</small></span> : null}
+          </div>
+          <label>导师指导意见<textarea rows={3} maxLength={3000} value={reviewNotes[entry.id] || ""} disabled={!entry.can_finalize} onChange={(event) => setReviewNotes((current) => ({ ...current, [entry.id]: event.target.value }))} placeholder="写清判断依据、需要修正的问题和下一项可交付成果；退回补证或判定非进展时必填。" /></label>
+          <footer>{entry.can_finalize ? <>{entry.review_status === "submitted" ? <button disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "start_review")}>接手审核</button> : null}<button className="approve" disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "substantive")}>确认实质性进展</button><button disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "supporting")}>记为支持性工作</button><button disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim()} onClick={() => void reviewProgress(entry, "supplement")}>要求补充证据</button><button className="reject" disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim()} onClick={() => void reviewProgress(entry, "rejected")}>不认定为进展</button></> : <p>{entry.reviewer_name ? `该记录正在由 ${entry.reviewer_name} 审核` : "该记录不可由当前账号审核"}</p>}</footer>
+        </article>)}
+        {!pendingGuidance.length ? <div className="student-guidance-clear"><i>✓</i><div><strong>当前没有待指导进展</strong><p>历史指导意见仍保留在下方证据时间线中。</p></div><a href="#evidence">查看完整证据链 ↓</a></div> : null}
+      </div>
+      {guidanceMessage ? <p className="student-guidance-message" role="status">{guidanceMessage}</p> : null}
+    </section>
+
+    <section className="student-paper-landscape" id="papers">
+      <div className="student-section-head"><div><span>PAPER LANDSCAPE</span><h2>论文推进图谱</h2><p>把每篇论文放在统一的九阶段门上，导师可以一眼看到当前位置、质量门、下一行动和投稿压力。</p></div><em>{papers.length}</em></div>
+      <div className="student-paper-landscape-list">
+        {papers.map((paper) => {
+          const currentIndex = paperStages.indexOf(paper.current_stage);
+          const deadline = paperDeadlineState(paper.planned_submission_date, new Date(PAGE_REFERENCE_TIME));
+          const latestUpdate = student.progress.find((entry) => entry.paper?.id === paper.id);
+          return <article key={paper.id}>
+            <header><div><span className={`paper-stage stage-${paper.current_stage}`}>{paperStageMeta[paper.current_stage].label}</span><span className={`student-paper-status ${paper.status}`}>{paperStatusLabels[paper.status]}</span></div><div className={`student-paper-deadline ${deadline.overdue ? "overdue" : ""}`}><small>计划投稿</small><strong>{deadline.label}</strong></div></header>
+            <div className="student-paper-title"><div><p>{paper.paper_type}{paper.target_venue ? ` · ${paper.target_venue}` : " · 投稿目标待确定"}</p><h3>{paper.title}</h3></div><dl><div><dt>版本进展</dt><dd>{paper.update_count} 次</dd></div><div><dt>待审</dt><dd>{paper.pending_count}</dd></div><div><dt>最新更新</dt><dd>{dateText(paper.latest_progress_at)}</dd></div></dl></div>
+            <ol className="paper-stage-roadmap" aria-label={`${paper.title}论文阶段`}>
+              {paperStages.map((stage, index) => <li key={stage} className={index < currentIndex ? "done" : index === currentIndex ? "current" : "upcoming"}><i>{index < currentIndex ? "✓" : index + 1}</i><span>{paperStageMeta[stage].label}</span></li>)}
+            </ol>
+            <div className="student-paper-decision"><div><span>当前质量门</span><strong>{paperStageMeta[paper.current_stage].gate}</strong></div><div><span>下一项可交付行动</span><strong>{latestUpdate?.paper?.next_action || "等待学生提交下一项具体行动"}</strong><small>{latestUpdate?.paper?.next_action_due_date || "期限待设置"}</small></div><div className={latestUpdate?.paper?.blocker ? "blocked" : ""}><span>阻塞与导师介入</span><strong>{latestUpdate?.paper?.blocker || "当前未报告阻塞"}</strong><small>{latestUpdate?.reviewer_note || "可在导师指导工作台中形成意见"}</small></div></div>
+          </article>;
+        })}
+        {!papers.length ? <div className="student-paper-empty"><span>论文台账尚未建立</span><strong>学生首次提交论文进度时，会在这里生成九阶段推进图谱。</strong><p>项目进展不会混入论文图谱。</p></div> : null}
+      </div>
     </section>
 
     <section className="student-flow-card" id="workflow">
@@ -460,6 +590,8 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       </article>
       <article className="student-page-panel student-activity-panel">
         <div className="student-section-head"><div><span>EVIDENCE ACTIVITY</span><h2>最近 8 周证据活动</h2><p>只统计个人进展记录数量，绿色标记其中的实质性进展。</p></div></div>
+        <div className="student-evidence-structure" aria-label="进展审核结构"><span><i className="substantive" />实质性 {summary.substantive}</span><span><i className="supporting" />支持性 {summary.supporting}</span><span><i className="pending" />待审核 {summary.pending}</span><span><i className="returned" />待补证 {summary.returned + summary.rejected}</span></div>
+        <div className="student-review-distribution" title="证据结构"><i className="substantive" style={{ flexGrow: summary.substantive }} /><i className="supporting" style={{ flexGrow: summary.supporting }} /><i className="pending" style={{ flexGrow: summary.pending }} /><i className="returned" style={{ flexGrow: summary.returned + summary.rejected }} />{!student.progress.length ? <i className="empty" style={{ flexGrow: 1 }} /> : null}</div>
         <div className="student-activity-bars">{insights.weeks.map((week) => <div key={week.start.toISOString()} title={`${week.label}：${week.count} 条进展，其中 ${week.substantive} 条实质性进展`}><strong>{week.count || "·"}</strong><span><i style={{ height: `${Math.max(week.count ? 15 : 5, (week.count / insights.maxActivity) * 100)}%` }} />{week.substantive ? <b style={{ height: `${Math.max(10, (week.substantive / insights.maxActivity) * 100)}%` }} /> : null}</span><small>{week.label}</small></div>)}</div>
       </article>
     </section>
