@@ -1,5 +1,7 @@
 import { ensureDatabase, getD1 } from "../../../lib/database";
+import { canReviewStudent, canViewStudent, getStudentScope, scopeSql } from "../../../lib/authorization";
 import { assertSameOrigin, requireAppUser } from "../../../lib/feishu-auth";
+import type { AppUser } from "../../../lib/feishu-auth";
 
 type ProposalStatus = "draft" | "submitted" | "changes_requested" | "approved";
 type MilestoneStatus = "pending" | "in_progress" | "completed" | "blocked";
@@ -123,16 +125,18 @@ function validateSubmission(fields: ReturnType<typeof proposalInput>, milestones
   if (incomplete >= 0) throw new InputError(`请完整填写第 ${incomplete + 1} 个培养节点的名称、日期和验收证据`);
 }
 
-async function readProposals(studentId?: string | null) {
+async function readProposals(user: AppUser) {
   const d1 = getD1();
+  const scope = await getStudentScope(user);
+  const proposalScope = scopeSql(scope, "rp.student_id");
   const statement = d1.prepare(`SELECT rp.*, s.display_name AS student_name, s.degree, s.grade_year
     FROM research_proposals rp
     JOIN students s ON s.id = rp.student_id
-    WHERE s.active = 1 ${studentId ? "AND rp.student_id = ?" : ""}
+    WHERE s.active = 1${proposalScope.clause}
     ORDER BY CASE rp.status WHEN 'submitted' THEN 0 WHEN 'changes_requested' THEN 1 WHEN 'draft' THEN 2 ELSE 3 END,
       rp.updated_at DESC`);
-  const result = studentId
-    ? await statement.bind(studentId).all<ProposalRow>()
+  const result = proposalScope.bindings.length
+    ? await statement.bind(...proposalScope.bindings).all<ProposalRow>()
     : await statement.all<ProposalRow>();
   const proposalIds = result.results.map((item) => item.id);
   if (!proposalIds.length) return [];
@@ -164,13 +168,13 @@ async function readProposals(studentId?: string | null) {
 
 export async function GET(request: Request) {
   try {
-    const auth = await requireAppUser(request, ["admin", "student"]);
+    const auth = await requireAppUser(request, ["admin", "mentor", "student"]);
     if ("response" in auth) return auth.response;
     if (auth.user.role === "student" && !auth.user.studentId) {
       return Response.json({ error: "飞书账号尚未绑定学生记录" }, { status: 403 });
     }
     await ensureDatabase();
-    const proposals = await readProposals(auth.user.role === "student" ? auth.user.studentId : null);
+    const proposals = await readProposals(auth.user);
     return Response.json({ proposals });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "研究方案读取失败" }, { status: 500 });
@@ -274,7 +278,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
-    const auth = await requireAppUser(request, ["admin", "student"]);
+    const auth = await requireAppUser(request, ["admin", "mentor", "student"]);
     if ("response" in auth) return auth.response;
     await ensureDatabase();
     const body = (await request.json()) as Record<string, unknown>;
@@ -292,8 +296,8 @@ export async function PATCH(request: Request) {
         WHERE m.id = ?`).bind(milestoneId)
         .first<{ id: number; proposal_id: number; title: string; student_id: string; proposal_status: ProposalStatus }>();
       if (!milestone) return Response.json({ error: "培养节点不存在" }, { status: 404 });
-      if (auth.user.role === "student" && auth.user.studentId !== milestone.student_id) {
-        return Response.json({ error: "学生只能更新自己的培养节点" }, { status: 403 });
+      if (!(await canViewStudent(auth.user, milestone.student_id))) {
+        return Response.json({ error: "无权更新该学生的培养节点" }, { status: 403 });
       }
       if (milestone.proposal_status !== "approved") {
         return Response.json({ error: "方案确认后才能更新培养节点执行状态" }, { status: 409 });
@@ -308,7 +312,7 @@ export async function PATCH(request: Request) {
       return Response.json({ message: "培养节点状态已更新" });
     }
 
-    if (auth.user.role !== "admin") return Response.json({ error: "只有管理员可以审核研究方案" }, { status: 403 });
+    if (auth.user.role !== "mentor") return Response.json({ error: "只有对应主导师可以审核研究方案" }, { status: 403 });
     if (!new Set(["approve", "request_changes", "reopen"]).has(action)) {
       return Response.json({ error: "审核操作无效" }, { status: 400 });
     }
@@ -318,9 +322,12 @@ export async function PATCH(request: Request) {
     if ((action === "request_changes" || action === "reopen") && !note) {
       return Response.json({ error: "退回或重开方案时必须填写具体意见" }, { status: 400 });
     }
-    const proposal = await d1.prepare("SELECT id, status, current_version FROM research_proposals WHERE id = ?")
-      .bind(proposalId).first<{ id: number; status: ProposalStatus; current_version: number }>();
+    const proposal = await d1.prepare("SELECT id, student_id, status, current_version FROM research_proposals WHERE id = ?")
+      .bind(proposalId).first<{ id: number; student_id: string; status: ProposalStatus; current_version: number }>();
     if (!proposal) return Response.json({ error: "研究方案不存在" }, { status: 404 });
+    if (!(await canReviewStudent(auth.user, proposal.student_id))) {
+      return Response.json({ error: "当前导师未被分配审核该学生" }, { status: 403 });
+    }
     if (action !== "reopen" && proposal.status !== "submitted") {
       return Response.json({ error: "只有待审核方案可以执行该操作" }, { status: 409 });
     }
@@ -329,14 +336,19 @@ export async function PATCH(request: Request) {
     }
 
     const nextStatus: ProposalStatus = action === "approve" ? "approved" : "changes_requested";
-    await d1.batch([
+    const detail = note || `确认第 ${proposal.current_version} 版`;
+    const [updateResult] = await d1.batch([
       d1.prepare(`UPDATE research_proposals SET status = ?, reviewer_note = ?, updated_at = CURRENT_TIMESTAMP,
-        approved_at = CASE WHEN ? = 'approved' THEN CURRENT_TIMESTAMP ELSE NULL END WHERE id = ?`)
-        .bind(nextStatus, note, nextStatus, proposalId),
+        approved_at = CASE WHEN ? = 'approved' THEN CURRENT_TIMESTAMP ELSE NULL END
+        WHERE id = ? AND status = ?`)
+        .bind(nextStatus, note, nextStatus, proposalId, proposal.status),
       d1.prepare(`INSERT INTO proposal_audit_events (proposal_id, actor_user_id, action, detail)
-        VALUES (?, ?, ?, ?)`)
-        .bind(proposalId, auth.user.id, action, note || `确认第 ${proposal.current_version} 版`),
+        SELECT ?, ?, ?, ? WHERE changes() > 0`)
+        .bind(proposalId, auth.user.id, action, detail),
     ]);
+    if (!updateResult.meta.changes) {
+      return Response.json({ error: "方案状态已被其他导师更新，请刷新后查看" }, { status: 409 });
+    }
     return Response.json({
       status: nextStatus,
       message: action === "approve" ? "研究方案已确认并冻结当前版本" : action === "reopen" ? "方案已重开，学生可以提交新版本" : "修改意见已退回学生",

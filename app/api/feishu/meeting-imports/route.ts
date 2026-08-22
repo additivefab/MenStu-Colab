@@ -1,5 +1,6 @@
 import { ensureDatabase, getD1 } from "../../../../lib/database";
 import { assertSameOrigin, requireAppUser } from "../../../../lib/feishu-auth";
+import { sha256Text } from "../../../../lib/progress-evidence";
 
 type ImportRow = {
   id: number;
@@ -27,6 +28,12 @@ function cleanText(value: unknown, maxLength: number) {
   const text = String(value ?? "").trim();
   if (text.length > maxLength) throw new InputError(`内容不能超过 ${maxLength} 个字符`);
   return text;
+}
+
+function importSourceType(value: string) {
+  if (/\/minutes\//iu.test(value)) return "feishu_minutes";
+  if (/\/docx\//iu.test(value)) return "feishu_docx";
+  return "feishu_message";
 }
 
 export async function GET(request: Request) {
@@ -75,9 +82,9 @@ export async function PATCH(request: Request) {
     const importId = Number(body.importId);
     if (!Number.isInteger(importId)) return Response.json({ error: "会议总结参数无效" }, { status: 400 });
     const d1 = getD1();
-    const source = await d1.prepare(`SELECT id, message_id, extracted_text, status
+    const source = await d1.prepare(`SELECT id, message_id, extracted_text, raw_content, status
       FROM feishu_meeting_summary_imports WHERE id = ?`).bind(importId)
-      .first<{ id: number; message_id: string; extracted_text: string; status: "pending" | "confirmed" | "ignored" }>();
+      .first<{ id: number; message_id: string; extracted_text: string; raw_content: string; status: "pending" | "confirmed" | "ignored" }>();
     if (!source) return Response.json({ error: "会议总结不存在" }, { status: 404 });
 
     if (action === "ignore") {
@@ -104,9 +111,9 @@ export async function PATCH(request: Request) {
     if (existing) return Response.json({ error: "该总结已经关联过这名学生" }, { status: 409 });
 
     const progress = await d1.prepare(`INSERT INTO progress_entries
-      (student_id, kind, title, summary, evidence, status)
-      VALUES (?, '组会', ?, ?, ?, 'pending') RETURNING id`)
-      .bind(studentId, title, source.extracted_text, `飞书 AI 会议总结 · 消息 ${source.message_id.slice(-10)}`)
+      (student_id, kind, title, summary, evidence, status, review_status, updated_at)
+      VALUES (?, '组会', ?, ?, ?, 'pending', 'submitted', CURRENT_TIMESTAMP) RETURNING id`)
+      .bind(studentId, title, source.extracted_text, "飞书 AI 会议总结 · 人工确认归属")
       .first<{ id: number }>();
     if (!progress?.id) throw new Error("无法建立进展草稿");
     createdProgressId = progress.id;
@@ -114,6 +121,20 @@ export async function PATCH(request: Request) {
       d1.prepare(`INSERT INTO feishu_meeting_summary_links
         (import_id, student_id, progress_entry_id) VALUES (?, ?, ?)`)
         .bind(importId, studentId, progress.id),
+      d1.prepare(`INSERT INTO progress_evidence_sources
+        (progress_entry_id, source_type, label, source_ref, source_import_id, content_sha256, occurred_at, created_by_user_id)
+        VALUES (?, ?, '飞书纪要人工归属', '', ?, ?, CURRENT_TIMESTAMP, ?)`)
+        .bind(
+          progress.id,
+          importSourceType(`${source.raw_content}\n${source.extracted_text}`),
+          importId,
+          await sha256Text(source.extracted_text),
+          auth.user.id,
+        ),
+      d1.prepare(`INSERT INTO progress_audit_events
+        (progress_entry_id, actor_user_id, actor_type, action, from_status, to_status, note)
+        VALUES (?, ?, 'user', 'manual_import_assignment', '', 'submitted', '无法自动归属，由管理员明确关联学生')`)
+        .bind(progress.id, auth.user.id),
       d1.prepare(`UPDATE feishu_meeting_summary_imports SET status = 'confirmed',
         chat_id = '', sender_id = '', sender_type = '', raw_content = '',
         reviewed_by_user_id = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?`)

@@ -76,7 +76,7 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(proposals, /管理员只能撰写与本人绑定的研究方案/);
   assert.match(proposals, /research_proposal_versions/);
   assert.match(proposals, /proposal_audit_events/);
-  assert.match(proposals, /只有管理员可以审核研究方案/);
+  assert.match(proposals, /只有对应主导师可以审核研究方案/);
   assert.match(proposalMigration, /CREATE TABLE `research_proposals`/);
   assert.match(proposalMigration, /CREATE UNIQUE INDEX `idx_proposal_versions_proposal_number`/);
   assert.match(dashboard, /飞书 AI 会议总结自动归档/);
@@ -84,7 +84,7 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /导师行动台/);
   assert.match(dashboard, /未来 7 天更新/);
   assert.match(studentOverview, /科研培养流程图/);
-  assert.match(studentOverview, /个人进展时间线/);
+  assert.match(studentOverview, /个人进展与证据链/);
   assert.match(studentOverview, /培养计划进度/);
   assert.match(studentOverview, /最近 8 周证据活动/);
   assert.match(studentOverview, /\/api\/dashboard/);

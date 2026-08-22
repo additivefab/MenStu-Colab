@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 declare global {
   interface Window {
@@ -27,10 +27,33 @@ type StudentProgress = {
   title: string;
   summary: string;
   evidence: string;
+  literature_ref: string;
+  git_url: string;
   status: "pending" | "substantive" | "supporting" | "supplement" | "rejected";
+  review_status: "submitted" | "in_review" | "accepted" | "changes_requested" | "rejected";
+  assessment: "substantive" | "supporting" | null;
   reviewer_note: string;
+  reviewer_name: string | null;
   submitted_at: string;
   reviewed_at: string | null;
+  evidence_sources: Array<{
+    id: number;
+    source_type: string;
+    label: string;
+    source_ref: string;
+    content_sha256: string;
+  }>;
+  audit: Array<{
+    id: number;
+    action: string;
+    from_status: string;
+    to_status: string;
+    assessment: string;
+    note: string;
+    created_at: string;
+    actor_name: string | null;
+    actor_type: string;
+  }>;
 };
 
 type Student = {
@@ -44,6 +67,10 @@ type Student = {
   lastSubstantiveAt: string | null;
   latestTitle: string;
   latestKind: string;
+  proposalStatus: ProposalStatus | null;
+  nextMilestone: string | null;
+  nextMilestoneDate: string | null;
+  outputCount: number;
   risk: { level: RiskLevel; days: number };
   progress: StudentProgress[];
 };
@@ -58,6 +85,10 @@ type PendingEntry = {
   evidence: string;
   literature_ref: string;
   git_url: string;
+  review_status: "submitted" | "in_review";
+  reviewer_name: string | null;
+  can_finalize: boolean;
+  evidence_sources: StudentProgress["evidence_sources"];
   submitted_at: string;
 };
 
@@ -125,16 +156,28 @@ type DashboardData = {
   viewer: {
     name: string;
     avatarUrl: string;
-    role: "admin" | "student";
+    role: "admin" | "mentor" | "student";
     studentId: string | null;
   };
   students: Student[];
   pending: PendingEntry[];
+  workflowTasks: Array<{
+    id: number;
+    type: "proposal_review" | "blocked_milestone" | "overdue_milestone";
+    studentId: string;
+    studentName: string;
+    title: string;
+    detail: string;
+    targetDate: string | null;
+  }>;
   metrics: {
     total: number;
     doctors: number;
     masters: number;
     pending: number;
+    proposalPending: number;
+    blocked: number;
+    outputs: number;
     attention: number;
     riskCounts: Record<string, number>;
   };
@@ -200,6 +243,7 @@ export default function Dashboard() {
   const [submitOpen, setSubmitOpen] = useState(false);
   const [feishuOpen, setFeishuOpen] = useState(false);
   const [reviewBusy, setReviewBusy] = useState<number | null>(null);
+  const [reviewNotes, setReviewNotes] = useState<Record<number, string>>({});
   const [toast, setToast] = useState("");
   const [authGate, setAuthGate] = useState<AuthGate | null>(null);
 
@@ -254,16 +298,24 @@ export default function Dashboard() {
   }, [data, degreeFilter, query, riskFilter]);
 
   async function review(entry: PendingEntry, action: string) {
+    if (!entry.can_finalize) {
+      setToast(entry.reviewer_name ? `该证据正在由 ${entry.reviewer_name} 审核` : "当前账号没有导师审核权限");
+      return;
+    }
+    if ((action === "supplement" || action === "rejected") && !(reviewNotes[entry.id] || "").trim()) {
+      setToast("退回补证或判定为非进展时，必须先填写具体理由");
+      return;
+    }
     setReviewBusy(entry.id);
     try {
       const response = await fetch("/api/reviews", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: entry.id, action }),
+        body: JSON.stringify({ id: entry.id, action, note: reviewNotes[entry.id] || "" }),
       });
       const result = (await response.json()) as { error?: string; message?: string };
       if (!response.ok) throw new Error(result.error || "审核失败");
-      setToast(action === "substantive" ? "已确认为实质性进展" : "审核结果已保存");
+      setToast(action === "start_review" ? "已接手审核" : action === "substantive" ? "已确认为实质性进展" : "审核结果已保存");
       await loadDashboard();
     } catch (reviewError) {
       setToast(reviewError instanceof Error ? reviewError.message : "审核失败");
@@ -301,7 +353,11 @@ export default function Dashboard() {
 
   const visibleNavItems = data?.viewer.role === "student"
     ? navItems.filter((item) => ["overview", "students", "proposals", "meetings"].includes(item.id))
-    : navItems;
+    : data?.viewer.role === "mentor"
+      ? navItems.filter((item) => ["overview", "students", "proposals", "reviews", "meetings"].includes(item.id))
+      : navItems;
+
+  const viewerRoleLabel = data?.viewer.role === "admin" ? "系统管理员" : data?.viewer.role === "mentor" ? "导师" : "学生";
 
   return (
     <main className="app-shell">
@@ -321,7 +377,7 @@ export default function Dashboard() {
         <div className="privacy-note"><span>AI 数据边界已启用</span><small>代码与保密项目仅限本地模型</small></div>
         <div className="sidebar-foot">
           <div className="avatar">{data?.viewer.name.slice(0, 1) || "佘"}</div>
-          <div><strong>{data?.viewer.name || "佘阳"}</strong><span>{data?.viewer.role === "student" ? "学生" : "管理员"}</span></div>
+          <div><strong>{data?.viewer.name || "佘阳"}</strong><span>{viewerRoleLabel}</span></div>
         </div>
       </aside>
 
@@ -336,7 +392,7 @@ export default function Dashboard() {
           </div>
           <div className="top-actions">
             <button className="feishu connected" onClick={() => setFeishuOpen(true)}><i />飞书已登录</button>
-            <button className="primary" onClick={() => setSubmitOpen(true)}>＋ 提交进展</button>
+            {data?.viewer.role !== "mentor" ? <button className="primary" onClick={() => setSubmitOpen(true)}>＋ 提交进展</button> : null}
           </div>
         </header>
 
@@ -347,7 +403,7 @@ export default function Dashboard() {
           <>
             <OverviewMetrics data={data} />
 
-            <ActionBoard data={data} onReviews={() => setView("reviews")} />
+            <ActionBoard data={data} onReviews={() => setView("reviews")} onProposals={() => setView("proposals")} />
 
             <div className="content-grid">
               <section className="panel student-panel">
@@ -358,7 +414,7 @@ export default function Dashboard() {
 
               <aside className="right-column">
                 <section className="panel decisions">
-                  <PanelHeader title="待您确认" subtitle="四类判断，不进行综合打分" count={data.metrics.pending} />
+                  <PanelHeader title={data.viewer.role === "mentor" ? "待您确认" : "待导师确认"} subtitle="正式科研判断仅由对应主导师完成" count={data.metrics.pending} />
                   {data.pending.slice(0, 3).map((entry) => (
                     <button className="decision-card" key={entry.id} onClick={() => setView("reviews")}>
                       <span className={`decision-icon kind-${entry.kind}`}>{entry.kind.slice(0, 1)}</span>
@@ -402,17 +458,42 @@ export default function Dashboard() {
                 <div className="review-card-head">
                   <span className={`decision-icon kind-${entry.kind}`}>{entry.kind.slice(0, 1)}</span>
                   <div><h2>{entry.title}</h2><p>{entry.display_name} · {entry.kind} · {shortDate(entry.submitted_at)}提交</p></div>
+                  <span className={`status-pill ${entry.review_status === "in_review" ? "reviewing" : "pending"}`}>
+                    {entry.review_status === "in_review" ? `${entry.reviewer_name || "导师"}审核中` : "等待接手"}
+                  </span>
                 </div>
                 <div className="review-evidence">
                   <div><span>新增结论</span><p>{entry.summary}</p></div>
                   <div><span>证据</span><p>{entry.evidence}</p></div>
                   {entry.literature_ref ? <div><span>论文 / DOI</span><p>{entry.literature_ref}</p></div> : null}
                 </div>
+                <div className="evidence-source-list" aria-label="证据来源">
+                  {entry.evidence_sources.map((source) => <span key={source.id}>
+                    <b>{source.label}</b>
+                    {source.source_ref ? source.source_type === "git" || source.source_type === "url"
+                      ? <a href={source.source_ref} target="_blank" rel="noreferrer">打开外部证据</a>
+                      : <small>{source.source_ref}</small> : null}
+                    {source.content_sha256 ? <em>指纹 {source.content_sha256}</em> : null}
+                  </span>)}
+                  {!entry.evidence_sources.length ? <span><b>历史文本证据</b><small>来源结构化将在下次补证时建立</small></span> : null}
+                </div>
+                <label className="review-note-field">导师审核意见
+                  <textarea
+                    rows={3}
+                    value={reviewNotes[entry.id] || ""}
+                    onChange={(event) => setReviewNotes((current) => ({ ...current, [entry.id]: event.target.value }))}
+                    disabled={!entry.can_finalize}
+                    placeholder="需要补充或判定为非进展时必须说明具体理由"
+                  />
+                </label>
                 <div className="review-actions" aria-label="进展判断">
-                  <button disabled={reviewBusy === entry.id} className="approve" onClick={() => void review(entry, "substantive")}>实质性进展</button>
-                  <button disabled={reviewBusy === entry.id} onClick={() => void review(entry, "supporting")}>支持性工作</button>
-                  <button disabled={reviewBusy === entry.id} onClick={() => void review(entry, "supplement")}>需要补充</button>
-                  <button disabled={reviewBusy === entry.id} onClick={() => void review(entry, "rejected")}>非进展</button>
+                  {entry.can_finalize ? <>
+                    {entry.review_status === "submitted" ? <button disabled={reviewBusy === entry.id} onClick={() => void review(entry, "start_review")}>接手审核</button> : null}
+                    <button disabled={reviewBusy === entry.id} className="approve" onClick={() => void review(entry, "substantive")}>实质性进展</button>
+                    <button disabled={reviewBusy === entry.id} onClick={() => void review(entry, "supporting")}>支持性工作</button>
+                    <button disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim()} title="请先填写具体理由" onClick={() => void review(entry, "supplement")}>需要补充</button>
+                    <button disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim()} title="请先填写具体理由" onClick={() => void review(entry, "rejected")}>非进展</button>
+                  </> : <p>{entry.reviewer_name ? `由 ${entry.reviewer_name} 审核中` : "仅该学生的主导师可以作出正式判断"}</p>}
                 </div>
               </article>
             ))}
@@ -447,14 +528,14 @@ function OverviewMetrics({ data }: { data: DashboardData }) {
     </section>;
   }
   return <section className="metric-grid" aria-label="课题组概况">
-    <article className="metric"><span>在组学生</span><strong>{data.metrics.total}</strong><small>{data.metrics.doctors} 博士 · {data.metrics.masters} 硕士</small></article>
-    <article className="metric"><span>当前无需预警</span><strong>{data.metrics.total - data.metrics.attention}</strong><small className="positive">首次导入从纳入管理日期计时</small></article>
-    <article className="metric"><span>等待您确认</span><strong>{data.metrics.pending}</strong><small>可在行动台快速进入审核</small></article>
+    <article className="metric"><span>{data.viewer.role === "mentor" ? "负责学生" : "在组学生"}</span><strong>{data.metrics.total}</strong><small>{data.metrics.doctors} 博士 · {data.metrics.masters} 硕士</small></article>
+    <article className="metric"><span>科研成果与资产</span><strong>{data.metrics.outputs}</strong><small className="positive">论文、数据、软件、专利与交付物</small></article>
+    <article className="metric"><span>待我处理</span><strong>{data.metrics.pending + data.metrics.proposalPending + data.metrics.blocked}</strong><small>证据 {data.metrics.pending} · 方案 {data.metrics.proposalPending} · 节点 {data.metrics.blocked}</small></article>
     <article className="metric attention"><span>需要关注</span><strong>{data.metrics.attention}</strong><small>黄 {data.metrics.riskCounts.黄色 ?? 0} · 橙 {data.metrics.riskCounts.橙色 ?? 0} · 红 {data.metrics.riskCounts.红色 ?? 0}</small></article>
   </section>;
 }
 
-function ActionBoard({ data, onReviews }: { data: DashboardData; onReviews: () => void }) {
+function ActionBoard({ data, onReviews, onProposals }: { data: DashboardData; onReviews: () => void; onProposals: () => void }) {
   const allRiskStudents = [...data.students]
     .filter((student) => student.risk.level !== "正常")
     .sort((a, b) => b.risk.days - a.risk.days);
@@ -464,11 +545,32 @@ function ActionBoard({ data, onReviews }: { data: DashboardData; onReviews: () =
   const riskStudents = allRiskStudents.slice(0, 3);
   const dueStudents = allDueStudents.slice(0, 3);
   const isStudent = data.viewer.role === "student";
+  const staffTasks = [
+    ...data.workflowTasks.map((task) => ({
+      key: `${task.type}-${task.id}`,
+      href: task.type === "proposal_review" ? "" : `/students/${encodeURIComponent(task.studentId)}#milestones`,
+      action: task.type === "proposal_review" ? "proposals" as const : "link" as const,
+      student: task.studentName,
+      title: task.title,
+      label: task.type === "proposal_review" ? "方案待审" : task.type === "blocked_milestone" ? "节点受阻" : "节点逾期",
+    })),
+    ...data.pending.map((entry) => ({
+      key: `progress-${entry.id}`,
+      href: "",
+      action: "reviews" as const,
+      student: entry.display_name,
+      title: entry.title,
+      label: entry.review_status === "in_review" ? "继续审核" : "证据待审",
+    })),
+  ];
 
   return <section className="panel action-board">
-    <div className="action-board-head"><div><span>ROLE WORKSPACE</span><h2>{isStudent ? "我的下一步" : "导师行动台"}</h2><p>{isStudent ? "把等待反馈、当前状态和下次更新集中在一个入口。" : "先处理等待决策的事项，再跟进风险和即将到期的更新。"}</p></div><small>只给行动排序，不对学生综合评分</small></div>
+    <div className="action-board-head"><div><span>ROLE WORKSPACE</span><h2>{isStudent ? "我的下一步" : data.viewer.role === "mentor" ? "导师行动台" : "科研管理行动台"}</h2><p>{isStudent ? "把等待反馈、当前状态和下次更新集中在一个入口。" : "先处理等待决策的事项，再跟进风险和即将到期的更新。"}</p></div><small>只给行动排序，不对学生综合评分</small></div>
     <div className="action-board-grid">
-      <article><header><i className="review">审</i><div><strong>{isStudent ? "等待导师反馈" : "待审核证据"}</strong><span>{data.pending.length} 项</span></div></header><div className="action-items">{data.pending.slice(0, 3).map((entry) => isStudent ? <Link key={entry.id} href={`/students/${encodeURIComponent(entry.student_id)}`}><span><b>{entry.display_name}</b><small>{entry.title}</small></span><em>查看</em></Link> : <button key={entry.id} onClick={onReviews}><span><b>{entry.display_name}</b><small>{entry.title}</small></span><em>去审核</em></button>)}{!data.pending.length ? <p>目前没有等待审核的进展</p> : null}</div></article>
+      <article><header><i className="review">审</i><div><strong>{isStudent ? "等待导师反馈" : "待我处理"}</strong><span>{isStudent ? data.pending.length : staffTasks.length} 项</span></div></header><div className="action-items">
+        {isStudent ? data.pending.slice(0, 4).map((entry) => <Link key={entry.id} href={`/students/${encodeURIComponent(entry.student_id)}#evidence`}><span><b>{entry.display_name}</b><small>{entry.title}</small></span><em>查看</em></Link>) : staffTasks.slice(0, 4).map((task) => task.href ? <Link key={task.key} href={task.href}><span><b>{task.student}</b><small>{task.title}</small></span><em>{task.label}</em></Link> : <button key={task.key} onClick={task.action === "proposals" ? onProposals : onReviews}><span><b>{task.student}</b><small>{task.title}</small></span><em>{task.label}</em></button>)}
+        {(isStudent ? !data.pending.length : !staffTasks.length) ? <p>目前没有等待处理的事项</p> : null}
+      </div></article>
       <article><header><i className="risking">险</i><div><strong>{isStudent ? "当前培养状态" : "风险随访"}</strong><span>{allRiskStudents.length} 人</span></div></header><div className="action-items">{riskStudents.map((student) => <Link key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><span><b>{student.name}</b><small>{student.risk.days} 天无实质性进展</small></span><em className={`risk ${student.risk.level}`}>{student.risk.level}</em></Link>)}{!riskStudents.length ? <p>当前没有需要风险随访的学生</p> : null}</div></article>
       <article><header><i className="due">期</i><div><strong>未来 7 天更新</strong><span>{allDueStudents.length} 人</span></div></header><div className="action-items">{dueStudents.map((student) => { const remaining = student.cadenceDays - daysSinceLatestSubmission(student); return <Link key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><span><b>{student.name}</b><small>{student.cadenceDays} 天个人更新周期</small></span><em>{remaining < 0 ? "已到期" : remaining === 0 ? "今天" : `${remaining} 天后`}</em></Link>; })}{!dueStudents.length ? <p>未来 7 天暂无计划更新</p> : null}</div></article>
     </div>
@@ -483,17 +585,36 @@ function StudentFilters({ query, setQuery, riskFilter, setRiskFilter, degreeFilt
   degreeFilter: "全部" | Student["degree"];
   setDegreeFilter: (value: "全部" | Student["degree"]) => void;
 }) {
-  return <div className="filter-bar"><label><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索学生、阶段或研究方向" /></label><div className="filter-groups"><div className="filter-set"><span>层次</span><div className="filter-chips degree-chips">{(["全部", "博士", "硕士"] as const).map((degree) => <button className={degreeFilter === degree ? "selected" : ""} key={degree} onClick={() => setDegreeFilter(degree)}>{degree}</button>)}</div></div><div className="filter-set"><span>风险</span><div className="filter-chips">{(["全部", "正常", "黄色", "橙色", "红色"] as const).map((risk) => <button className={riskFilter === risk ? "selected" : ""} key={risk} onClick={() => setRiskFilter(risk)}>{risk}</button>)}</div></div></div></div>;
+  return <div className="filter-bar"><label><span aria-hidden="true">⌕</span><input aria-label="搜索学生" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索学生、阶段或研究方向" /></label><div className="filter-groups"><div className="filter-set"><span>层次</span><div className="filter-chips degree-chips" role="group" aria-label="按培养层次筛选">{(["全部", "博士", "硕士"] as const).map((degree) => <button type="button" aria-pressed={degreeFilter === degree} className={degreeFilter === degree ? "selected" : ""} key={degree} onClick={() => setDegreeFilter(degree)}>{degree}</button>)}</div></div><div className="filter-set"><span>风险</span><div className="filter-chips" role="group" aria-label="按风险筛选">{(["全部", "正常", "黄色", "橙色", "红色"] as const).map((risk) => <button type="button" aria-pressed={riskFilter === risk} className={riskFilter === risk ? "selected" : ""} key={risk} onClick={() => setRiskFilter(risk)}>{risk}</button>)}</div></div></div></div>;
 }
 
 function StudentTable({ students }: { students: Student[] }) {
-  return <div className="student-table"><div className="table-row table-head"><span>学生</span><span>当前阶段</span><span>最近实质性进展</span><span>状态</span></div>{students.map((student) => <Link className="table-row student-row" key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><div className="student-name"><div className="mini-avatar">{student.name.slice(-2)}</div><div><strong>{student.name}</strong><small>{student.gradeYear}级{student.degree} · {student.cadenceDays}天更新</small></div></div><div><span className="stage-tag">{student.stage}</span></div><div className="progress-copy"><strong>{student.latestTitle}</strong><small><em>{student.latestKind}</em>{sinceText(student.risk.days)}</small></div><div><span className={`risk ${student.risk.level}`}>{student.risk.level}</span></div></Link>)}{!students.length ? <div className="empty-small">没有符合条件的学生</div> : null}</div>;
+  return <div className="student-table"><div className="table-row table-head"><span>学生</span><span>当前阶段</span><span>下一行动</span><span>科研成果</span><span>状态</span></div>{students.map((student) => <Link className="table-row student-row" key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><div className="student-name"><div className="mini-avatar">{student.name.slice(-2)}</div><div><strong>{student.name}</strong><small>{student.gradeYear}级{student.degree} · {student.cadenceDays}天更新</small></div></div><div><span className="stage-tag">{student.stage}</span></div><div className="progress-copy"><strong>{student.nextMilestone || student.latestTitle}</strong><small><em>{student.nextMilestone ? "培养节点" : student.latestKind}</em>{student.nextMilestoneDate ? shortDate(student.nextMilestoneDate) : sinceText(student.risk.days)}</small></div><div className="output-count"><strong>{student.outputCount}</strong><small>论文/数据/软件等</small></div><div><span className={`risk ${student.risk.level}`}>{student.risk.level}</span></div></Link>)}{!students.length ? <div className="empty-small">没有符合条件的学生</div> : null}</div>;
 }
 
 function ProgressModal({ students, onClose, onSaved }: { students: Student[]; onClose: () => void; onSaved: () => Promise<void> }) {
   const [kind, setKind] = useState("文献");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])") ?? []);
+    focusable()[0]?.focus();
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => { document.removeEventListener("keydown", onKeyDown); previousFocus?.focus(); };
+  }, [onClose]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setFormError("");
     const values = Object.fromEntries(new FormData(event.currentTarget));
@@ -504,7 +625,7 @@ function ProgressModal({ students, onClose, onSaved }: { students: Student[]; on
       await onSaved();
     } catch (submitError) { setFormError(submitError instanceof Error ? submitError.message : "提交失败"); setBusy(false); }
   }
-  return <div className="modal-layer"><div className="modal"><button className="close" onClick={onClose}>×</button><div className="modal-title"><span>新增进展记录</span><h2>这次工作产生了什么新信息？</h2><p>不按工作量打分，只记录结论与可核验的证据。</p></div><form onSubmit={submit}><div className="form-row"><label>学生<select name="studentId" required defaultValue={students[0]?.id}>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label><label>进展类型<select name="kind" value={kind} onChange={(event) => setKind(event.target.value)}>{progressKinds.map((item) => <option key={item}>{item}</option>)}</select></label></div><label>进展标题<input name="title" required placeholder="例如：完成跨材料泛化验证" /></label><label>新增结论<textarea name="summary" required rows={3} placeholder="本次工作确认、排除或发现了什么？" /></label><label>证据<textarea name="evidence" required rows={2} placeholder="实验编号、图表、记录位置或 Git 提交号" /></label>{kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required placeholder="至少提供可识别的论文题目或 DOI" /></label> : <input type="hidden" name="literatureRef" value="" />}<label>私有 GitHub 链接（可选）<input name="gitUrl" placeholder="只保存链接；完整代码由本地 Agent 读取" /></label>{formError ? <p className="form-error">{formError}</p> : null}<div className="modal-actions"><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={busy}>{busy ? "提交中…" : "提交给导师确认"}</button></div></form></div></div>;
+  return <div className="modal-layer" role="presentation"><div className="modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="progress-dialog-title"><button className="close" aria-label="关闭提交进展对话框" onClick={onClose}>×</button><div className="modal-title"><span>新增进展记录</span><h2 id="progress-dialog-title">这次工作产生了什么新信息？</h2><p>不按工作量打分，只记录结论与可核验的证据。</p></div><form onSubmit={submit}><div className="form-row"><label>学生<select name="studentId" required defaultValue={students[0]?.id}>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label><label>进展类型<select name="kind" value={kind} onChange={(event) => setKind(event.target.value)}>{progressKinds.map((item) => <option key={item}>{item}</option>)}</select></label></div><label>进展标题<input name="title" required placeholder="例如：完成跨材料泛化验证" /></label><label>新增结论<textarea name="summary" required rows={3} placeholder="本次工作确认、排除或发现了什么？" /></label><label>证据<textarea name="evidence" required rows={2} placeholder="实验编号、图表、记录位置或 Git 提交号" /></label>{kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required placeholder="至少提供可识别的论文题目或 DOI" /></label> : <input type="hidden" name="literatureRef" value="" />}<label>私有 GitHub 链接（可选）<input name="gitUrl" type="url" placeholder="只保存 HTTPS 链接；完整代码由本地 Agent 读取" /></label>{formError ? <p className="form-error">{formError}</p> : null}<div className="modal-actions"><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={busy}>{busy ? "提交中…" : "提交给导师确认"}</button></div></form></div></div>;
 }
 
 function ProposalWorkspace({ viewer, students, onToast }: {
@@ -583,9 +704,9 @@ function ProposalWorkspace({ viewer, students, onToast }: {
       onRefresh={load}
     /> : null}
 
-    {viewer.role === "admin" ? <section className="proposal-admin-layout">
+    {viewer.role !== "student" ? <section className="proposal-admin-layout">
       <div className="panel proposal-list-panel">
-        <PanelHeader title="全部研究方案" subtitle="优先显示待审核与待修改方案" count={proposals.length} />
+        <PanelHeader title={viewer.role === "mentor" ? "负责学生的研究方案" : "全部研究方案"} subtitle="优先显示待审核与待修改方案" count={proposals.length} />
         <div className="proposal-list">
           {proposals.map((proposal) => <button key={proposal.id} className={selectedId === proposal.id ? "selected" : ""} onClick={() => setSelectedId(proposal.id)}>
             <span className={`proposal-status ${proposal.status}`}>{proposalStatusMeta[proposal.status].label}</span>
@@ -595,7 +716,7 @@ function ProposalWorkspace({ viewer, students, onToast }: {
           {!proposals.length ? <div className="empty-small">学生提交研究方案后会显示在这里。</div> : null}
         </div>
       </div>
-      <div>{selected ? <ProposalDetail proposal={selected} canReview onToast={onToast} onRefresh={load} /> : <div className="empty-state"><span>◇</span><strong>暂无研究方案</strong><small>学生可以在自己的飞书账号中开始撰写。</small></div>}</div>
+      <div>{selected ? <ProposalDetail proposal={selected} canReview={viewer.role === "mentor"} onToast={onToast} onRefresh={load} /> : <div className="empty-state"><span>◇</span><strong>暂无研究方案</strong><small>学生可以在自己的飞书账号中开始撰写。</small></div>}</div>
     </section> : null}
   </div>;
 }
@@ -743,7 +864,8 @@ function ProposalDetail({ proposal, canReview, onToast, onRefresh }: {
 }
 
 function FeishuModal({ viewer, onClose, onLogout }: { viewer: DashboardData["viewer"]; onClose: () => void; onLogout: () => Promise<void> }) {
-  return <div className="modal-layer"><div className="modal compact-modal"><button className="close" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2>{viewer.name}，飞书身份已验证</h2><p>当前角色：{viewer.role === "admin" ? "管理员" : "学生"}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按每名学生的 7/14/21/30 天周期发送</small></span><em>下一步</em></div><div><b>3</b><span><strong>智能纪要个人进展</strong><small>自动识别学生姓名并把科研部分拆成独立进展</small></span><em className="done">已接入</em></div></div><div className="safe-banner">普通聊天会在接收时立即过滤且不落库；纪要只能在学生归属明确时自动建个人进展，正式评价仍由导师完成。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
+  const roleLabel = viewer.role === "admin" ? "管理员" : viewer.role === "mentor" ? "导师" : "学生";
+  return <div className="modal-layer" role="presentation"><div className="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="feishu-dialog-title"><button className="close" aria-label="关闭" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2 id="feishu-dialog-title">{viewer.name}，飞书身份已验证</h2><p>当前角色：{roleLabel}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按每名学生的 7/14/21/30 天周期发送</small></span><em>下一步</em></div><div><b>3</b><span><strong>智能纪要个人进展</strong><small>自动识别学生姓名并把科研部分拆成独立进展</small></span><em className="done">已接入</em></div></div><div className="safe-banner">普通聊天会在接收时立即过滤且不落库；纪要只能在学生归属明确时自动建个人进展，正式评价仍由导师完成。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
 }
 
 function MeetingView({ viewer, students, onRemind }: { viewer: DashboardData["viewer"]; students: Student[]; onRemind: (student: Student) => Promise<void> }) {
@@ -815,7 +937,7 @@ function FeishuMeetingImports({ students }: { students: Student[] }) {
 }
 
 function SettingsView({ onFeishu, students, onRosterImported }: { onFeishu: () => void; students: Student[]; onRosterImported: () => Promise<void> }) {
-  return <div className="settings-grid"><RosterImport students={students} onImported={onRosterImported} /><section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、提醒与 AI 会议总结导入" /><div className="setting-body"><span className="status-pill safe">智能拆分已启用</span><p>普通聊天即时过滤；智能纪要会按学生姓名和汇报分段生成个人进展，归属不明确时才进入备用人工区。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section><section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><button>稍后连接 GitHub App</button></div></section><section className="panel setting-card"><PanelHeader title="TUM 论文流程参考" subtitle="MIT 开源许可 · 本系统保持独立技术架构" /><div className="setting-body"><span className="status-pill safe">流程已移植</span><p>借鉴研究方案提交、版本历史、导师退回与确认、权限矩阵和审计留痕；飞书身份及科研证据评价仍由本系统负责。</p><a className="setting-link" href="https://github.com/ls1intum/thesis-management" target="_blank" rel="noreferrer">查看原项目与许可证</a></div></section><AccountManagement students={students} /><section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section></div>;
+  return <div className="settings-grid"><RosterImport students={students} onImported={onRosterImported} /><section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、提醒与 AI 会议总结导入" /><div className="setting-body"><span className="status-pill safe">智能拆分已启用</span><p>普通聊天即时过滤；智能纪要会按学生姓名和汇报分段生成个人进展，归属不明确时才进入备用人工区。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section><section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><button>稍后连接 GitHub App</button></div></section><section className="panel setting-card"><PanelHeader title="开源流程参考" subtitle="TUM · Moodle · OSIRIS · eLabFTW" /><div className="setting-body"><span className="status-pill safe">模式已吸收</span><p>采用方案版本、角色权限、待办审核、成果台账与证据溯源等成熟模式；未复制第三方界面或业务代码。</p><div className="reference-links"><a href="https://github.com/ls1intum/thesis-management" target="_blank" rel="noreferrer">TUM</a><a href="https://github.com/moodle/moodle" target="_blank" rel="noreferrer">Moodle</a><a href="https://github.com/OSIRIS-Solutions/osiris" target="_blank" rel="noreferrer">OSIRIS</a><a href="https://github.com/elabftw/elabftw" target="_blank" rel="noreferrer">eLabFTW</a></div></div></section><AccountManagement students={students} /><section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section></div>;
 }
 
 function RosterImport({ students, onImported }: { students: Student[]; onImported: () => Promise<void> }) {
@@ -844,15 +966,18 @@ type ManagedUser = {
   display_name: string;
   avatar_url: string;
   email: string;
-  role: "admin" | "student" | "pending";
+  role: "admin" | "mentor" | "student" | "pending";
   student_id: string | null;
   student_name: string | null;
+  mentor_student_ids: string[];
   last_login_at: string;
 };
 
 function AccountManagement({ students }: { students: Student[] }) {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [choices, setChoices] = useState<Record<number, string>>({});
+  const [roleChoices, setRoleChoices] = useState<Record<number, ManagedUser["role"]>>({});
+  const [mentorChoices, setMentorChoices] = useState<Record<number, string[]>>({});
   const [busy, setBusy] = useState<number | null>(null);
   const [message, setMessage] = useState("");
 
@@ -860,21 +985,31 @@ function AccountManagement({ students }: { students: Student[] }) {
     const response = await fetch("/api/users", { cache: "no-store" });
     const payload = (await response.json()) as { users?: ManagedUser[]; error?: string };
     if (!response.ok) throw new Error(payload.error || "账号列表加载失败");
-    setUsers(payload.users ?? []);
-  }, []);
+    const nextUsers = payload.users ?? [];
+    setUsers(nextUsers);
+    setRoleChoices(Object.fromEntries(nextUsers.map((user) => [user.id, user.role])));
+    setChoices(Object.fromEntries(nextUsers.map((user) => [user.id, user.student_id || students[0]?.id || ""])));
+    setMentorChoices(Object.fromEntries(nextUsers.map((user) => [user.id, user.mentor_student_ids ?? []])));
+  }, [students]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadUsers().catch((error: Error) => setMessage(error.message)), 0);
     return () => window.clearTimeout(timer);
   }, [loadUsers]);
 
-  async function updateUser(user: ManagedUser, role: "student" | "pending") {
+  async function updateUser(user: ManagedUser) {
+    const role = roleChoices[user.id] || user.role;
     setBusy(user.id); setMessage("");
     try {
       const response = await fetch("/api/users", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: user.id, role, studentId: role === "student" ? choices[user.id] || students[0]?.id : null }),
+        body: JSON.stringify({
+          userId: user.id,
+          role,
+          studentId: role === "student" ? choices[user.id] || students[0]?.id : null,
+          studentIds: role === "mentor" ? mentorChoices[user.id] || [] : [],
+        }),
       });
       const payload = (await response.json()) as { error?: string; message?: string };
       if (!response.ok) throw new Error(payload.error || "账号更新失败");
@@ -885,7 +1020,21 @@ function AccountManagement({ students }: { students: Student[] }) {
     } finally { setBusy(null); }
   }
 
-  return <section className="panel account-panel"><PanelHeader title="飞书账号与学生绑定" subtitle="新用户先进入等待状态，由您确认后才能访问数据" count={users.length} /><div className="account-list">{users.map((user) => <div className="account-row" key={user.id}><div className="account-person"><div className="mini-avatar">{user.display_name.slice(0, 1)}</div><span><strong>{user.display_name}</strong><small>{user.email || "飞书成员"}</small></span></div>{user.role === "admin" ? <><span className="status-pill safe">管理员</span>{user.student_name ? <span className="bound-student">本人学生记录：{user.student_name}</span> : null}</> : user.role === "student" ? <><span className="bound-student">已绑定：{user.student_name}</span><button disabled={busy === user.id} onClick={() => void updateUser(user, "pending")}>解除</button></> : <><select value={choices[user.id] || students[0]?.id || ""} onChange={(event) => setChoices((current) => ({ ...current, [user.id]: event.target.value }))}>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select><button className="bind" disabled={busy === user.id} onClick={() => void updateUser(user, "student")}>{busy === user.id ? "绑定中…" : "确认绑定"}</button></>}</div>)}{!users.length ? <div className="empty-small">学生第一次从飞书打开应用后，账号会出现在这里。</div> : null}</div>{message ? <div className="account-message">{message}</div> : null}</section>;
+  return <section className="panel account-panel"><PanelHeader title="飞书账号、导师与学生授权" subtitle="导师默认看不到任何学生；必须在这里显式分配，服务端才会放行" count={users.length} /><div className="account-list">{users.map((user) => {
+    const selectedRole = roleChoices[user.id] || user.role;
+    const assigned = mentorChoices[user.id] || [];
+    return <div className="account-row" key={user.id}>
+      <div className="account-person"><div className="mini-avatar">{user.display_name.slice(0, 1)}</div><span><strong>{user.display_name}</strong><small>{user.email || "飞书成员"}</small></span></div>
+      {user.role === "admin" ? <><span className="status-pill safe">管理员</span>{user.student_name ? <span className="bound-student">本人学生记录：{user.student_name}</span> : null}</> : <>
+        <div className="account-role-editor">
+          <label>角色<select value={selectedRole} onChange={(event) => setRoleChoices((current) => ({ ...current, [user.id]: event.target.value as ManagedUser["role"] }))}><option value="pending">等待授权</option><option value="student">学生</option><option value="mentor">导师</option></select></label>
+          {selectedRole === "student" ? <label>绑定学生<select value={choices[user.id] || students[0]?.id || ""} onChange={(event) => setChoices((current) => ({ ...current, [user.id]: event.target.value }))}>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label> : null}
+          {selectedRole === "mentor" ? <fieldset className="mentor-assignment"><legend>负责学生（{assigned.length}）</legend><div>{students.map((student) => <label key={student.id}><input type="checkbox" checked={assigned.includes(student.id)} onChange={(event) => setMentorChoices((current) => ({ ...current, [user.id]: event.target.checked ? [...(current[user.id] || []), student.id] : (current[user.id] || []).filter((id) => id !== student.id) }))} /><span>{student.name}</span><small>{student.degree}</small></label>)}</div></fieldset> : null}
+        </div>
+        <button className="bind" disabled={busy === user.id || (selectedRole === "student" && !students.length)} onClick={() => void updateUser(user)}>{busy === user.id ? "保存中…" : "保存授权"}</button>
+      </>}
+    </div>;
+  })}{!users.length ? <div className="empty-small">成员第一次从飞书打开应用后，账号会出现在这里。</div> : null}</div>{message ? <div className="account-message" role="status">{message}</div> : null}</section>;
 }
 
 function FeishuAccessGate({ gate, onAuthenticated }: { gate: AuthGate; onAuthenticated: () => Promise<void> }) {

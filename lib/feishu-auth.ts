@@ -4,7 +4,7 @@ import { ensureDatabase, getD1 } from "./database";
 const SESSION_COOKIE = "tanyan_session";
 const SESSION_DAYS = 14;
 
-export type AppRole = "admin" | "student" | "pending";
+export type AppRole = "admin" | "mentor" | "student" | "pending";
 
 export type AppUser = {
   id: number;
@@ -34,7 +34,7 @@ type UserRow = {
   display_name: string;
   avatar_url: string;
   email: string;
-  role: AppRole;
+  role: string;
   student_id: string | null;
 };
 
@@ -150,13 +150,16 @@ async function hashToken(value: string) {
 }
 
 function mapUser(row: UserRow): AppUser {
+  const role: AppRole = ["admin", "mentor", "student", "pending"].includes(row.role)
+    ? row.role as AppRole
+    : "pending";
   return {
     id: row.id,
     feishuOpenId: row.feishu_open_id,
     displayName: row.display_name,
     avatarUrl: row.avatar_url,
     email: row.email,
-    role: row.role,
+    role,
     studentId: row.student_id,
   };
 }

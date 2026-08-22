@@ -34,12 +34,23 @@ export const progressEntries = sqliteTable(
     })
       .notNull()
       .default("pending"),
+    reviewStatus: text("review_status", {
+      enum: ["submitted", "in_review", "accepted", "changes_requested", "rejected"],
+    })
+      .notNull()
+      .default("submitted"),
+    assessment: text("assessment", { enum: ["substantive", "supporting"] }),
+    submittedByUserId: integer("submitted_by_user_id"),
+    reviewedByUserId: integer("reviewed_by_user_id"),
     reviewerNote: text("reviewer_note").notNull().default(""),
     reviewedAt: text("reviewed_at"),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     index("idx_progress_student_submitted").on(table.studentId, table.submittedAt),
     index("idx_progress_status").on(table.status, table.submittedAt),
+    index("idx_progress_review_status").on(table.reviewStatus, table.submittedAt),
+    index("idx_progress_reviewer").on(table.reviewedByUserId, table.reviewStatus),
   ],
 );
 
@@ -53,7 +64,7 @@ export const appUsers = sqliteTable(
     displayName: text("display_name").notNull(),
     avatarUrl: text("avatar_url").notNull().default(""),
     email: text("email").notNull().default(""),
-    role: text("role", { enum: ["admin", "student", "pending"] })
+    role: text("role", { enum: ["admin", "mentor", "student", "pending"] })
       .notNull()
       .default("pending"),
     studentId: text("student_id").references(() => students.id),
@@ -65,6 +76,30 @@ export const appUsers = sqliteTable(
     uniqueIndex("idx_app_users_feishu_open_id").on(table.feishuOpenId),
     index("idx_app_users_role").on(table.role),
     uniqueIndex("idx_app_users_student_id_unique").on(table.studentId),
+  ],
+);
+
+export const mentorStudentAssignments = sqliteTable(
+  "mentor_student_assignments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    mentorUserId: integer("mentor_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    studentId: text("student_id")
+      .notNull()
+      .references(() => students.id),
+    relationship: text("relationship", { enum: ["primary", "co"] })
+      .notNull()
+      .default("primary"),
+    canReview: integer("can_review", { mode: "boolean" }).notNull().default(true),
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_mentor_student_unique").on(table.mentorUserId, table.studentId),
+    index("idx_mentor_active_students").on(table.mentorUserId, table.active, table.studentId),
+    index("idx_student_active_mentors").on(table.studentId, table.active, table.mentorUserId),
   ],
 );
 
@@ -82,6 +117,27 @@ export const appSessions = sqliteTable(
     index("idx_app_sessions_user").on(table.appUserId),
     index("idx_app_sessions_expires").on(table.expiresAt),
   ],
+);
+
+export const progressAuditEvents = sqliteTable(
+  "progress_audit_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    progressEntryId: integer("progress_entry_id")
+      .notNull()
+      .references(() => progressEntries.id),
+    actorUserId: integer("actor_user_id").references(() => appUsers.id),
+    actorType: text("actor_type", { enum: ["user", "system", "feishu", "legacy"] })
+      .notNull()
+      .default("user"),
+    action: text("action").notNull(),
+    fromStatus: text("from_status").notNull().default(""),
+    toStatus: text("to_status").notNull().default(""),
+    assessment: text("assessment").notNull().default(""),
+    note: text("note").notNull().default(""),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("idx_progress_audit_entry_created").on(table.progressEntryId, table.createdAt)],
 );
 
 export const researchProposals = sqliteTable(
@@ -165,6 +221,57 @@ export const researchMilestones = sqliteTable(
   (table) => [index("idx_research_milestones_proposal_order").on(table.proposalId, table.sortOrder)],
 );
 
+export const researchOutputs = sqliteTable(
+  "research_outputs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    studentId: text("student_id")
+      .notNull()
+      .references(() => students.id),
+    outputType: text("output_type", {
+      enum: ["paper", "dataset", "software", "patent", "report", "presentation", "other"],
+    }).notNull(),
+    title: text("title").notNull(),
+    lifecycleStatus: text("lifecycle_status", {
+      enum: ["planned", "in_progress", "submitted", "accepted", "published", "archived"],
+    })
+      .notNull()
+      .default("planned"),
+    venue: text("venue").notNull().default(""),
+    identifier: text("identifier").notNull().default(""),
+    url: text("url").notNull().default(""),
+    summary: text("summary").notNull().default(""),
+    linkedMilestoneId: integer("linked_milestone_id").references(() => researchMilestones.id),
+    createdByUserId: integer("created_by_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_research_outputs_student_updated").on(table.studentId, table.updatedAt),
+    index("idx_research_outputs_status").on(table.lifecycleStatus, table.updatedAt),
+  ],
+);
+
+export const researchOutputEvents = sqliteTable(
+  "research_output_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    outputId: integer("output_id")
+      .notNull()
+      .references(() => researchOutputs.id),
+    actorUserId: integer("actor_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    action: text("action").notNull(),
+    detail: text("detail").notNull().default(""),
+    snapshotJson: text("snapshot_json").notNull().default("{}"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("idx_research_output_events_output").on(table.outputId, table.createdAt)],
+);
+
 export const proposalAuditEvents = sqliteTable(
   "proposal_audit_events",
   {
@@ -228,5 +335,29 @@ export const feishuMeetingSummaryLinks = sqliteTable(
   (table) => [
     uniqueIndex("idx_feishu_summary_link_import_student").on(table.importId, table.studentId),
     index("idx_feishu_summary_link_student").on(table.studentId, table.createdAt),
+  ],
+);
+
+export const progressEvidenceSources = sqliteTable(
+  "progress_evidence_sources",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    progressEntryId: integer("progress_entry_id")
+      .notNull()
+      .references(() => progressEntries.id),
+    sourceType: text("source_type", {
+      enum: ["manual", "feishu_docx", "feishu_minutes", "feishu_message", "git", "doi", "url", "external"],
+    }).notNull(),
+    label: text("label").notNull(),
+    sourceRef: text("source_ref").notNull().default(""),
+    sourceImportId: integer("source_import_id").references(() => feishuMeetingSummaryImports.id),
+    contentSha256: text("content_sha256").notNull().default(""),
+    occurredAt: text("occurred_at"),
+    createdByUserId: integer("created_by_user_id").references(() => appUsers.id),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_progress_evidence_entry").on(table.progressEntryId, table.createdAt),
+    index("idx_progress_evidence_import").on(table.sourceImportId),
   ],
 );

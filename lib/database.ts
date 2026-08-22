@@ -47,6 +47,18 @@ export function getD1() {
   return env.DB;
 }
 
+async function ensureColumn(table: "progress_entries", column: string, definition: string) {
+  const d1 = getD1();
+  const { results } = await d1.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
+  if (results.some((item) => item.name === column)) return;
+  try {
+    await d1.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+  } catch (error) {
+    const current = await d1.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
+    if (!current.results.some((item) => item.name === column)) throw error;
+  }
+}
+
 export async function ensureDatabase() {
   const d1 = getD1();
   await d1.batch([
@@ -74,8 +86,13 @@ export async function ensureDatabase() {
       git_url TEXT NOT NULL DEFAULT '',
       submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       status TEXT NOT NULL DEFAULT 'pending',
+      review_status TEXT NOT NULL DEFAULT 'submitted',
+      assessment TEXT,
+      submitted_by_user_id INTEGER,
+      reviewed_by_user_id INTEGER,
       reviewer_note TEXT NOT NULL DEFAULT '',
-      reviewed_at TEXT
+      reviewed_at TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS app_users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,6 +112,27 @@ export async function ensureDatabase() {
       token_hash TEXT PRIMARY KEY,
       app_user_id INTEGER NOT NULL REFERENCES app_users(id),
       expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS mentor_student_assignments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      mentor_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      student_id TEXT NOT NULL REFERENCES students(id),
+      relationship TEXT NOT NULL DEFAULT 'primary',
+      can_review INTEGER NOT NULL DEFAULT 1,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS progress_audit_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      progress_entry_id INTEGER NOT NULL REFERENCES progress_entries(id),
+      actor_user_id INTEGER REFERENCES app_users(id),
+      actor_type TEXT NOT NULL DEFAULT 'user',
+      action TEXT NOT NULL,
+      from_status TEXT NOT NULL DEFAULT '',
+      to_status TEXT NOT NULL DEFAULT '',
+      assessment TEXT NOT NULL DEFAULT '',
+      note TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS research_proposals (
@@ -139,6 +177,30 @@ export async function ensureDatabase() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS research_outputs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id TEXT NOT NULL REFERENCES students(id),
+      output_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      lifecycle_status TEXT NOT NULL DEFAULT 'planned',
+      venue TEXT NOT NULL DEFAULT '',
+      identifier TEXT NOT NULL DEFAULT '',
+      url TEXT NOT NULL DEFAULT '',
+      summary TEXT NOT NULL DEFAULT '',
+      linked_milestone_id INTEGER REFERENCES research_milestones(id),
+      created_by_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS research_output_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      output_id INTEGER NOT NULL REFERENCES research_outputs(id),
+      actor_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      action TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      snapshot_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS proposal_audit_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       proposal_id INTEGER NOT NULL REFERENCES research_proposals(id),
@@ -171,6 +233,18 @@ export async function ensureDatabase() {
       progress_entry_id INTEGER NOT NULL REFERENCES progress_entries(id),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS progress_evidence_sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      progress_entry_id INTEGER NOT NULL REFERENCES progress_entries(id),
+      source_type TEXT NOT NULL,
+      label TEXT NOT NULL,
+      source_ref TEXT NOT NULL DEFAULT '',
+      source_import_id INTEGER REFERENCES feishu_meeting_summary_imports(id),
+      content_sha256 TEXT NOT NULL DEFAULT '',
+      occurred_at TEXT,
+      created_by_user_id INTEGER REFERENCES app_users(id),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_student_submitted ON progress_entries(student_id, submitted_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_status ON progress_entries(status, submitted_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_feishu_open_id ON app_users(feishu_open_id)"),
@@ -178,17 +252,85 @@ export async function ensureDatabase() {
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_student_id_unique ON app_users(student_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_sessions_user ON app_sessions(app_user_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_sessions_expires ON app_sessions(expires_at)"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_mentor_student_unique ON mentor_student_assignments(mentor_user_id, student_id)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_mentor_active_students ON mentor_student_assignments(mentor_user_id, active, student_id)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_active_mentors ON mentor_student_assignments(student_id, active, mentor_user_id)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_audit_entry_created ON progress_audit_events(progress_entry_id, created_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_research_proposals_student_unique ON research_proposals(student_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_proposals_status_updated ON research_proposals(status, updated_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_proposal_versions_proposal_number ON research_proposal_versions(proposal_id, version_number)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_proposal_versions_created ON research_proposal_versions(proposal_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_milestones_proposal_order ON research_milestones(proposal_id, sort_order)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_outputs_student_updated ON research_outputs(student_id, updated_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_outputs_status ON research_outputs(lifecycle_status, updated_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_output_events_output ON research_output_events(output_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_proposal_audit_proposal_created ON proposal_audit_events(proposal_id, created_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_summary_event_unique ON feishu_meeting_summary_imports(event_id)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_summary_message_unique ON feishu_meeting_summary_imports(message_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_feishu_summary_status_received ON feishu_meeting_summary_imports(status, received_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_summary_link_import_student ON feishu_meeting_summary_links(import_id, student_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_feishu_summary_link_student ON feishu_meeting_summary_links(student_id, created_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_evidence_entry ON progress_evidence_sources(progress_entry_id, created_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_evidence_import ON progress_evidence_sources(source_import_id)"),
+  ]);
+
+  await ensureColumn("progress_entries", "review_status", "TEXT NOT NULL DEFAULT 'submitted'");
+  await ensureColumn("progress_entries", "assessment", "TEXT");
+  await ensureColumn("progress_entries", "submitted_by_user_id", "INTEGER REFERENCES app_users(id)");
+  await ensureColumn("progress_entries", "reviewed_by_user_id", "INTEGER REFERENCES app_users(id)");
+  await ensureColumn("progress_entries", "updated_at", "TEXT");
+
+  await d1.batch([
+    d1.prepare(`UPDATE progress_entries SET
+      review_status = CASE status
+        WHEN 'substantive' THEN 'accepted'
+        WHEN 'supporting' THEN 'accepted'
+        WHEN 'supplement' THEN 'changes_requested'
+        WHEN 'rejected' THEN 'rejected'
+        ELSE 'submitted'
+      END,
+      assessment = CASE status
+        WHEN 'substantive' THEN 'substantive'
+        WHEN 'supporting' THEN 'supporting'
+        ELSE NULL
+      END,
+      updated_at = COALESCE(reviewed_at, submitted_at, CURRENT_TIMESTAMP)
+      WHERE updated_at IS NULL`),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_review_status ON progress_entries(review_status, submitted_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_reviewer ON progress_entries(reviewed_by_user_id, review_status)"),
+    d1.prepare(`INSERT INTO progress_audit_events
+      (progress_entry_id, actor_type, action, from_status, to_status, assessment, note, created_at)
+      SELECT p.id, 'legacy', 'legacy_review', 'submitted', p.review_status,
+        COALESCE(p.assessment, ''), p.reviewer_note, COALESCE(p.reviewed_at, p.submitted_at)
+      FROM progress_entries p
+      WHERE p.review_status != 'submitted'
+        AND NOT EXISTS (SELECT 1 FROM progress_audit_events a WHERE a.progress_entry_id = p.id)`),
+    d1.prepare(`INSERT INTO progress_evidence_sources
+      (progress_entry_id, source_type, label, source_ref, source_import_id, occurred_at)
+      SELECT l.progress_entry_id,
+        CASE WHEN i.raw_content LIKE '%/minutes/%' OR i.extracted_text LIKE '%飞书妙记 AI 会议纪要%' THEN 'feishu_minutes'
+          WHEN i.raw_content LIKE '%/docx/%' OR i.extracted_text LIKE '%飞书智能纪要 AI 文档%' THEN 'feishu_docx'
+          ELSE 'feishu_message' END,
+        CASE WHEN i.raw_content LIKE '%/minutes/%' OR i.extracted_text LIKE '%飞书妙记 AI 会议纪要%' THEN '飞书妙记导入'
+          WHEN i.raw_content LIKE '%/docx/%' OR i.extracted_text LIKE '%飞书智能纪要 AI 文档%' THEN '飞书智能纪要文档导入'
+          ELSE '飞书智能纪要导入' END,
+        '', l.import_id, i.message_created_at
+      FROM feishu_meeting_summary_links l
+      JOIN feishu_meeting_summary_imports i ON i.id = l.import_id
+      WHERE NOT EXISTS (
+        SELECT 1 FROM progress_evidence_sources e
+        WHERE e.progress_entry_id = l.progress_entry_id AND e.source_import_id = l.import_id
+      )`),
+    d1.prepare(`INSERT INTO progress_evidence_sources
+      (progress_entry_id, source_type, label, source_ref, occurred_at, created_by_user_id)
+      SELECT p.id,
+        CASE WHEN p.git_url != '' THEN 'git' WHEN p.literature_ref != '' THEN 'doi' ELSE 'manual' END,
+        CASE WHEN p.git_url != '' THEN '历史 Git 证据'
+          WHEN p.literature_ref != '' THEN '历史论文或 DOI' ELSE '历史文本证据' END,
+        CASE WHEN p.git_url != '' THEN p.git_url WHEN p.literature_ref != '' THEN p.literature_ref ELSE '' END,
+        p.submitted_at, p.submitted_by_user_id
+      FROM progress_entries p
+      WHERE NOT EXISTS (SELECT 1 FROM progress_evidence_sources e WHERE e.progress_entry_id = p.id)`),
     d1.prepare("PRAGMA optimize"),
   ]);
 
@@ -218,9 +360,15 @@ export async function ensureDatabase() {
     const student = demoStudents.find((item) => item.id === entry[0])!;
     return d1
       .prepare(`INSERT INTO progress_entries
-        (student_id, kind, title, summary, evidence, submitted_at, status, reviewed_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'substantive', ?)`)
-      .bind(entry[0], entry[1], entry[2], entry[3], entry[4], isoDaysAgo(student.daysSinceProgress), isoDaysAgo(Math.max(0, student.daysSinceProgress - 1)));
+        (student_id, kind, title, summary, evidence, submitted_at, status,
+         review_status, assessment, reviewed_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'substantive', 'accepted', 'substantive', ?, ?)`)
+      .bind(
+        entry[0], entry[1], entry[2], entry[3], entry[4],
+        isoDaysAgo(student.daysSinceProgress),
+        isoDaysAgo(Math.max(0, student.daysSinceProgress - 1)),
+        isoDaysAgo(Math.max(0, student.daysSinceProgress - 1)),
+      );
   });
 
   const pending = [

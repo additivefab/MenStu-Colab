@@ -1,4 +1,5 @@
 import { ensureDatabase, getD1 } from "../../../../lib/database";
+import { canViewStudent } from "../../../../lib/authorization";
 import {
   assertSameOrigin,
   requireAppUser,
@@ -17,13 +18,16 @@ export async function POST(request: Request) {
     if (!assertSameOrigin(request)) {
       return Response.json({ error: "请求来源无效" }, { status: 403 });
     }
-    const auth = await requireAppUser(request, ["admin"]);
+    const auth = await requireAppUser(request, ["admin", "mentor"]);
     if ("response" in auth) return auth.response;
     const body = (await request.json()) as { studentId?: string };
     const studentId = body.studentId?.trim() ?? "";
     if (!studentId) return Response.json({ error: "缺少学生记录" }, { status: 400 });
 
     await ensureDatabase();
+    if (!(await canViewStudent(auth.user, studentId))) {
+      return Response.json({ error: "当前导师未负责该学生" }, { status: 403 });
+    }
     const recipient = await getD1().prepare(`SELECT
       u.feishu_open_id, s.display_name, s.cadence_days, s.stage
       FROM app_users u JOIN students s ON s.id = u.student_id

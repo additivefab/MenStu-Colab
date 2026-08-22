@@ -1,6 +1,7 @@
 import { ensureDatabase, getD1 } from "./database";
 import { detectMeetingSummary, extractFeishuMessageText } from "./feishu-events";
 import { splitMeetingProgressByStudent } from "./feishu-progress-extraction";
+import { sha256Text } from "./progress-evidence";
 
 export type FeishuMessageEvent = {
   sender?: {
@@ -22,7 +23,20 @@ function isoFromMilliseconds(value: string | undefined) {
   return Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp).toISOString() : new Date().toISOString();
 }
 
-async function autoCreateStudentProgress(importId: number, messageId: string, extractedText: string) {
+function sourceType(value: string) {
+  if (/\/minutes\//iu.test(value)) return "feishu_minutes";
+  if (/\/docx\//iu.test(value)) return "feishu_docx";
+  return "feishu_message";
+}
+
+function sourceLabel(value: string) {
+  const type = sourceType(value);
+  if (type === "feishu_minutes") return "飞书妙记导入";
+  if (type === "feishu_docx") return "飞书智能纪要文档导入";
+  return "飞书智能纪要导入";
+}
+
+async function autoCreateStudentProgress(importId: number, extractedText: string, sourceText: string) {
   const d1 = getD1();
   const students = await d1.prepare("SELECT id, display_name FROM students WHERE active = 1")
     .all<{ id: string; display_name: string }>();
@@ -37,27 +51,34 @@ async function autoCreateStudentProgress(importId: number, messageId: string, ex
     const existing = await d1.prepare(`SELECT progress_entry_id FROM feishu_meeting_summary_links
       WHERE import_id = ? AND student_id = ?`).bind(importId, draft.studentId)
       .first<{ progress_entry_id: number }>();
-    const evidence = `飞书智能纪要自动拆分 · 识别学生 ${draft.studentName} · 消息 ${messageId.slice(-10)}`;
     if (existing) {
-      await d1.prepare(`UPDATE progress_entries SET title = ?, summary = ?, evidence = ?
-        WHERE id = ? AND student_id = ? AND status = 'pending'`)
-        .bind(draft.title, draft.summary, evidence, existing.progress_entry_id, draft.studentId).run();
       linkedNames.push(draft.studentName);
       continue;
     }
 
+    const evidence = `飞书智能纪要自动拆分 · 识别学生 ${draft.studentName}`;
     let progressId: number | null = null;
     try {
       const progress = await d1.prepare(`INSERT INTO progress_entries
-        (student_id, kind, title, summary, evidence, status)
-        VALUES (?, '组会', ?, ?, ?, 'pending') RETURNING id`)
+        (student_id, kind, title, summary, evidence, status, review_status, updated_at)
+        VALUES (?, '组会', ?, ?, ?, 'pending', 'submitted', CURRENT_TIMESTAMP) RETURNING id`)
         .bind(draft.studentId, draft.title, draft.summary, evidence)
         .first<{ id: number }>();
       progressId = progress?.id ?? null;
       if (!progressId) throw new Error("无法生成学生个人进展");
-      await d1.prepare(`INSERT INTO feishu_meeting_summary_links
-        (import_id, student_id, progress_entry_id) VALUES (?, ?, ?)`)
-        .bind(importId, draft.studentId, progressId).run();
+      await d1.batch([
+        d1.prepare(`INSERT INTO feishu_meeting_summary_links
+          (import_id, student_id, progress_entry_id) VALUES (?, ?, ?)`)
+          .bind(importId, draft.studentId, progressId),
+        d1.prepare(`INSERT INTO progress_evidence_sources
+          (progress_entry_id, source_type, label, source_ref, source_import_id, content_sha256, occurred_at)
+          VALUES (?, ?, ?, '', ?, ?, CURRENT_TIMESTAMP)`)
+          .bind(progressId, sourceType(sourceText), sourceLabel(sourceText), importId, await sha256Text(draft.summary)),
+        d1.prepare(`INSERT INTO progress_audit_events
+          (progress_entry_id, actor_type, action, from_status, to_status, note)
+          VALUES (?, 'feishu', 'auto_import', '', 'submitted', '归属明确，自动生成个人待审核进展')`)
+          .bind(progressId),
+      ]);
       linkedNames.push(draft.studentName);
       progressId = null;
     } catch (error) {
@@ -116,7 +137,14 @@ export async function stageFeishuMeetingSummary(eventId: string, event: FeishuMe
   if (!source || source.status === "ignored") {
     return { staged: (result.meta.changes ?? 0) > 0, filtered: false, autoAssigned: false };
   }
-  const automatic = await autoCreateStudentProgress(source.id, message.message_id, extractedText);
+  if (source.status === "confirmed") {
+    return { staged: false, filtered: false, autoAssigned: true, studentNames: [] as string[] };
+  }
+  const automatic = await autoCreateStudentProgress(
+    source.id,
+    extractedText,
+    `${rawContent}\n${extractedText}`,
+  );
   return {
     staged: (result.meta.changes ?? 0) > 0,
     filtered: false,
