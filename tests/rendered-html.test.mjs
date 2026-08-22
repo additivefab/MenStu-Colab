@@ -25,9 +25,20 @@ test("server-renders the research progress application shell", async () => {
   assert.match(html, /AI 数据边界已启用/);
 });
 
+test("server-renders the standalone student overview route", async () => {
+  const response = await render("/students/student-002");
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+
+  const html = await response.text();
+  assert.match(html, /学生科研全景/);
+  assert.match(html, /正在整理学生科研全景/);
+});
+
 test("keeps the database and Feishu boundaries explicit in source", async () => {
-  const [dashboard, database, feishuAuth, browserStart, browserCallback, rosterImport, proposals, proposalMigration, feishuEvents, feishuEventRoute, feishuMessageImport, feishuLongConnection, feishuBridge, meetingImports, feishuMigration, hosting, packageJson] = await Promise.all([
+  const [dashboard, studentOverview, database, feishuAuth, browserStart, browserCallback, rosterImport, proposals, proposalMigration, feishuEvents, feishuEventRoute, feishuMessageImport, feishuLongConnection, feishuBridge, meetingImports, feishuMigration, hosting, packageJson] = await Promise.all([
     readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/students/[id]/student-overview.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/database.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/feishu-auth.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/auth/feishu/browser/start/route.ts", import.meta.url), "utf8"),
@@ -69,7 +80,11 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(proposalMigration, /CREATE TABLE `research_proposals`/);
   assert.match(proposalMigration, /CREATE UNIQUE INDEX `idx_proposal_versions_proposal_number`/);
   assert.match(dashboard, /飞书 AI 会议总结自动归档/);
-  assert.match(dashboard, /个人进展记录/);
+  assert.match(dashboard, /\/students\/\$\{encodeURIComponent\(student\.id\)\}/);
+  assert.match(studentOverview, /科研培养流程图/);
+  assert.match(studentOverview, /个人进展时间线/);
+  assert.match(studentOverview, /\/api\/dashboard/);
+  assert.match(studentOverview, /\/api\/proposals/);
   assert.match(feishuEvents, /x-lark-signature/);
   assert.match(feishuEvents, /iv: encrypted\.slice\(0, 16\)/);
   assert.match(feishuEvents, /encrypted\.slice\(16\)/);

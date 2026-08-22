@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 declare global {
@@ -154,13 +155,6 @@ const navItems = [
 ] as const;
 
 const progressKinds = ["文献", "实验", "算法", "数据", "论文", "复现", "项目", "组会"];
-const progressStatusLabels: Record<StudentProgress["status"], string> = {
-  pending: "待审核",
-  substantive: "实质性进展",
-  supporting: "支持性工作",
-  supplement: "需要补充",
-  rejected: "非进展",
-};
 
 const proposalStatusMeta: Record<ProposalStatus, { label: string; hint: string }> = {
   draft: { label: "草稿", hint: "仅本人和管理员可见" },
@@ -194,7 +188,6 @@ export default function Dashboard() {
   const [view, setView] = useState<(typeof navItems)[number]["id"]>("overview");
   const [query, setQuery] = useState("");
   const [riskFilter, setRiskFilter] = useState<"全部" | RiskLevel>("全部");
-  const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [submitOpen, setSubmitOpen] = useState(false);
   const [feishuOpen, setFeishuOpen] = useState(false);
   const [reviewBusy, setReviewBusy] = useState<number | null>(null);
@@ -353,7 +346,7 @@ export default function Dashboard() {
               <section className="panel student-panel">
                 <PanelHeader title="学生进展" subtitle="按距离上次实质性进展的时间排序" action={`查看全部 ${data.metrics.total} 人 →`} onAction={() => setView("students")} />
                 <StudentFilters query={query} setQuery={setQuery} riskFilter={riskFilter} setRiskFilter={setRiskFilter} />
-                <StudentTable students={filteredStudents.slice(0, 8)} onSelect={setSelectedStudent} />
+                <StudentTable students={filteredStudents.slice(0, 8)} />
               </section>
 
               <aside className="right-column">
@@ -383,7 +376,7 @@ export default function Dashboard() {
           <section className="panel roster-panel">
             <PanelHeader title="全部学生" subtitle="博士与硕士均已纳入首批试用" count={filteredStudents.length} />
             <StudentFilters query={query} setQuery={setQuery} riskFilter={riskFilter} setRiskFilter={setRiskFilter} />
-            <StudentTable students={filteredStudents} onSelect={setSelectedStudent} />
+            <StudentTable students={filteredStudents} />
           </section>
         ) : null}
 
@@ -424,7 +417,6 @@ export default function Dashboard() {
         {!loading && !error && view === "settings" && data ? <SettingsView onFeishu={() => setFeishuOpen(true)} students={data.students} onRosterImported={async () => { setToast("真实学生名册已导入"); await loadDashboard(); }} /> : null}
       </section>
 
-      {selectedStudent ? <StudentDrawer student={selectedStudent} onClose={() => setSelectedStudent(null)} /> : null}
       {submitOpen && data ? <ProgressModal students={data.students} onClose={() => setSubmitOpen(false)} onSaved={async () => { setSubmitOpen(false); setToast("进展已提交，等待导师确认"); await loadDashboard(); }} /> : null}
       {feishuOpen && data ? <FeishuModal viewer={data.viewer} onClose={() => setFeishuOpen(false)} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.reload(); }} /> : null}
       {toast ? <div className="toast" role="status">{toast}</div> : null}
@@ -445,12 +437,8 @@ function StudentFilters({ query, setQuery, riskFilter, setRiskFilter }: {
   return <div className="filter-bar"><label><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索学生、阶段或研究方向" /></label><div className="filter-chips">{(["全部", "正常", "黄色", "橙色", "红色"] as const).map((risk) => <button className={riskFilter === risk ? "selected" : ""} key={risk} onClick={() => setRiskFilter(risk)}>{risk}</button>)}</div></div>;
 }
 
-function StudentTable({ students, onSelect }: { students: Student[]; onSelect: (student: Student) => void }) {
-  return <div className="student-table"><div className="table-row table-head"><span>学生</span><span>当前阶段</span><span>最近实质性进展</span><span>状态</span></div>{students.map((student) => <button className="table-row student-row" key={student.id} onClick={() => onSelect(student)}><div className="student-name"><div className="mini-avatar">{student.name.slice(-2)}</div><div><strong>{student.name}</strong><small>{student.gradeYear}级{student.degree} · {student.cadenceDays}天更新</small></div></div><div><span className="stage-tag">{student.stage}</span></div><div className="progress-copy"><strong>{student.latestTitle}</strong><small><em>{student.latestKind}</em>{sinceText(student.risk.days)}</small></div><div><span className={`risk ${student.risk.level}`}>{student.risk.level}</span></div></button>)}{!students.length ? <div className="empty-small">没有符合条件的学生</div> : null}</div>;
-}
-
-function StudentDrawer({ student, onClose }: { student: Student; onClose: () => void }) {
-  return <div className="overlay" role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Escape" || event.key === "Enter") onClose(); }} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside className="drawer"><button className="close" onClick={onClose}>×</button><div className="drawer-profile"><div className="large-avatar">{student.name.slice(-2)}</div><h2>{student.name}</h2><p>{student.gradeYear}级{student.degree}</p><span className={`risk ${student.risk.level}`}>{student.risk.level}</span></div><div className="detail-grid"><div><span>当前阶段</span><strong>{student.stage}</strong></div><div><span>更新周期</span><strong>{student.cadenceDays} 天</strong></div><div className="wide"><span>当前研究重点</span><strong>{student.currentFocus}</strong></div><div className="wide"><span>最近实质性进展</span><strong>{student.latestTitle}</strong><small>{shortDate(student.lastSubstantiveAt)} · {sinceText(student.risk.days)}</small></div></div><section className="student-progress-history"><div className="section-title"><div><h3>个人进展记录</h3><p>飞书纪要按学生拆分后，只显示与 {student.name} 相关的内容。</p></div><span className="count">{student.progress.length}</span></div>{student.progress.map((entry) => <article key={entry.id}><div><span className={`status-pill ${entry.status === "pending" ? "pending" : "safe"}`}>{progressStatusLabels[entry.status]}</span><small>{shortDate(entry.submitted_at)} · {entry.kind}</small></div><h4>{entry.title}</h4><p>{entry.summary}</p><dl><div><dt>证据</dt><dd>{entry.evidence}</dd></div>{entry.reviewer_note ? <div><dt>审核意见</dt><dd>{entry.reviewer_note}</dd></div> : null}</dl></article>)}{!student.progress.length ? <div className="empty-small">尚无个人进展记录</div> : null}</section><div className="drawer-note"><strong>系统建议</strong><p>{student.risk.level === "正常" ? "当前无需导师介入，等待下一次个性化更新。" : `已连续 ${student.risk.days} 天没有确认的实质性进展，建议检查阻塞项并给出下一步决策。`}</p></div></aside></div>;
+function StudentTable({ students }: { students: Student[] }) {
+  return <div className="student-table"><div className="table-row table-head"><span>学生</span><span>当前阶段</span><span>最近实质性进展</span><span>状态</span></div>{students.map((student) => <Link className="table-row student-row" key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><div className="student-name"><div className="mini-avatar">{student.name.slice(-2)}</div><div><strong>{student.name}</strong><small>{student.gradeYear}级{student.degree} · {student.cadenceDays}天更新</small></div></div><div><span className="stage-tag">{student.stage}</span></div><div className="progress-copy"><strong>{student.latestTitle}</strong><small><em>{student.latestKind}</em>{sinceText(student.risk.days)}</small></div><div><span className={`risk ${student.risk.level}`}>{student.risk.level}</span></div></Link>)}{!students.length ? <div className="empty-small">没有符合条件的学生</div> : null}</div>;
 }
 
 function ProgressModal({ students, onClose, onSaved }: { students: Student[]; onClose: () => void; onSaved: () => Promise<void> }) {
