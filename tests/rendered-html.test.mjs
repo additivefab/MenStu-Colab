@@ -64,6 +64,9 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /论文台账与版本进展/);
   assert.match(dashboard, /稿件版本/);
   assert.match(dashboard, /下一项可交付行动/);
+  assert.match(dashboard, /查看学生全部进展/);
+  assert.match(dashboard, /查看进展 ›/);
+  assert.match(dashboard, /href=\{`\/students\/\$\{encodeURIComponent\(entry\.student_id\)\}#evidence`\}/);
   assert.match(dashboard, /name="attachments" type="file" multiple/);
   assert.match(dashboard, /预约导师会议/);
   assert.ok(dashboard.indexOf('data?.viewer.role === "student"') < dashboard.indexOf('className="app-shell"'));

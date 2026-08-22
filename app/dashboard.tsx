@@ -516,10 +516,10 @@ export default function Dashboard() {
                 <section className="panel decisions">
                   <PanelHeader title={isReviewerRole(data.viewer.role) ? "待您确认" : "待审核确认"} subtitle="正式科研判断由对应主导师或超级管理员完成" count={data.metrics.pending} />
                   {data.pending.slice(0, 3).map((entry) => (
-                    <button className="decision-card" key={entry.id} onClick={() => setView("reviews")}>
+                    <Link className="decision-card" key={entry.id} href={`/students/${encodeURIComponent(entry.student_id)}#evidence`} aria-label={`查看 ${entry.display_name} 的全部进展`}>
                       <span className={`decision-icon kind-${entry.kind}`}>{entry.kind.slice(0, 1)}</span>
-                      <div><strong>{entry.display_name} · {entry.kind}</strong><small>{entry.title}</small></div><b>›</b>
-                    </button>
+                      <div><strong>{entry.display_name} · {entry.kind}</strong><small>{entry.title}</small></div><b>查看进展 ›</b>
+                    </Link>
                   ))}
                   {!data.pending.length ? <div className="empty-small">目前没有待审核记录</div> : null}
                 </section>
@@ -558,6 +558,7 @@ export default function Dashboard() {
                 <div className="review-card-head">
                   <span className={`decision-icon kind-${entry.kind}`}>{entry.kind.slice(0, 1)}</span>
                   <div><h2>{entry.paper?.title || entry.title}</h2><p>{entry.display_name} · {entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.kind} · {shortDate(entry.submitted_at)}提交</p></div>
+                  <Link className="review-student-link" href={`/students/${encodeURIComponent(entry.student_id)}#evidence`}>查看学生全部进展 ↗</Link>
                   <span className={`status-pill ${entry.review_status === "in_review" ? "reviewing" : "pending"}`}>
                     {entry.review_status === "in_review" ? `${entry.reviewer_name || "导师"}审核中` : "等待接手"}
                   </span>
@@ -951,7 +952,7 @@ function ActionBoard({ data, onReviews, onProposals }: { data: DashboardData; on
     })),
     ...data.pending.map((entry) => ({
       key: `progress-${entry.id}`,
-      href: "",
+      href: `/students/${encodeURIComponent(entry.student_id)}#evidence`,
       action: "reviews" as const,
       student: entry.display_name,
       title: entry.title,

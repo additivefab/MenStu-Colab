@@ -136,12 +136,12 @@ button.primary { border: 0; background: var(--blue); color: white; box-shadow: 0
 .risk.橙色 { color: #b1572d; background: #fff0e8; }
 .risk.红色 { color: #b03b45; background: #ffeaec; }
 .right-column { display: grid; gap: 18px; }
-.decision-card { width: 100%; min-height: 82px; padding: 14px 16px; border: 0; border-bottom: 1px solid #eef1f4; background: white; display: grid; grid-template-columns: 34px 1fr 10px; align-items: center; text-align: left; gap: 11px; }
+.decision-card { width: 100%; min-height: 82px; padding: 14px 16px; border: 0; border-bottom: 1px solid #eef1f4; color: inherit; background: white; display: grid; grid-template-columns: 34px 1fr auto; align-items: center; text-align: left; text-decoration: none; gap: 11px; }
 .decision-card:hover { background: #fafcff; }
 .decision-card div strong, .decision-card div small { display: block; }
 .decision-card div strong { font-size: 11px; }
 .decision-card div small { color: #8793a4; font-size: 9px; line-height: 1.5; margin-top: 5px; }
-.decision-card > b { color: #9aa6b6; }
+.decision-card > b { color: #5d79a0; font-size: 9px; white-space: nowrap; }
 .decision-icon { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font-size: 10px; font-weight: 800; color: #315fae; background: #eaf1ff; flex: 0 0 auto; }
 .kind-文献 { color: #6f52a3; background: #f2ecff; }
 .kind-实验 { color: #a36b1c; background: #fff3d9; }
@@ -164,8 +164,11 @@ button.primary { border: 0; background: var(--blue); color: white; box-shadow: 0
 .review-intro span { font-size: 11px; color: #6a7d98; }
 .review-card { background: white; border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
 .review-card-head { display: flex; gap: 12px; align-items: center; }
+.review-card-head > div { min-width: 0; flex: 1; }
 .review-card-head h2 { margin: 0; font-size: 14px; }
 .review-card-head p { margin: 5px 0 0; color: #8a97a7; font-size: 10px; }
+.review-student-link { padding: 7px 9px; border: 1px solid #d7e3f2; border-radius: 8px; color: #2d67bc; background: #f6f9fd; font-size: 9px; font-weight: 800; text-decoration: none; white-space: nowrap; }
+.review-student-link:hover { background: #edf4ff; }
 .review-evidence { margin: 18px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .review-evidence > div { padding: 13px; background: #f8fafc; border: 1px solid #edf0f4; border-radius: 9px; }
 .review-evidence span { color: #8895a6; font-size: 9px; font-weight: 700; }
@@ -908,6 +911,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-portal-panel-head { padding-inline: 18px; }
   .student-progress-feed-list, .student-meeting-history { padding-inline: 18px; }
   .student-meeting-form { padding-inline: 18px; }
+  .review-card-head { align-items: flex-start; flex-wrap: wrap; }
+  .review-card-head > div { flex-basis: calc(100% - 46px); }
+  .review-student-link { margin-left: 46px; }
   .staff-meeting-list { padding-inline: 15px; }
   .staff-meeting-list > article { grid-template-columns: 1fr; }
 }
