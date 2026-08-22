@@ -170,6 +170,8 @@ const milestoneStatusLabels: Record<MilestoneStatus, string> = {
   blocked: "受阻",
 };
 
+const DASHBOARD_REFERENCE_TIME = Date.now();
+
 function shortDate(value: string | null) {
   if (!value) return "尚无记录";
   return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(new Date(value));
@@ -181,6 +183,12 @@ function sinceText(days: number) {
   return `${days} 天前`;
 }
 
+function daysSinceLatestSubmission(student: Student) {
+  const latest = student.progress.reduce((value, entry) => Math.max(value, new Date(entry.submitted_at).getTime()), 0);
+  if (!latest) return student.risk.days;
+  return Math.max(0, Math.floor((DASHBOARD_REFERENCE_TIME - latest) / 86_400_000));
+}
+
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -188,6 +196,7 @@ export default function Dashboard() {
   const [view, setView] = useState<(typeof navItems)[number]["id"]>("overview");
   const [query, setQuery] = useState("");
   const [riskFilter, setRiskFilter] = useState<"全部" | RiskLevel>("全部");
+  const [degreeFilter, setDegreeFilter] = useState<"全部" | Student["degree"]>("全部");
   const [submitOpen, setSubmitOpen] = useState(false);
   const [feishuOpen, setFeishuOpen] = useState(false);
   const [reviewBusy, setReviewBusy] = useState<number | null>(null);
@@ -237,11 +246,12 @@ export default function Dashboard() {
     const normalized = query.trim().toLowerCase();
     return data.students
       .filter((student) => riskFilter === "全部" || student.risk.level === riskFilter)
+      .filter((student) => degreeFilter === "全部" || student.degree === degreeFilter)
       .filter((student) =>
         !normalized || `${student.name}${student.stage}${student.currentFocus}${student.degree}`.toLowerCase().includes(normalized),
       )
       .sort((a, b) => b.risk.days - a.risk.days);
-  }, [data, query, riskFilter]);
+  }, [data, degreeFilter, query, riskFilter]);
 
   async function review(entry: PendingEntry, action: string) {
     setReviewBusy(entry.id);
@@ -319,9 +329,9 @@ export default function Dashboard() {
         <header className="topbar">
           <div>
             <p className="eyebrow">{today}</p>
-            <h1>{view === "overview" ? "科研进展驾驶舱" : navItems.find((item) => item.id === view)?.label}</h1>
+            <h1>{view === "overview" ? data?.viewer.role === "student" ? "我的科研进展" : "科研进展驾驶舱" : navItems.find((item) => item.id === view)?.label}</h1>
             <p className="subtitle">
-              {view === "overview" ? "只关注新增证据、研究结论和需要您决策的事项。" : view === "proposals" ? "学生主写、导师确认，每次修订均保留版本与审核记录。" : "以阶段内是否产生可验证的新信息为核心。"}
+              {view === "overview" ? data?.viewer.role === "student" ? "查看自己的培养计划、证据进展和下一步行动。" : "只关注新增证据、研究结论和需要您决策的事项。" : view === "proposals" ? "学生主写、导师确认，每次修订均保留版本与审核记录。" : "以阶段内是否产生可验证的新信息为核心。"}
             </p>
           </div>
           <div className="top-actions">
@@ -335,17 +345,14 @@ export default function Dashboard() {
 
         {!loading && !error && data && view === "overview" ? (
           <>
-            <section className="metric-grid" aria-label="课题组概况">
-              <article className="metric"><span>在组学生</span><strong>{data.metrics.total}</strong><small>{data.metrics.doctors} 博士 · {data.metrics.masters} 硕士</small></article>
-              <article className="metric"><span>当前无需预警</span><strong>{data.metrics.total - data.metrics.attention}</strong><small className="positive">首次导入从纳入管理日期计时</small></article>
-              <article className="metric"><span>等待您确认</span><strong>{data.metrics.pending}</strong><small>可在右侧快速审核</small></article>
-              <article className="metric attention"><span>需要关注</span><strong>{data.metrics.attention}</strong><small>黄 {data.metrics.riskCounts.黄色 ?? 0} · 橙 {data.metrics.riskCounts.橙色 ?? 0} · 红 {data.metrics.riskCounts.红色 ?? 0}</small></article>
-            </section>
+            <OverviewMetrics data={data} />
+
+            <ActionBoard data={data} onReviews={() => setView("reviews")} />
 
             <div className="content-grid">
               <section className="panel student-panel">
                 <PanelHeader title="学生进展" subtitle="按距离上次实质性进展的时间排序" action={`查看全部 ${data.metrics.total} 人 →`} onAction={() => setView("students")} />
-                <StudentFilters query={query} setQuery={setQuery} riskFilter={riskFilter} setRiskFilter={setRiskFilter} />
+                <StudentFilters query={query} setQuery={setQuery} riskFilter={riskFilter} setRiskFilter={setRiskFilter} degreeFilter={degreeFilter} setDegreeFilter={setDegreeFilter} />
                 <StudentTable students={filteredStudents.slice(0, 8)} />
               </section>
 
@@ -375,7 +382,7 @@ export default function Dashboard() {
         {!loading && !error && data && view === "students" ? (
           <section className="panel roster-panel">
             <PanelHeader title="全部学生" subtitle="博士与硕士均已纳入首批试用" count={filteredStudents.length} />
-            <StudentFilters query={query} setQuery={setQuery} riskFilter={riskFilter} setRiskFilter={setRiskFilter} />
+            <StudentFilters query={query} setQuery={setQuery} riskFilter={riskFilter} setRiskFilter={setRiskFilter} degreeFilter={degreeFilter} setDegreeFilter={setDegreeFilter} />
             <StudentTable students={filteredStudents} />
           </section>
         ) : null}
@@ -428,13 +435,55 @@ function PanelHeader({ title, subtitle, action, onAction, count }: { title: stri
   return <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div>{action ? <button className="text-button" onClick={onAction}>{action}</button> : count !== undefined ? <span className="count">{count}</span> : null}</div>;
 }
 
-function StudentFilters({ query, setQuery, riskFilter, setRiskFilter }: {
+function OverviewMetrics({ data }: { data: DashboardData }) {
+  if (data.viewer.role === "student") {
+    const student = data.students[0];
+    const substantive = student?.progress.filter((entry) => entry.status === "substantive").length ?? 0;
+    return <section className="metric-grid" aria-label="个人科研概况">
+      <article className="metric"><span>我的进展记录</span><strong>{student?.progress.length ?? 0}</strong><small>仅包含本人提交与纪要拆分记录</small></article>
+      <article className="metric"><span>实质性进展</span><strong>{substantive}</strong><small className="positive">经导师确认后计入最近进展</small></article>
+      <article className="metric"><span>等待导师确认</span><strong>{data.metrics.pending}</strong><small>保留原始证据与提交时间</small></article>
+      <article className="metric attention"><span>当前培养状态</span><strong className="metric-risk-text">{student?.risk.level ?? "正常"}</strong><small>{student?.risk.days ?? 0} 天距最近实质性进展</small></article>
+    </section>;
+  }
+  return <section className="metric-grid" aria-label="课题组概况">
+    <article className="metric"><span>在组学生</span><strong>{data.metrics.total}</strong><small>{data.metrics.doctors} 博士 · {data.metrics.masters} 硕士</small></article>
+    <article className="metric"><span>当前无需预警</span><strong>{data.metrics.total - data.metrics.attention}</strong><small className="positive">首次导入从纳入管理日期计时</small></article>
+    <article className="metric"><span>等待您确认</span><strong>{data.metrics.pending}</strong><small>可在行动台快速进入审核</small></article>
+    <article className="metric attention"><span>需要关注</span><strong>{data.metrics.attention}</strong><small>黄 {data.metrics.riskCounts.黄色 ?? 0} · 橙 {data.metrics.riskCounts.橙色 ?? 0} · 红 {data.metrics.riskCounts.红色 ?? 0}</small></article>
+  </section>;
+}
+
+function ActionBoard({ data, onReviews }: { data: DashboardData; onReviews: () => void }) {
+  const allRiskStudents = [...data.students]
+    .filter((student) => student.risk.level !== "正常")
+    .sort((a, b) => b.risk.days - a.risk.days);
+  const allDueStudents = [...data.students]
+    .filter((student) => student.risk.level === "正常" && student.cadenceDays - daysSinceLatestSubmission(student) <= 7)
+    .sort((a, b) => (a.cadenceDays - daysSinceLatestSubmission(a)) - (b.cadenceDays - daysSinceLatestSubmission(b)));
+  const riskStudents = allRiskStudents.slice(0, 3);
+  const dueStudents = allDueStudents.slice(0, 3);
+  const isStudent = data.viewer.role === "student";
+
+  return <section className="panel action-board">
+    <div className="action-board-head"><div><span>ROLE WORKSPACE</span><h2>{isStudent ? "我的下一步" : "导师行动台"}</h2><p>{isStudent ? "把等待反馈、当前状态和下次更新集中在一个入口。" : "先处理等待决策的事项，再跟进风险和即将到期的更新。"}</p></div><small>只给行动排序，不对学生综合评分</small></div>
+    <div className="action-board-grid">
+      <article><header><i className="review">审</i><div><strong>{isStudent ? "等待导师反馈" : "待审核证据"}</strong><span>{data.pending.length} 项</span></div></header><div className="action-items">{data.pending.slice(0, 3).map((entry) => isStudent ? <Link key={entry.id} href={`/students/${encodeURIComponent(entry.student_id)}`}><span><b>{entry.display_name}</b><small>{entry.title}</small></span><em>查看</em></Link> : <button key={entry.id} onClick={onReviews}><span><b>{entry.display_name}</b><small>{entry.title}</small></span><em>去审核</em></button>)}{!data.pending.length ? <p>目前没有等待审核的进展</p> : null}</div></article>
+      <article><header><i className="risking">险</i><div><strong>{isStudent ? "当前培养状态" : "风险随访"}</strong><span>{allRiskStudents.length} 人</span></div></header><div className="action-items">{riskStudents.map((student) => <Link key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><span><b>{student.name}</b><small>{student.risk.days} 天无实质性进展</small></span><em className={`risk ${student.risk.level}`}>{student.risk.level}</em></Link>)}{!riskStudents.length ? <p>当前没有需要风险随访的学生</p> : null}</div></article>
+      <article><header><i className="due">期</i><div><strong>未来 7 天更新</strong><span>{allDueStudents.length} 人</span></div></header><div className="action-items">{dueStudents.map((student) => { const remaining = student.cadenceDays - daysSinceLatestSubmission(student); return <Link key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><span><b>{student.name}</b><small>{student.cadenceDays} 天个人更新周期</small></span><em>{remaining < 0 ? "已到期" : remaining === 0 ? "今天" : `${remaining} 天后`}</em></Link>; })}{!dueStudents.length ? <p>未来 7 天暂无计划更新</p> : null}</div></article>
+    </div>
+  </section>;
+}
+
+function StudentFilters({ query, setQuery, riskFilter, setRiskFilter, degreeFilter, setDegreeFilter }: {
   query: string;
   setQuery: (value: string) => void;
   riskFilter: "全部" | RiskLevel;
   setRiskFilter: (value: "全部" | RiskLevel) => void;
+  degreeFilter: "全部" | Student["degree"];
+  setDegreeFilter: (value: "全部" | Student["degree"]) => void;
 }) {
-  return <div className="filter-bar"><label><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索学生、阶段或研究方向" /></label><div className="filter-chips">{(["全部", "正常", "黄色", "橙色", "红色"] as const).map((risk) => <button className={riskFilter === risk ? "selected" : ""} key={risk} onClick={() => setRiskFilter(risk)}>{risk}</button>)}</div></div>;
+  return <div className="filter-bar"><label><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索学生、阶段或研究方向" /></label><div className="filter-groups"><div className="filter-set"><span>层次</span><div className="filter-chips degree-chips">{(["全部", "博士", "硕士"] as const).map((degree) => <button className={degreeFilter === degree ? "selected" : ""} key={degree} onClick={() => setDegreeFilter(degree)}>{degree}</button>)}</div></div><div className="filter-set"><span>风险</span><div className="filter-chips">{(["全部", "正常", "黄色", "橙色", "红色"] as const).map((risk) => <button className={riskFilter === risk ? "selected" : ""} key={risk} onClick={() => setRiskFilter(risk)}>{risk}</button>)}</div></div></div></div>;
 }
 
 function StudentTable({ students }: { students: Student[] }) {
@@ -699,8 +748,17 @@ function FeishuModal({ viewer, onClose, onLogout }: { viewer: DashboardData["vie
 
 function MeetingView({ viewer, students, onRemind }: { viewer: DashboardData["viewer"]; students: Student[]; onRemind: (student: Student) => Promise<void> }) {
   const [busy, setBusy] = useState<string | null>(null);
-  const due = students.filter((student) => student.risk.days + 7 >= student.cadenceDays).slice(0, 6);
-  return <div className="meeting-workspace"><div className="meeting-grid"><section className="panel"><PanelHeader title="未来 7 天更新提醒" subtitle="按个人需要设置，最长不超过 30 天" count={due.length} /><div className="reminder-list">{due.map((student, index) => <div key={student.id}><span>{index < 2 ? "明天" : index < 4 ? "3 天后" : "本周内"}</span><strong>{student.name}</strong><small>{student.cadenceDays} 天周期 · {student.stage}</small><button disabled={busy === student.id} onClick={async () => { setBusy(student.id); await onRemind(student); setBusy(null); }}>{busy === student.id ? "发送中…" : "飞书提醒"}</button></div>)}</div></section><section className="panel meeting-rule"><PanelHeader title="组会建议" subtitle="不是固定轮转，而是优先解决阻塞" /><div className="meeting-summary"><span>{students.filter((student) => student.risk.level !== "正常").length}</span><strong>名学生需要优先讨论</strong><p>系统会根据连续无进展时间、待决策事项和证据缺口自动生成组会议程草案。</p><button className="primary">生成本周议程</button></div></section></div>{viewer.role === "admin" ? <FeishuMeetingImports students={students} /> : null}</div>;
+  const [agendaOpen, setAgendaOpen] = useState(false);
+  const due = students
+    .map((student) => ({ student, remaining: student.cadenceDays - daysSinceLatestSubmission(student) }))
+    .filter((item) => item.remaining <= 7)
+    .sort((a, b) => a.remaining - b.remaining)
+    .slice(0, 6);
+  const agenda = [...students]
+    .filter((student) => student.risk.level !== "正常" || student.cadenceDays - daysSinceLatestSubmission(student) <= 7)
+    .sort((a, b) => b.risk.days - a.risk.days)
+    .slice(0, 6);
+  return <div className="meeting-workspace"><div className="meeting-grid"><section className="panel"><PanelHeader title="未来 7 天更新提醒" subtitle="按个人需要设置，最长不超过 30 天" count={due.length} /><div className="reminder-list">{due.map(({ student, remaining }) => <div key={student.id}><span>{remaining < 0 ? `逾期 ${Math.abs(remaining)} 天` : remaining === 0 ? "今天" : `${remaining} 天后`}</span><strong>{student.name}</strong><small>{student.cadenceDays} 天周期 · {student.stage}</small><button disabled={busy === student.id} onClick={async () => { setBusy(student.id); await onRemind(student); setBusy(null); }}>{busy === student.id ? "发送中…" : "飞书提醒"}</button></div>)}{!due.length ? <div className="empty-small">未来 7 天没有需要提醒的学生</div> : null}</div></section><section className="panel meeting-rule"><PanelHeader title="组会建议" subtitle="不是固定轮转，而是优先解决阻塞" /><div className="meeting-summary"><span>{agenda.length}</span><strong>名学生建议进入本周议程</strong><p>系统只根据连续无进展时间和个人更新周期排序，不自动评价学生。</p><button className="primary" onClick={() => setAgendaOpen((current) => !current)}>{agendaOpen ? "收起议程" : "生成本周议程"}</button>{agendaOpen ? <div className="agenda-list">{agenda.map((student, index) => <Link key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><b>{index + 1}</b><span><strong>{student.name}</strong><small>{student.risk.level !== "正常" ? `${student.risk.days} 天无实质性进展，优先确认阻塞与决策` : `进入 ${student.cadenceDays} 天更新窗口，核对本周期证据`}</small></span></Link>)}{!agenda.length ? <p>本周暂无需要优先讨论的学生。</p> : null}</div> : null}</div></section></div>{viewer.role === "admin" ? <FeishuMeetingImports students={students} /> : null}</div>;
 }
 
 function FeishuMeetingImports({ students }: { students: Student[] }) {
