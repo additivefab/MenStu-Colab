@@ -56,6 +56,8 @@ test("admin assignment scope, evidence provenance, outputs, and upgrade backfill
   assert.match(progressRoute, /submitted_by_user_id = \?/);
   assert.match(progressRoute, /studentId: auth\.user\.role === "student" \? auth\.user\.studentId : body\.studentId/);
   assert.match(progressRoute, /requireAppUser\(request, \["superadmin", "admin", "student"\]\)/);
+  assert.match(progressRoute, /studentSubmissionKinds = new Set\(\["论文", "项目"\]\)/);
+  assert.match(progressRoute, /学生端仅支持提交论文进度或项目进度/);
   assert.match(proposalsRoute, /can_review:/);
   assert.doesNotMatch(proposalsRoute, /requireAppUser\(request, \["superadmin", "admin", "mentor", "student"\]\)/);
   assert.doesNotMatch(feishuAuth, /isConfiguredSuperAdmin/);

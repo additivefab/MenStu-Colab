@@ -11,7 +11,7 @@ import { getProgressFileBucket } from "../../../lib/progress-file-storage";
 import { isIsoDate, isPaperStage, isPaperType, type PaperStage } from "../../../lib/paper-progress";
 
 const allowedKinds = new Set(["文献", "实验", "算法", "数据", "论文", "复现", "项目", "组会"]);
-const studentSubmissionKinds = new Set(["论文"]);
+const studentSubmissionKinds = new Set(["论文", "项目"]);
 
 class InputError extends Error {}
 
@@ -224,7 +224,7 @@ export async function POST(request: Request) {
       studentId: auth.user.role === "student" ? auth.user.studentId : body.studentId,
     }, files.length > 0);
     if (auth.user.role === "student" && !studentSubmissionKinds.has(values.kind)) {
-      return Response.json({ error: "学生端当前仅支持提交论文进度" }, { status: 400 });
+      return Response.json({ error: "学生端仅支持提交论文进度或项目进度" }, { status: 400 });
     }
     const structuredPaper = values.kind === "论文" && (
       auth.user.role === "student" || Boolean(String(body.paperStage ?? "").trim())

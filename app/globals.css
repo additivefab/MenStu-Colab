@@ -688,6 +688,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-portal-summary article.overdue { border-color: #edc9c4; background: #fff8f7; }
 .student-portal-summary article.overdue strong { color: #ad4c44; }
 .student-portal-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr); gap: 18px; align-items: start; }
+.student-portal-side { display: grid; gap: 18px; }
 .student-portal-panel { overflow: hidden; border: 1px solid #e1e8f0; border-radius: 19px; background: #fff; box-shadow: 0 10px 28px rgba(56, 78, 108, .07); }
 .student-portal-panel-head { display: flex; justify-content: space-between; padding: 23px 25px 18px; border-bottom: 1px solid #edf1f5; }
 .student-portal-panel-head span { color: #3971ba; font-size: 11px; font-weight: 800; letter-spacing: .13em; }
