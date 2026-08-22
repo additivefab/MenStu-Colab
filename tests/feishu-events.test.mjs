@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   detectMeetingSummary,
   detectSummaryImportCommand,
+  extractFeishuDocxDocumentIds,
   extractFeishuMinuteTokens,
   extractFeishuMessageText,
   parseFeishuEvent,
@@ -54,6 +55,18 @@ test("extracts only valid Feishu Minutes tokens from links", () => {
     extractFeishuMinuteTokens("https://feishu.cn.evil.example/minutes/obcnq3b9jl72l83w4f14xxxx"),
     [],
   );
+});
+
+test("extracts only valid Feishu Docx document IDs from links", () => {
+  assert.deepEqual(
+    extractFeishuDocxDocumentIds("智能纪要：https://example.feishu.cn/docx/Dz1udaUpEo5fL1xW1Zqc2NKdnB0?from=group"),
+    ["Dz1udaUpEo5fL1xW1Zqc2NKdnB0"],
+  );
+  assert.deepEqual(
+    extractFeishuDocxDocumentIds("https://feishu.cn.evil.example/docx/Dz1udaUpEo5fL1xW1Zqc2NKdnB0"),
+    [],
+  );
+  assert.deepEqual(extractFeishuDocxDocumentIds("https://example.feishu.cn/wiki/Dz1udaUpEo5fL1xW1Zqc2NKdnB0"), []);
 });
 
 test("rejects a Feishu event with an invalid signature", async () => {

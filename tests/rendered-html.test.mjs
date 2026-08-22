@@ -81,6 +81,9 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(feishuLongConnection, /verifyLongConnectionRelay/);
   assert.doesNotMatch(feishuLongConnection, /event\.token/);
   assert.doesNotMatch(feishuBridge, /!chatId \|\| !commandEvent\.token/);
+  assert.match(feishuBridge, /document\.rawContent/);
+  assert.match(feishuBridge, /\.slice\(0, 60_000\)/);
+  assert.match(feishuBridge, /detectMeetingSummary\(content\)/);
   assert.match(meetingImports, /requireAppUser\(request, \["admin"\]\)/);
   assert.match(meetingImports, /assertSameOrigin/);
   assert.match(meetingImports, /VALUES \(\?, '组会'/);

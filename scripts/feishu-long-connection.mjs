@@ -4,6 +4,7 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import {
   detectMeetingSummary,
   detectSummaryImportCommand,
+  extractFeishuDocxDocumentIds,
   extractFeishuMinuteTokens,
   extractFeishuMessageText,
 } from "../lib/feishu-events.ts";
@@ -20,6 +21,7 @@ if (!/^cli_[0-9a-fA-F]{16}$/.test(appId) || !appSecret) {
 const pending = new Map();
 const historyScans = new Map();
 const minuteArtifacts = new Map();
+const docxSummaries = new Map();
 const maxHistoryMessages = 10_000;
 
 const apiClient = new Lark.Client({
@@ -136,6 +138,48 @@ async function enrichMinuteMessage(event, text) {
   };
 }
 
+async function fetchDocxSummary(documentId) {
+  if (docxSummaries.has(documentId)) return docxSummaries.get(documentId);
+  const task = (async () => {
+    const response = await apiClient.docx.v1.document.rawContent({ path: { document_id: documentId } });
+    if (response.code && response.code !== 0) {
+      throw new Error(`飞书文档接口返回 code ${response.code}`);
+    }
+    const content = (response.data?.content || "").trim().slice(0, 60_000);
+    return content && detectMeetingSummary(content) ? content : null;
+  })().catch((error) => {
+    console.warn(`[探研] 智能纪要文档暂不可读取 · ${error instanceof Error ? error.message : "未知错误"}`);
+    return null;
+  });
+  docxSummaries.set(documentId, task);
+  setTimeout(() => docxSummaries.delete(documentId), 15 * 60 * 1000);
+  return task;
+}
+
+async function enrichDocxMessage(event, text) {
+  if (!detectMeetingSummary(text)) return null;
+  const documentId = extractFeishuDocxDocumentIds(text)[0];
+  if (!documentId) return null;
+  const summary = await fetchDocxSummary(documentId);
+  if (!summary) return null;
+  return {
+    ...event,
+    message: {
+      ...event.message,
+      content: JSON.stringify({
+        type: "飞书智能纪要 AI 文档",
+        document_id: documentId,
+        original_content: event.message?.content || "",
+        ai_summary: summary,
+      }),
+    },
+  };
+}
+
+async function enrichMeetingMessage(event, text) {
+  return await enrichMinuteMessage(event, text) || await enrichDocxMessage(event, text);
+}
+
 function historySender(sender) {
   if (!sender?.id) return undefined;
   const idType = ["open_id", "user_id", "union_id", "app_id"].includes(sender.id_type)
@@ -202,7 +246,7 @@ async function scanChatHistory(commandEvent) {
       const text = extractFeishuMessageText(item.body?.content || "");
       if (detectSummaryImportCommand(text)) continue;
       const candidateEvent = historyEvent(commandEvent, item);
-      const enrichedEvent = await enrichMinuteMessage(candidateEvent, text);
+      const enrichedEvent = await enrichMeetingMessage(candidateEvent, text);
       if (!enrichedEvent && !detectMeetingSummary(text)) continue;
       matched += 1;
       await forwardWithRetry(enrichedEvent || candidateEvent);
@@ -227,7 +271,7 @@ function startHistoryScan(event) {
 }
 
 async function handleGroupMessage(event, text) {
-  const enrichedEvent = await enrichMinuteMessage(event, text);
+  const enrichedEvent = await enrichMeetingMessage(event, text);
   if (enrichedEvent) {
     await forwardWithRetry(enrichedEvent);
     return;
@@ -264,7 +308,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 async function startBridge() {
   await wsClient.start({ eventDispatcher });
-  console.info("[探研] 飞书长连接客户端已启动；普通群消息会在本机过滤，不会上传；支持妙记 AI 产物与“导入所有总结”。");
+  console.info("[探研] 飞书长连接客户端已启动；普通群消息会在本机过滤，不会上传；支持妙记 AI 产物、智能纪要文档与“导入所有总结”。");
 }
 
 startBridge().catch(() => {

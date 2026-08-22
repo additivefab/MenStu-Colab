@@ -128,3 +128,19 @@ export function extractFeishuMinuteTokens(text: string) {
   }
   return Array.from(tokens);
 }
+
+export function extractFeishuDocxDocumentIds(text: string) {
+  const documentIds = new Set<string>();
+  for (const match of text.matchAll(/https?:\/\/[^\s<>"']+/gi)) {
+    const rawUrl = match[0].replace(/[),，。.!！?？]+$/g, "");
+    try {
+      const url = new URL(rawUrl);
+      if (url.hostname !== "feishu.cn" && !url.hostname.endsWith(".feishu.cn")) continue;
+      const documentId = url.pathname.match(/\/docx\/([A-Za-z0-9]{20,64})(?:\/|$)/)?.[1] ?? "";
+      if (documentId) documentIds.add(documentId);
+    } catch {
+      // 忽略无法解析的链接；只接受飞书域名内格式正确的 Docx 文档链接。
+    }
+  }
+  return Array.from(documentIds);
+}
