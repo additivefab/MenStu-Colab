@@ -6,7 +6,6 @@ type ManagedUserRow = {
   id: number;
   display_name: string;
   avatar_url: string;
-  email: string;
   role: UserRole;
   student_id: string | null;
   student_name: string | null;
@@ -23,7 +22,7 @@ export async function GET(request: Request) {
   const bootstrapOpenId = getFeishuConfig().superAdminOpenId;
   const [users, assignments, superAdminCount, bootstrapTarget] = await Promise.all([
     d1.prepare(`SELECT
-      u.id, u.display_name, u.avatar_url, u.email,
+      u.id, u.display_name, u.avatar_url,
       CASE WHEN u.role = 'mentor' THEN 'admin' ELSE u.role END AS role,
       u.student_id,
       u.last_login_at, s.display_name AS student_name

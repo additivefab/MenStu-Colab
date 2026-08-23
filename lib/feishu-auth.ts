@@ -24,6 +24,18 @@ export type AppUser = {
   studentId: string | null;
 };
 
+export type PublicAppUser = Pick<AppUser, "id" | "displayName" | "avatarUrl" | "role" | "studentId">;
+
+export function publicAppUser(user: AppUser): PublicAppUser {
+  return {
+    id: user.id,
+    displayName: user.displayName,
+    avatarUrl: user.avatarUrl,
+    role: user.role,
+    studentId: user.studentId,
+  };
+}
+
 type FeishuUserInfo = {
   open_id?: string;
   union_id?: string;
@@ -245,7 +257,7 @@ export async function createFeishuSession(info: FeishuUserInfo) {
         feishu_user_id = excluded.feishu_user_id,
         display_name = excluded.display_name,
         avatar_url = excluded.avatar_url,
-        email = excluded.email,
+        email = '',
         last_login_at = CURRENT_TIMESTAMP
       RETURNING id, feishu_open_id, display_name, avatar_url, email, role, student_id`)
       .bind(
@@ -254,7 +266,7 @@ export async function createFeishuSession(info: FeishuUserInfo) {
         info.user_id ?? "",
         info.name ?? info.en_name ?? "飞书用户",
         info.avatar_url ?? info.avatar_thumb ?? "",
-        info.enterprise_email ?? info.email ?? "",
+        "",
         "pending",
       )
       .first<UserRow>();
@@ -288,7 +300,7 @@ export async function createFeishuSession(info: FeishuUserInfo) {
         ? row.role
         : "pending";
     row = await d1.prepare(`UPDATE app_users SET
-      feishu_union_id = ?, feishu_user_id = ?, display_name = ?, avatar_url = ?, email = ?,
+      feishu_union_id = ?, feishu_user_id = ?, display_name = ?, avatar_url = ?, email = '',
       role = ?, last_login_at = CURRENT_TIMESTAMP
       WHERE id = ?
       RETURNING id, feishu_open_id, display_name, avatar_url, email, role, student_id`)
@@ -297,7 +309,6 @@ export async function createFeishuSession(info: FeishuUserInfo) {
         info.user_id ?? "",
         info.name ?? info.en_name ?? row.display_name,
         info.avatar_url ?? info.avatar_thumb ?? row.avatar_url,
-        info.enterprise_email ?? info.email ?? row.email,
         configuredRole,
         row.id,
       )

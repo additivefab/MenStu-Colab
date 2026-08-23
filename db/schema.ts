@@ -1,6 +1,16 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+export const appSchemaMeta = sqliteTable(
+  "app_schema_meta",
+  {
+    id: integer("id").primaryKey(),
+    version: integer("version").notNull(),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [check("app_schema_meta_singleton", sql`${table.id} = 1`)],
+);
+
 export const students = sqliteTable("students", {
   id: text("id").primaryKey(),
   displayName: text("display_name").notNull(),
@@ -128,6 +138,11 @@ export const studentGuidanceNotes = sqliteTable(
     status: text("status", { enum: ["open", "completed"] })
       .notNull()
       .default("open"),
+    acknowledgedAt: text("acknowledged_at"),
+    completedAt: text("completed_at"),
+    completedByUserId: integer("completed_by_user_id")
+      .references(() => appUsers.id),
+    completionNote: text("completion_note").notNull().default(""),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
@@ -137,6 +152,26 @@ export const studentGuidanceNotes = sqliteTable(
     index("idx_student_guidance_student_created").on(table.studentId, table.createdAt),
     index("idx_student_guidance_mentor_created").on(table.mentorUserId, table.createdAt),
     index("idx_student_guidance_source").on(table.sourceProgressEntryId),
+  ],
+);
+
+export const studentGuidanceEvents = sqliteTable(
+  "student_guidance_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    guidanceNoteId: integer("guidance_note_id")
+      .notNull()
+      .references(() => studentGuidanceNotes.id),
+    actorUserId: integer("actor_user_id").references(() => appUsers.id),
+    actorType: text("actor_type", { enum: ["staff", "student", "system"] }).notNull(),
+    action: text("action", { enum: ["created", "acknowledged", "completed", "reopened"] }).notNull(),
+    note: text("note").notNull().default(""),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    check("student_guidance_events_actor_type", sql`${table.actorType} IN ('staff', 'student', 'system')`),
+    check("student_guidance_events_action", sql`${table.action} IN ('created', 'acknowledged', 'completed', 'reopened')`),
+    index("idx_student_guidance_events_note_created").on(table.guidanceNoteId, table.createdAt),
   ],
 );
 

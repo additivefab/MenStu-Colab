@@ -2,6 +2,7 @@ import {
   assertSameOrigin,
   createFeishuSession,
   exchangeFeishuCode,
+  publicAppUser,
   sessionCookie,
 } from "../../../../../lib/feishu-auth";
 
@@ -19,7 +20,7 @@ export async function POST(request: Request) {
     const info = await exchangeFeishuCode(code);
     const session = await createFeishuSession(info);
     return Response.json(
-      { user: session.user },
+      { user: publicAppUser(session.user) },
       { headers: { "Set-Cookie": sessionCookie(session.token, session.expiresAt) } },
     );
   } catch (error) {

@@ -154,6 +154,10 @@ type GuidanceNote = {
   next_action: string;
   due_date: string | null;
   status: "open" | "completed";
+  acknowledged_at: string | null;
+  completed_at: string | null;
+  completed_by_name: string | null;
+  completion_note: string;
   created_at: string;
   updated_at: string;
   mentor_name: string;
@@ -451,14 +455,14 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     }
   }
 
-  async function updateGuidanceStatus(note: GuidanceNote, status: GuidanceNote["status"]) {
+  async function updateGuidanceStatus(note: GuidanceNote, action: "complete" | "reopen") {
     setGuidanceStatusBusy(note.id);
     setGuidanceMessage("");
     try {
       const response = await fetch("/api/student-guidance", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: note.id, status }),
+        body: JSON.stringify({ id: note.id, action }),
       });
       const payload = await response.json() as { error?: string; message?: string };
       if (!response.ok) throw new Error(payload.error || "导师指导状态更新失败");
@@ -637,7 +641,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         <div className="student-guidance-ledger-head"><div><span>GUIDANCE LOG</span><h3>已保存的导师指导</h3></div><strong>{guidanceNotes.length}</strong></div>
         <div>{guidanceNotes.map((note) => <details key={note.id} className={note.status}>
           <summary><span className={`student-guidance-state ${note.status}`}>{note.status === "open" ? "进行中" : "已完成"}</span><div><strong>{note.title || "自由指导"}{note.source_title ? ` · ${note.source_title}` : ""}</strong><small>{note.mentor_name} · {dateText(note.created_at)}</small></div><i>展开查看</i></summary>
-          <div className="student-guidance-note-body"><p>{note.content}</p>{note.next_action ? <dl><div><dt>下一项行动</dt><dd>{note.next_action}</dd></div>{note.due_date ? <div><dt>建议期限</dt><dd>{note.due_date}</dd></div> : null}</dl> : null}<footer><span>{note.source_title ? `关联 ${note.source_kind || "进展"}：${note.source_title}` : "独立指导记录"}</span><button type="button" disabled={guidanceStatusBusy === note.id} onClick={() => void updateGuidanceStatus(note, note.status === "open" ? "completed" : "open")}>{note.status === "open" ? "标记已完成" : "重新打开"}</button></footer></div>
+          <div className="student-guidance-note-body"><p>{note.content}</p>{note.next_action ? <dl><div><dt>下一项行动</dt><dd>{note.next_action}</dd></div>{note.due_date ? <div><dt>建议期限</dt><dd>{note.due_date}</dd></div> : null}</dl> : null}{note.status === "open" ? <p className="student-guidance-delivery">{note.acknowledged_at ? `✓ 学生已于 ${dateText(note.acknowledged_at)} 确认收到` : "等待学生确认收到"}</p> : <p className="student-guidance-delivery completed">✓ {note.completed_by_name || "已完成"}{note.completed_at ? ` 于 ${dateText(note.completed_at)} 完成` : ""}{note.completion_note ? `：${note.completion_note}` : ""}</p>}<footer><span>{note.source_title ? `关联 ${note.source_kind || "进展"}：${note.source_title}` : "独立指导记录"}</span><button type="button" disabled={guidanceStatusBusy === note.id} onClick={() => void updateGuidanceStatus(note, note.status === "open" ? "complete" : "reopen")}>{note.status === "open" ? "导师代为标记完成" : "重新打开"}</button></footer></div>
         </details>)}{!guidanceNotes.length ? <div className="student-guidance-ledger-empty">尚无已保存指导；使用上方表单即可建立第一条。</div> : null}</div>
       </div>
       <details className="student-formal-review">

@@ -1,44 +1,39 @@
 import { env } from "cloudflare:workers";
 
-type Degree = "博士" | "硕士";
-
 const DAY = 24 * 60 * 60 * 1000;
 
-const demoStudents = Array.from({ length: 25 }, (_, index) => {
-  const isDoctor = index < 12;
-  const number = isDoctor ? index + 1 : index - 11;
-  const degree: Degree = isDoctor ? "博士" : "硕士";
-  const stages = isDoctor
-    ? ["文献与选题", "方法开发", "关键实验", "论文撰写", "论文返修"]
-    : ["文献与选题", "数据准备", "模型验证", "实验分析", "论文撰写"];
-  const focuses = isDoctor
-    ? ["射线图像缺陷检测", "跨材料泛化", "低剂量成像增强", "缺陷三维重建"]
-    : ["数据标注规范", "模型复现", "实验对照", "工程数据分析"];
+export const CURRENT_SCHEMA_VERSION = 16;
 
-  return {
-    id: `${isDoctor ? "phd" : "master"}-${String(number).padStart(2, "0")}`,
-    displayName: `${degree}生 ${String(number).padStart(2, "0")}`,
-    degree,
-    gradeYear: isDoctor ? 2022 + (index % 4) : 2024 + (index % 3),
-    stage: stages[index % stages.length],
-    cadenceDays: [7, 14, 21, 30][index % 4],
-    currentFocus: focuses[index % focuses.length],
-    daysSinceProgress: [2, 8, 12, 36, 68, 97, 5, 17, 28, 43, 72, 9, 14, 25, 39, 61, 88, 3, 19, 31, 55, 77, 101, 11, 23][index],
-  };
-});
-
-const demoProgress = [
-  ["phd-01", "实验", "完成高噪声条件下三组对照实验", "形成可复现实验表格与初步结论", "实验记录 EXP-0820；结果图 3 张"],
-  ["phd-02", "算法", "完成跨材料泛化验证与误差分析", "定位两类主要失效样本", "私有仓库提交 8b4e2d1"],
-  ["phd-03", "文献", "完成 6 篇低剂量成像论文深读", "提炼三类增强方法并形成选型建议", "DOI 清单与逐篇阅读卡"],
-  ["phd-04", "论文", "完成返修实验方案", "明确两项补充实验的变量与验收条件", "返修任务清单 v2"],
-  ["master-01", "数据", "完成厚板缺陷数据标注规范", "统一边界缺陷和伪影的处理规则", "标注规范 v0.3；抽检 120 张"],
-  ["master-02", "复现", "复现基线模型并得到首轮指标", "mAP 与论文报告值相差 1.8%", "运行日志 run-240819"],
+const REQUIRED_TABLES = [
+  "students",
+  "progress_entries",
+  "app_users",
+  "app_sessions",
+  "mentor_student_assignments",
+  "student_guidance_notes",
+  "student_guidance_events",
+  "student_identity_binding_batches",
+  "student_feishu_identity_bindings",
+  "meeting_requests",
+  "progress_audit_events",
+  "progress_attachments",
+  "student_papers",
+  "paper_progress_details",
+  "research_proposals",
+  "research_milestones",
+  "research_outputs",
+  "feishu_meeting_summary_imports",
+  "feishu_meeting_summary_links",
+  "progress_evidence_sources",
 ] as const;
 
-function isoDaysAgo(days: number) {
-  return new Date(Date.now() - days * DAY).toISOString();
-}
+export type DatabaseSchemaStatus = {
+  version: number | null;
+  expectedVersion: number;
+  missingTables: string[];
+};
+
+let databaseReadyPromise: Promise<void> | null = null;
 
 export function getD1() {
   if (!env.DB) {
@@ -47,7 +42,11 @@ export function getD1() {
   return env.DB;
 }
 
-async function ensureColumn(table: "progress_entries" | "student_guidance_notes", column: string, definition: string) {
+async function ensureColumn(
+  table: "app_user_role_events" | "progress_entries" | "student_guidance_notes",
+  column: string,
+  definition: string,
+) {
   const d1 = getD1();
   const { results } = await d1.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
   if (results.some((item) => item.name === column)) return;
@@ -59,9 +58,60 @@ async function ensureColumn(table: "progress_entries" | "student_guidance_notes"
   }
 }
 
+export async function getDatabaseSchemaStatus(): Promise<DatabaseSchemaStatus> {
+  const d1 = getD1();
+  const placeholders = REQUIRED_TABLES.map(() => "?").join(",");
+  const tables = await d1.prepare(`SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name IN (${placeholders})`)
+    .bind(...REQUIRED_TABLES)
+    .all<{ name: string }>();
+  const present = new Set(tables.results.map((item) => item.name));
+  const metaTable = await d1.prepare(`SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name = 'app_schema_meta'`).first<{ name: string }>();
+  const meta = metaTable
+    ? await d1.prepare("SELECT version FROM app_schema_meta WHERE id = 1").first<{ version: number }>()
+    : null;
+  return {
+    version: meta ? Number(meta.version) : null,
+    expectedVersion: CURRENT_SCHEMA_VERSION,
+    missingTables: REQUIRED_TABLES.filter((name) => !present.has(name)),
+  };
+}
+
+async function prepareDatabase() {
+  const before = await getDatabaseSchemaStatus();
+  if (before.version === CURRENT_SCHEMA_VERSION) {
+    if (before.missingTables.length) {
+      throw new Error(`数据库结构不完整：缺少 ${before.missingTables.join("、")}`);
+    }
+    return;
+  }
+  if (before.version !== null && before.version > CURRENT_SCHEMA_VERSION) {
+    throw new Error(`数据库版本 ${before.version} 高于应用支持版本 ${CURRENT_SCHEMA_VERSION}`);
+  }
+  await migrateDatabase();
+  const after = await getDatabaseSchemaStatus();
+  if (after.version !== CURRENT_SCHEMA_VERSION || after.missingTables.length) {
+    throw new Error("数据库升级未完成，系统已停止继续读写");
+  }
+}
+
 export async function ensureDatabase() {
+  databaseReadyPromise ??= prepareDatabase().catch((error) => {
+    databaseReadyPromise = null;
+    throw error;
+  });
+  return databaseReadyPromise;
+}
+
+async function migrateDatabase() {
   const d1 = getD1();
   await d1.batch([
+    d1.prepare(`CREATE TABLE IF NOT EXISTS app_schema_meta (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      version INTEGER NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS students (
       id TEXT PRIMARY KEY,
       display_name TEXT NOT NULL,
@@ -135,8 +185,21 @@ export async function ensureDatabase() {
       next_action TEXT NOT NULL DEFAULT '',
       due_date TEXT,
       status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'completed')),
+      acknowledged_at TEXT,
+      completed_at TEXT,
+      completed_by_user_id INTEGER REFERENCES app_users(id),
+      completion_note TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS student_guidance_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guidance_note_id INTEGER NOT NULL REFERENCES student_guidance_notes(id),
+      actor_user_id INTEGER REFERENCES app_users(id),
+      actor_type TEXT NOT NULL CHECK (actor_type IN ('staff', 'student', 'system')),
+      action TEXT NOT NULL CHECK (action IN ('created', 'acknowledged', 'completed', 'reopened')),
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS app_user_role_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -355,6 +418,7 @@ export async function ensureDatabase() {
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_guidance_student_created ON student_guidance_notes(student_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_guidance_mentor_created ON student_guidance_notes(mentor_user_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_guidance_source ON student_guidance_notes(source_progress_entry_id)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_guidance_events_note_created ON student_guidance_events(guidance_note_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_user_role_events_target ON app_user_role_events(target_user_id, created_at)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_app_user_role_events_actor ON app_user_role_events(actor_user_id, created_at)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_identity_bindings_open_id ON student_feishu_identity_bindings(feishu_open_id)"),
@@ -402,6 +466,10 @@ export async function ensureDatabase() {
   await ensureColumn("progress_entries", "reviewed_by_user_id", "INTEGER REFERENCES app_users(id)");
   await ensureColumn("progress_entries", "updated_at", "TEXT");
   await ensureColumn("student_guidance_notes", "title", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("student_guidance_notes", "acknowledged_at", "TEXT");
+  await ensureColumn("student_guidance_notes", "completed_at", "TEXT");
+  await ensureColumn("student_guidance_notes", "completed_by_user_id", "INTEGER REFERENCES app_users(id)");
+  await ensureColumn("student_guidance_notes", "completion_note", "TEXT NOT NULL DEFAULT ''");
 
   await d1.batch([
     d1.prepare(`UPDATE progress_entries SET
@@ -454,55 +522,13 @@ export async function ensureDatabase() {
         p.submitted_at, p.submitted_by_user_id
       FROM progress_entries p
       WHERE NOT EXISTS (SELECT 1 FROM progress_evidence_sources e WHERE e.progress_entry_id = p.id)`),
+    d1.prepare("UPDATE app_users SET email = '' WHERE email != ''"),
+    d1.prepare(`INSERT INTO app_schema_meta (id, version, updated_at)
+      VALUES (1, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(id) DO UPDATE SET version = excluded.version, updated_at = CURRENT_TIMESTAMP`)
+      .bind(CURRENT_SCHEMA_VERSION),
     d1.prepare("PRAGMA optimize"),
   ]);
-
-  const count = await d1.prepare("SELECT COUNT(*) AS count FROM students").first<{ count: number }>();
-  if ((count?.count ?? 0) > 0) return;
-
-  await d1.batch(
-    demoStudents.map((student) =>
-      d1
-        .prepare(`INSERT INTO students
-          (id, display_name, degree, grade_year, stage, cadence_days, current_focus, last_substantive_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        .bind(
-          student.id,
-          student.displayName,
-          student.degree,
-          student.gradeYear,
-          student.stage,
-          student.cadenceDays,
-          student.currentFocus,
-          isoDaysAgo(student.daysSinceProgress),
-        ),
-    ),
-  );
-
-  const entries = demoProgress.map((entry) => {
-    const student = demoStudents.find((item) => item.id === entry[0])!;
-    return d1
-      .prepare(`INSERT INTO progress_entries
-        (student_id, kind, title, summary, evidence, submitted_at, status,
-         review_status, assessment, reviewed_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'substantive', 'accepted', 'substantive', ?, ?)`)
-      .bind(
-        entry[0], entry[1], entry[2], entry[3], entry[4],
-        isoDaysAgo(student.daysSinceProgress),
-        isoDaysAgo(Math.max(0, student.daysSinceProgress - 1)),
-        isoDaysAgo(Math.max(0, student.daysSinceProgress - 1)),
-      );
-  });
-
-  const pending = [
-    d1.prepare(`INSERT INTO progress_entries (student_id, kind, title, summary, evidence, submitted_at, status)
-      VALUES ('phd-05', '实验', '完成探测器参数敏感性实验', '观察到曝光时间与噪声的非线性关系', '实验记录 EXP-0819', ?, 'pending')`).bind(isoDaysAgo(1)),
-    d1.prepare(`INSERT INTO progress_entries (student_id, kind, title, summary, evidence, submitted_at, status)
-      VALUES ('master-03', '文献', '阅读缺陷分割相关论文 4 篇', '归纳弱监督与半监督两条技术路线', '含 DOI 与逐篇阅读记录', ?, 'pending')`).bind(isoDaysAgo(2)),
-    d1.prepare(`INSERT INTO progress_entries (student_id, kind, title, summary, evidence, submitted_at, status)
-      VALUES ('phd-06', '算法', '完成多尺度模块消融实验', '小缺陷召回率提升 2.4%', '私有仓库提交 c9f10ac', ?, 'pending')`).bind(isoDaysAgo(3)),
-  ];
-  await d1.batch([...entries, ...pending]);
 }
 
 export function riskFromDate(value: string | null) {

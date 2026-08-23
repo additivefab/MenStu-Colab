@@ -148,12 +148,12 @@ test("concurrent first-login upsert preserves an established role and student bi
       feishu_user_id = excluded.feishu_user_id,
       display_name = excluded.display_name,
       avatar_url = excluded.avatar_url,
-      email = excluded.email,
+      email = '',
       last_login_at = CURRENT_TIMESTAMP`);
   upsert.run("ou_same", "union", "user", "更新资料", "avatar", "mail@example.com");
   assert.deepEqual(
-    { ...database.prepare("SELECT role, student_id, display_name FROM app_users WHERE feishu_open_id = 'ou_same'").get() },
-    { role: "student", student_id: "student-010", display_name: "更新资料" },
+    { ...database.prepare("SELECT role, student_id, display_name, email FROM app_users WHERE feishu_open_id = 'ou_same'").get() },
+    { role: "student", student_id: "student-010", display_name: "更新资料", email: "" },
   );
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM app_users").get().count, 1);
   database.close();

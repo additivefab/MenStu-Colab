@@ -1,4 +1,4 @@
-import { getAppUser, isFeishuConfigured } from "../../../../lib/feishu-auth";
+import { getAppUser, isFeishuConfigured, publicAppUser } from "../../../../lib/feishu-auth";
 
 export async function GET(request: Request) {
   if (!isFeishuConfigured()) {
@@ -6,5 +6,5 @@ export async function GET(request: Request) {
   }
   const user = await getAppUser(request);
   if (!user) return Response.json({ configured: true, user: null }, { status: 401 });
-  return Response.json({ configured: true, user });
+  return Response.json({ configured: true, user: publicAppUser(user) });
 }

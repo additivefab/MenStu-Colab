@@ -213,6 +213,22 @@ type MeetingRequest = {
   version: number;
 };
 
+type StudentGuidanceNote = {
+  id: number;
+  student_id: string;
+  title: string;
+  content: string;
+  next_action: string;
+  due_date: string | null;
+  status: "open" | "completed";
+  mentor_name: string;
+  acknowledged_at: string | null;
+  completed_at: string | null;
+  completed_by_name: string | null;
+  completion_note: string;
+  created_at: string;
+};
+
 type ViewerRole = "superadmin" | "admin" | "student";
 
 function isReviewerRole(role: ViewerRole) {
@@ -831,6 +847,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
             <button type="button" onClick={openMeetingDesk}>约导师聊一聊</button>
           </div>
         </section>
+        <StudentGuidanceInbox compact onToast={onToast} />
         <StudentTodayDesk student={student} papers={papers} onPaper={() => openComposer("论文")} onProject={() => openComposer("项目")} onMeeting={openMeetingDesk} onSupplement={openSupplement} onOpenProgress={(entry) => navigateStudent({ view: entry.kind === "组会" ? "mentor" : "progress", entryId: entry.id })} />
       </div> : null}
 
@@ -853,7 +870,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
 
       {view === "library" ? <><StudentViewIntro id="student-view-library-title" eyebrow="ARTIFACT LIBRARY" title="科研资料与证据来源" description="文件、DOI、Git 链接和组会来源集中检索，不再回到每条进展里翻找。" /><StudentResearchLibrary student={student} onOpenSource={openResearchSource} /></> : null}
 
-      {view === "mentor" ? <><StudentViewIntro id="student-view-mentor-title" eyebrow="MENTOR COLLABORATION" title="组会与导师协作" description="发起预约、查看导师处理结果，并回看 AI 组会总结形成的进展。" /><div className="student-mentor-grid"><StudentMeetingRequests onToast={onToast} /><StudentProgressOverview student={student} fixedFilter="组会" /></div></> : null}
+      {view === "mentor" ? <><StudentViewIntro id="student-view-mentor-title" eyebrow="MENTOR COLLABORATION" title="组会与导师协作" description="接收导师指导、回报完成情况、发起预约，并回看 AI 组会总结形成的进展。" /><div className="student-mentor-grid"><StudentGuidanceInbox onToast={onToast} /><StudentMeetingRequests onToast={onToast} /><StudentProgressOverview student={student} fixedFilter="组会" /></div></> : null}
 
       <footer className="student-portal-boundary">这里仅显示你自己的论文、课题、组会记录和导师回复。</footer>
     </main>
@@ -1364,6 +1381,91 @@ function StudentProjectProgressPanel({ student, onRefresh, onToast }: {
         <button className="primary" disabled={busy === entry.id}>{busy === entry.id ? "提交中…" : "重新提交"}</button>
       </form></details> : null}
     </article>)}{!entries.length ? <div className="student-portal-empty">还没有课题进展。点上方“记课题进展”就能添加。</div> : null}</div>
+  </section>;
+}
+
+function guidanceDueLabel(note: StudentGuidanceNote) {
+  if (note.status === "completed") return "已完成";
+  if (!note.due_date) return "未设置期限";
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const due = new Date(`${note.due_date}T00:00:00+08:00`);
+  const days = Math.ceil((due.getTime() - today.getTime()) / 86_400_000);
+  if (days < 0) return `已逾期 ${Math.abs(days)} 天`;
+  if (days === 0) return "今天到期";
+  return `${days} 天后到期`;
+}
+
+function StudentGuidanceInbox({ compact = false, onToast }: {
+  compact?: boolean;
+  onToast: (message: string) => void;
+}) {
+  const [notes, setNotes] = useState<StudentGuidanceNote[]>([]);
+  const [completionNotes, setCompletionNotes] = useState<Record<number, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [message, setMessage] = useState("");
+
+  const load = useCallback(async () => {
+    const response = await fetch("/api/student-guidance", { cache: "no-store" });
+    const payload = await response.json() as { notes?: StudentGuidanceNote[]; error?: string };
+    if (!response.ok) throw new Error(payload.error || "导师指导读取失败");
+    setNotes(payload.notes ?? []);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load()
+      .catch((error: Error) => setMessage(error.message))
+      .finally(() => setLoading(false)), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  async function update(note: StudentGuidanceNote, action: "acknowledge" | "complete") {
+    setBusy(note.id);
+    setMessage("");
+    try {
+      const response = await fetch("/api/student-guidance", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: note.id,
+          action,
+          completionNote: action === "complete" ? completionNotes[note.id] || "" : "",
+        }),
+      });
+      const payload = await response.json() as { message?: string; error?: string };
+      if (!response.ok) throw new Error(payload.error || "导师指导更新失败");
+      setCompletionNotes((current) => ({ ...current, [note.id]: "" }));
+      onToast(payload.message || (action === "complete" ? "指导事项已完成" : "已确认收到"));
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "导师指导更新失败");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const openNotes = notes.filter((note) => note.status === "open");
+  const visibleNotes = compact ? openNotes.slice(0, 3) : notes;
+  if (compact && !loading && !openNotes.length && !message) return null;
+
+  return <section className={`student-portal-panel student-guidance-inbox${compact ? " compact" : ""}`}>
+    <div className="student-portal-panel-head"><div><span>导师指导</span><h2>{compact ? "导师给你的下一步" : "收到的导师指导"}</h2><p>{compact ? "先确认收到，再完成导师布置的具体行动。" : "指导内容、行动期限和完成回报都保留在同一条记录中。"}</p></div><strong>{openNotes.length}<small>项进行中</small></strong></div>
+    {loading ? <div className="student-portal-empty">正在读取导师指导…</div> : <div className="student-guidance-inbox-list">
+      {visibleNotes.map((note) => <article key={note.id} className={note.status}>
+        <header><div><span>{note.mentor_name} · {shortDate(note.created_at)}</span><strong>{note.title || "导师指导"}</strong></div><em>{guidanceDueLabel(note)}</em></header>
+        <p>{note.content}</p>
+        {note.next_action ? <div className="student-guidance-next"><span>下一项可交付行动</span><strong>{note.next_action}</strong>{note.due_date ? <small>期限 {note.due_date}</small> : null}</div> : null}
+        {note.status === "open" ? <footer>
+          {!note.acknowledged_at ? <button type="button" disabled={busy === note.id} onClick={() => void update(note, "acknowledge")}>确认收到</button> : <span className="student-guidance-ack">✓ 已确认收到</span>}
+          <label>完成说明（可选）<input value={completionNotes[note.id] || ""} maxLength={1000} onChange={(event) => setCompletionNotes((current) => ({ ...current, [note.id]: event.target.value }))} placeholder="例如：已补做实验并提交结果表" /></label>
+          <button className="primary" type="button" disabled={busy === note.id} onClick={() => void update(note, "complete")}>{busy === note.id ? "保存中…" : "标记完成"}</button>
+        </footer> : <footer className="completed"><span>✓ {note.completed_by_name || "已完成"}{note.completed_at ? ` · ${shortDate(note.completed_at)}` : ""}</span>{note.completion_note ? <p>{note.completion_note}</p> : null}</footer>}
+      </article>)}
+      {!visibleNotes.length ? <div className="student-portal-empty">目前没有导师指导事项。</div> : null}
+    </div>}
+    {compact && notes.length > visibleNotes.length ? <a className="student-guidance-more" href={studentNavigationHref({ view: "mentor" })}>查看全部导师指导 ›</a> : null}
+    {message ? <p className="student-meeting-message" role="status">{message}</p> : null}
   </section>;
 }
 
@@ -1998,6 +2100,7 @@ function SettingsView({ viewer, onFeishu, students, onRosterImported }: {
   onRosterImported: () => Promise<void>;
 }) {
   return <div className="settings-grid">
+    {viewer.role === "superadmin" ? <ProductionReadinessPanel /> : null}
     {viewer.role === "superadmin" ? <RosterImport students={students} onImported={onRosterImported} /> : null}
     {viewer.role === "superadmin" ? <StudentAccessSetup /> : null}
     <section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、提醒与 AI 会议总结导入" /><div className="setting-body"><span className="status-pill safe">智能拆分已启用</span><p>普通聊天即时过滤；智能纪要会按学生姓名和汇报分段生成个人进展，归属不明确时才进入备用人工区。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section>
@@ -2006,6 +2109,51 @@ function SettingsView({ viewer, onFeishu, students, onRosterImported }: {
     <AccountManagement viewer={viewer} students={students} />
     <section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section>
   </div>;
+}
+
+type ReadinessCheck = {
+  id: string;
+  label: string;
+  status: "pass" | "fail" | "warning" | "manual";
+  detail: string;
+};
+
+function ProductionReadinessPanel() {
+  const [checks, setChecks] = useState<ReadinessCheck[]>([]);
+  const [ready, setReady] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/health/ready", { cache: "no-store" });
+      const payload = await response.json() as { ready?: boolean; checks?: ReadinessCheck[] };
+      setReady(Boolean(payload.ready));
+      setChecks(payload.checks ?? []);
+      if (!payload.checks?.length) throw new Error("生产就绪状态没有返回检查结果");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "生产就绪状态读取失败");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  const blocking = checks.filter((check) => check.status === "fail").length;
+  return <section className="panel setting-card production-readiness-panel">
+    <PanelHeader title="生产就绪控制台" subtitle="读取真实绑定、名册、角色与存储状态" />
+    <div className="setting-body">
+      <div className="production-readiness-summary"><span className={`status-pill ${ready ? "safe" : "pending"}`}>{loading ? "检查中" : ready ? "技术条件通过" : `${blocking} 项阻塞`}</span><p>这里不把人工验收伪装成自动通过；大陆三网和备份恢复必须按真实结果验收。</p><button type="button" onClick={() => void load()} disabled={loading}>{loading ? "正在检查…" : "重新检查"}</button></div>
+      <div className="production-readiness-checks">{checks.map((check) => <div key={check.id} className={check.status}><i aria-hidden="true">{check.status === "pass" ? "✓" : check.status === "fail" ? "!" : check.status === "warning" ? "△" : "人"}</i><span><strong>{check.label}</strong><small>{check.detail}</small></span><em>{check.status === "pass" ? "通过" : check.status === "fail" ? "阻塞" : check.status === "warning" ? "提醒" : "人工验收"}</em></div>)}</div>
+      {message ? <small role="status">{message}</small> : null}
+    </div>
+  </section>;
 }
 
 function RosterImport({ students, onImported }: { students: Student[]; onImported: () => Promise<void> }) {
@@ -2123,7 +2271,6 @@ type ManagedUser = {
   id: number;
   display_name: string;
   avatar_url: string;
-  email: string;
   role: "superadmin" | "admin" | "student" | "pending";
   student_id: string | null;
   student_name: string | null;
@@ -2225,7 +2372,7 @@ function AccountManagement({ viewer, students }: { viewer: DashboardData["viewer
       const canEdit = !isSelf && viewer.role === "superadmin";
       const badge = managedRoleLabels[user.role];
       return <div className="account-row" key={user.id}>
-        <div className="account-person"><div className="mini-avatar">{user.display_name.slice(0, 1)}</div><span><strong>{user.display_name}</strong><small>{user.email || "飞书成员"}</small></span></div>
+        <div className="account-person"><div className="mini-avatar">{user.display_name.slice(0, 1)}</div><span><strong>{user.display_name}</strong><small>飞书成员 · 最近登录 {shortDate(user.last_login_at)}</small></span></div>
         {canBootstrapSelf ? <><span className="status-pill safe">{badge} · 当前账号</span>{user.student_name ? <span className="bound-student">本人学生记录：{user.student_name}</span> : null}<button className="bind" disabled={busy === user.id} onClick={() => void updateUser(user, "superadmin")}>{busy === user.id ? "初始化中…" : "一次性初始化为超级管理员"}</button></> : !canEdit ? <><span className={`status-pill ${user.role === "pending" ? "pending" : "safe"}`}>{badge}{isSelf ? " · 当前账号" : ""}</span>{user.student_name ? <span className="bound-student">本人学生记录：{user.student_name}</span> : null}</> : <>
           <div className="account-role-editor">
             <label>角色<select value={selectedRole} onChange={(event) => setRoleChoices((current) => ({ ...current, [user.id]: event.target.value as ManagedUser["role"] }))}>

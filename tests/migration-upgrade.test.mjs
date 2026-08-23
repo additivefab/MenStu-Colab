@@ -3,7 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-test("0010-0015 preserve existing data while adding identity, attachment, paper, and free-form guidance workflows", async () => {
+test("0010-0016 preserve existing data while adding identity, attachment, paper, guidance, and production schema gates", async () => {
   const migrationDirectory = new URL("../drizzle/", import.meta.url);
   const names = (await readdir(migrationDirectory))
     .filter((name) => /^\d{4}_.*\.sql$/.test(name))
@@ -11,7 +11,7 @@ test("0010-0015 preserve existing data while adding identity, attachment, paper,
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
 
-  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_", "0014_", "0015_"].some((prefix) => item.startsWith(prefix)))) {
+  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_", "0014_", "0015_", "0016_"].some((prefix) => item.startsWith(prefix)))) {
     database.exec(await readFile(new URL(name, migrationDirectory), "utf8"));
   }
   database.exec(`
@@ -37,6 +37,7 @@ test("0010-0015 preserve existing data while adding identity, attachment, paper,
   const paperMigration = await readFile(new URL(names.find((item) => item.startsWith("0013_")), migrationDirectory), "utf8");
   const guidanceMigration = await readFile(new URL(names.find((item) => item.startsWith("0014_")), migrationDirectory), "utf8");
   const freeGuidanceMigration = await readFile(new URL(names.find((item) => item.startsWith("0015_")), migrationDirectory), "utf8");
+  const productionMigration = await readFile(new URL(names.find((item) => item.startsWith("0016_")), migrationDirectory), "utf8");
   database.exec(businessMigration);
   database.exec(roleMigration);
   database.exec(roleIndexMigration);
@@ -206,6 +207,22 @@ test("0010-0015 preserve existing data while adding identity, attachment, paper,
     { ...database.prepare(`SELECT guidance_type, title, content, next_action, status
       FROM student_guidance_notes WHERE student_id = 'student-upgrade'`).get() },
     { guidance_type: "general", title: "下一轮实验设计", content: "优先核对历史实验的可重复性", next_action: "补充对照实验", status: "open" },
+  );
+  database.exec("UPDATE app_users SET email = 'must-not-persist@example.com' WHERE id = 9002");
+  database.exec(productionMigration);
+  assert.deepEqual(
+    database.prepare("PRAGMA table_info('student_guidance_notes')").all().map((column) => column.name).slice(-6),
+    ["updated_at", "title", "acknowledged_at", "completed_at", "completed_by_user_id", "completion_note"],
+  );
+  assert.deepEqual(
+    database.prepare("PRAGMA table_info('student_guidance_events')").all().map((column) => column.name),
+    ["id", "guidance_note_id", "actor_user_id", "actor_type", "action", "note", "created_at"],
+  );
+  assert.equal(database.prepare("SELECT version FROM app_schema_meta WHERE id = 1").get().version, 16);
+  assert.equal(database.prepare("SELECT email FROM app_users WHERE id = 9002").get().email, "");
+  assert.throws(
+    () => database.exec("INSERT INTO app_schema_meta (id, version) VALUES (2, 16)"),
+    /CHECK constraint failed: app_schema_meta_singleton/,
   );
   assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
   database.close();
