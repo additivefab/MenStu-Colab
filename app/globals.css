@@ -698,6 +698,46 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-portal-summary small { color: #8c98a8; font-size: 12px; }
 .student-portal-summary article.overdue { border-color: #edc9c4; background: #fff8f7; }
 .student-portal-summary article.overdue strong { color: #ad4c44; }
+.student-quick-progress { margin-top: 18px; scroll-margin-top: 18px; overflow: hidden; border: 1px solid #cbdcf0; border-radius: 18px; background: #fff; box-shadow: 0 12px 32px rgba(42, 83, 132, .1); }
+.student-quick-progress > header { padding: 20px 24px; display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; color: #fff; background: linear-gradient(125deg, #1c4778, #2f72b8); }
+.student-quick-progress > header span, .student-quick-progress > header h2, .student-quick-progress > header p { display: block; }
+.student-quick-progress > header span { color: #b9dcff; font-size: 11px; font-weight: 800; }
+.student-quick-progress > header h2 { margin: 5px 0 3px; font-size: 20px; }
+.student-quick-progress > header p { margin: 0; color: #d9eafd; font-size: 12px; }
+.student-quick-progress > header button { min-height: 36px; padding: 0 13px; border: 1px solid #ffffff55; border-radius: 9px; color: #fff; background: #ffffff12; }
+.student-quick-progress form { padding: 22px 24px; display: grid; gap: 14px; }
+.student-quick-progress label { display: grid; gap: 6px; color: #52647a; font-size: 12px; font-weight: 750; }
+.student-quick-progress input, .student-quick-progress select, .student-quick-progress textarea { width: 100%; min-height: 45px; padding: 10px 12px; border: 1px solid #d8e1eb; border-radius: 10px; color: #263a53; background: #fbfcfe; font: inherit; font-size: 14px; resize: vertical; }
+.student-quick-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.student-quick-row.new-paper { grid-template-columns: 1.5fr .7fr .9fr; }
+.student-quick-file { padding: 13px 15px; border: 1px dashed #cbd8e7; border-radius: 11px; background: #f7faff; }
+.student-quick-file small { color: #8a97a7; font-size: 11px; font-weight: 500; }
+.student-quick-progress footer { display: flex; align-items: center; justify-content: flex-end; gap: 9px; }
+.student-quick-progress footer span { margin-right: auto; color: #7d8999; font-size: 11px; }
+.student-quick-progress footer button { min-height: 40px; padding: 0 15px; border: 1px solid #d7e0ea; border-radius: 9px; color: #53677f; background: white; font-weight: 750; }
+.student-quick-progress footer button.primary { border-color: #2f6fbb; color: white; background: #2f6fbb; }
+.student-ai-meetings { margin-bottom: 18px; overflow: hidden; border: 1px solid #e1e8f0; border-radius: 19px; background: #fff; box-shadow: 0 10px 28px rgba(56, 78, 108, .07); }
+.student-ai-meetings > header { padding: 22px 25px 17px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid #edf1f5; }
+.student-ai-meetings > header span { color: #3971ba; font-size: 11px; font-weight: 800; }
+.student-ai-meetings > header h2 { margin: 5px 0 3px; font-size: 19px; }
+.student-ai-meetings > header p { margin: 0; color: #8793a4; font-size: 13px; }
+.student-ai-meetings > header > strong { min-width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; color: #2d6cb7; background: #eaf3ff; font-size: 14px; }
+.student-ai-meetings details { border-bottom: 1px solid #edf1f5; }
+.student-ai-meetings details:last-child { border-bottom: 0; }
+.student-ai-meetings summary { min-height: 68px; padding: 13px 24px; display: grid; grid-template-columns: 74px minmax(0, 1fr) auto auto; align-items: center; gap: 13px; cursor: pointer; list-style: none; }
+.student-ai-meetings summary::-webkit-details-marker { display: none; }
+.student-ai-meetings summary time { color: #74869a; font-size: 12px; }
+.student-ai-meetings summary > span strong, .student-ai-meetings summary > span small { display: block; }
+.student-ai-meetings summary > span strong { font-size: 14px; line-height: 1.45; }
+.student-ai-meetings summary > span small { margin-top: 4px; color: #8b98a8; font-size: 11px; }
+.student-ai-meetings summary > em { font-style: normal; }
+.student-ai-meetings summary i { color: #326db3; font-size: 11px; font-style: normal; font-weight: 800; }
+.student-ai-meetings details[open] summary { background: #f8fbff; }
+.student-ai-meetings details[open] summary i { font-size: 0; }
+.student-ai-meetings details[open] summary i::after { content: "收起"; font-size: 11px; }
+.student-ai-meetings details > article { padding: 5px 24px 20px 111px; }
+.student-ai-meetings details > article > p { margin: 0; color: #42566f; font-size: 13px; line-height: 1.8; white-space: pre-wrap; }
+.student-ai-meetings blockquote { display: grid; gap: 4px; margin: 13px 0 0; padding: 11px 13px; border: 0; border-left: 3px solid #e1a636; border-radius: 0 9px 9px 0; color: #66553a; background: #fff9eb; font-size: 12px; }
 .student-portal-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr); gap: 18px; align-items: start; }
 .student-portal-side { display: grid; gap: 18px; }
 .student-portal-panel { overflow: hidden; border: 1px solid #e1e8f0; border-radius: 19px; background: #fff; box-shadow: 0 10px 28px rgba(56, 78, 108, .07); }
@@ -1194,6 +1234,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-primary-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .student-primary-actions button { min-height: 46px; }
   .student-portal-summary { grid-template-columns: 1fr 1fr; }
+  .student-quick-progress > header, .student-quick-progress form { padding-inline: 18px; }
+  .student-quick-row, .student-quick-row.new-paper { grid-template-columns: 1fr; }
+  .student-quick-progress footer { align-items: stretch; flex-wrap: wrap; }
+  .student-quick-progress footer span { width: 100%; margin: 0 0 3px; }
+  .student-quick-progress footer button { flex: 1; min-height: 44px; }
+  .student-ai-meetings > header { padding-inline: 18px; }
+  .student-ai-meetings summary { grid-template-columns: minmax(0, 1fr) auto; padding-inline: 18px; }
+  .student-ai-meetings summary time { grid-column: 1; }
+  .student-ai-meetings summary > span { grid-column: 1; }
+  .student-ai-meetings summary > em { grid-column: 2; grid-row: 1; }
+  .student-ai-meetings summary > i { grid-column: 2; grid-row: 2; }
+  .student-ai-meetings details > article { padding: 2px 18px 18px; }
   .student-paper-register { grid-template-columns: 1fr; padding-inline: 18px; }
   .student-portal-panel-head { padding-inline: 18px; }
   .student-progress-feed-list, .student-meeting-history { padding-inline: 18px; }

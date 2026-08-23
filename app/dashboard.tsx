@@ -315,7 +315,6 @@ export default function Dashboard() {
   const [riskFilter, setRiskFilter] = useState<"全部" | RiskLevel>("全部");
   const [degreeFilter, setDegreeFilter] = useState<"全部" | Student["degree"]>("全部");
   const [submitOpen, setSubmitOpen] = useState(false);
-  const [studentSubmitKind, setStudentSubmitKind] = useState<"论文" | "项目">("论文");
   const [feishuOpen, setFeishuOpen] = useState(false);
   const [reviewBusy, setReviewBusy] = useState<number | null>(null);
   const [reviewNotes, setReviewNotes] = useState<Record<number, string>>({});
@@ -435,17 +434,13 @@ export default function Dashboard() {
   }
 
   if (data?.viewer.role === "student") {
-    const ownStudents = data.students.filter((student) => student.id === data.viewer.studentId);
-    const ownPapers = data.papers.filter((paper) => paper.student_id === data.viewer.studentId);
     return <>
       <StudentPortal
         data={data}
-        onSubmitProgress={(kind) => { setStudentSubmitKind(kind); setSubmitOpen(true); }}
         onRefresh={loadDashboard}
         onToast={setToast}
         onFeishu={() => setFeishuOpen(true)}
       />
-      {submitOpen ? <ProgressModal students={ownStudents} papers={ownPapers} fixedKind={studentSubmitKind} onClose={() => setSubmitOpen(false)} onSaved={async () => { setSubmitOpen(false); setToast(`${studentSubmitKind}进度已提交，等待导师确认`); await loadDashboard(); }} /> : null}
       {feishuOpen ? <FeishuModal viewer={data.viewer} onClose={() => setFeishuOpen(false)} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.reload(); }} /> : null}
       {toast ? <div className="toast" role="status">{toast}</div> : null}
     </>;
@@ -622,24 +617,25 @@ const meetingStatusLabels: Record<MeetingRequest["status"], string> = {
 };
 
 const studentReviewLabels: Record<StudentProgress["review_status"], string> = {
-  submitted: "等待导师接手",
-  in_review: "导师审核中",
-  accepted: "审核通过",
-  changes_requested: "需要补充证据",
-  rejected: "未认定为进展",
+  submitted: "已提交",
+  in_review: "导师在看",
+  accepted: "已确认",
+  changes_requested: "需要补一下",
+  rejected: "暂未通过",
 };
 
-function StudentPortal({ data, onSubmitProgress, onRefresh, onToast, onFeishu }: {
+function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
   data: DashboardData;
-  onSubmitProgress: (kind: "论文" | "项目") => void;
   onRefresh: () => Promise<void>;
   onToast: (message: string) => void;
   onFeishu: () => void;
 }) {
+  const [composer, setComposer] = useState<"论文" | "项目" | null>(null);
   const student = data.students.find((item) => item.id === data.viewer.studentId);
   if (!student) return <main className="student-portal-shell"><div className="error-state"><strong>学生档案尚未绑定</strong><span>请联系管理员核对飞书账号与学生记录。</span></div></main>;
   const papers = data.papers.filter((paper) => paper.student_id === student.id);
   const paperEntries = student.progress.filter((entry) => entry.kind === "论文");
+  const aiMeetingEntries = student.progress.filter((entry) => entry.kind === "组会");
   const pendingCount = paperEntries.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
   const latest = [...paperEntries].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime())[0];
   const trackingPapers = papers.filter((paper) => paper.status === "active" || paper.status === "on_hold");
@@ -649,34 +645,126 @@ function StudentPortal({ data, onSubmitProgress, onRefresh, onToast, onFeishu }:
     .filter((value): value is string => Boolean(value))
     .sort()[0] ?? null;
   const deadline = paperDeadlineState(planned);
+  function openComposer(kind: "论文" | "项目") {
+    setComposer(kind);
+    window.requestAnimationFrame(() => document.getElementById("student-quick-progress")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
   return <main className="student-portal-shell">
     <header className="student-portal-header">
       <div className="brand"><div className="brand-mark">探</div><div><strong>探研</strong><span>学生个人工作台</span></div></div>
-      <div className="student-account"><span className="avatar">{data.viewer.name.slice(0, 1)}</span><div><strong>{data.viewer.name}</strong><small>学生账号 · 仅本人数据</small></div><button type="button" onClick={onFeishu}>飞书账号</button></div>
+      <div className="student-account"><span className="avatar">{data.viewer.name.slice(0, 1)}</span><div><strong>{data.viewer.name}</strong><small>这里只看自己的记录</small></div><button type="button" onClick={onFeishu}>飞书账号</button></div>
     </header>
 
     <section className="student-portal-hero">
-      <div><span className="student-portal-kicker">PAPER PROGRESS DESK</span><h1>{student.name}，推进你的论文</h1><p>按阶段门记录版本、证据、下一行动和截止日期；每次提交都保留导师反馈。</p></div>
+      <div><span className="student-portal-kicker">我的科研</span><h1>{student.name}，今天进展到哪了？</h1><p>把做完的事记下来。论文、课题和每次组会记录，都在这一页。</p></div>
       <div className="student-primary-actions">
-        <button className="primary" type="button" onClick={() => onSubmitProgress("论文")}>＋ 提交论文进度</button>
-        <button type="button" onClick={() => onSubmitProgress("项目")}>＋ 提交项目进度</button>
-        <button type="button" onClick={() => document.getElementById("student-meeting-form")?.scrollIntoView({ behavior: "smooth", block: "start" })}>预约导师会议</button>
+        <button className="primary" type="button" onClick={() => openComposer("论文")}>记论文进展</button>
+        <button type="button" onClick={() => openComposer("项目")}>记课题进展</button>
+        <button type="button" onClick={() => document.getElementById("student-meeting-form")?.scrollIntoView({ behavior: "smooth", block: "start" })}>约导师聊一聊</button>
       </div>
     </section>
 
+    {composer ? <StudentQuickProgressComposer key={composer} kind={composer} student={student} papers={papers} onCancel={() => setComposer(null)} onSaved={async () => { setComposer(null); onToast(`${composer === "论文" ? "论文" : "课题"}进展已提交，下方记录已更新`); await onRefresh(); }} /> : null}
+
     <section className="student-portal-summary" aria-label="我的提交概况">
-      <article><span>论文台账</span><strong>{papers.length}</strong><small>{latest ? `共 ${paperEntries.length} 次版本化更新` : "先建立第一篇论文"}</small></article>
-      <article><span>当前阶段</span><strong>{leadPaper ? paperStageMeta[leadPaper.current_stage].label : "尚未开始"}</strong><small>{leadPaper?.title || "提交进度时可新建论文"}</small></article>
-      <article><span>等待导师反馈</span><strong>{pendingCount}</strong><small>提交后由导师或超级管理员确认</small></article>
-      <article className={deadline.overdue ? "overdue" : ""}><span>计划投稿</span><strong>{deadline.label}</strong><small>{planned || "请在论文台账中设置日期"}</small></article>
+      <article><span>AI 组会记录</span><strong>{aiMeetingEntries.length}</strong><small>每次纪要都留在这里</small></article>
+      <article><span>我的论文</span><strong>{papers.length}</strong><small>{latest ? `已经记了 ${paperEntries.length} 次进展` : "还没有论文记录"}</small></article>
+      <article><span>等导师回复</span><strong>{pendingCount}</strong><small>导师看完后会留下意见</small></article>
+      <article className={deadline.overdue ? "overdue" : ""}><span>最近投稿计划</span><strong>{deadline.label}</strong><small>{planned || leadPaper?.title || "还没设置日期"}</small></article>
     </section>
+
+    <StudentAiMeetingPanel entries={aiMeetingEntries} />
 
     <div className="student-portal-grid">
       <StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} />
       <div className="student-portal-side"><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} /><StudentMeetingRequests onToast={onToast} /></div>
     </div>
-    <footer className="student-portal-boundary">学生端仅管理本人的论文进度、项目进度、提交附件和会议预约；论文采用阶段台账，项目暂沿用原有进展流程。</footer>
+    <footer className="student-portal-boundary">这里仅显示你自己的论文、课题、组会记录和导师回复。</footer>
   </main>;
+}
+
+function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved }: {
+  kind: "论文" | "项目";
+  student: Student;
+  papers: StudentPaper[];
+  onCancel: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const activePapers = papers.filter((paper) => paper.status === "active" || paper.status === "on_hold");
+  const [paperSelection, setPaperSelection] = useState(activePapers[0] ? String(activePapers[0].id) : "new");
+  const selectedPaper = activePapers.find((paper) => String(paper.id) === paperSelection);
+  const [paperStage, setPaperStage] = useState<PaperStage>(selectedPaper?.current_stage ?? "planning");
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [{ minimumDate, nextWeek }] = useState(() => {
+    const formatter = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" });
+    const today = new Date();
+    const due = new Date(today);
+    due.setDate(due.getDate() + 7);
+    return { minimumDate: formatter.format(today), nextWeek: formatter.format(due) };
+  });
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const summary = String(formData.get("summary") ?? "").trim();
+    if (!summary) return setFormError("写一句这次做完了什么");
+    const firstLine = summary.split(/\n/u)[0].slice(0, 70);
+    formData.set("studentId", student.id);
+    formData.set("kind", kind);
+    formData.set("title", (kind === "论文" ? `${selectedPaper?.title || String(formData.get("paperTitle") || "论文")} · ${firstLine}` : firstLine).slice(0, 160));
+    formData.set("evidence", summary);
+    formData.set("literatureRef", "");
+    formData.set("gitUrl", "");
+    if (kind === "论文") {
+      formData.set("paperStage", paperStage);
+      formData.set("manuscriptVersion", `更新 ${minimumDate}`);
+      formData.set("blocker", "");
+      formData.set("submissionIdentifier", "");
+      if (selectedPaper) {
+        formData.set("paperId", String(selectedPaper.id));
+        formData.set("targetVenue", "");
+        formData.set("plannedSubmissionDate", "");
+      }
+    }
+    setBusy(true); setFormError("");
+    try {
+      const response = await fetch("/api/progress", { method: "POST", body: formData });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "提交失败，请再试一次");
+      await onSaved();
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "提交失败，请再试一次");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <section className="student-quick-progress" id="student-quick-progress">
+    <header><div><span>{kind === "论文" ? "论文进展" : "课题进展"}</span><h2>{kind === "论文" ? "这次论文做了什么？" : "这次课题做了什么？"}</h2><p>写清做完的内容，提交后会直接出现在下面。</p></div><button type="button" onClick={onCancel}>收起</button></header>
+    <form onSubmit={submit}>
+      {kind === "论文" ? <>
+        <div className="student-quick-row"><label>哪篇论文<select value={paperSelection} onChange={(event) => { const value = event.target.value; setPaperSelection(value); setPaperStage(activePapers.find((paper) => String(paper.id) === value)?.current_stage ?? "planning"); }}>{activePapers.map((paper) => <option key={paper.id} value={paper.id}>{paper.title}</option>)}<option value="new">新建一篇论文</option></select></label><label>现在写到哪一步<select value={paperStage} onChange={(event) => setPaperStage(event.target.value as PaperStage)}>{paperStages.map((stage) => <option key={stage} value={stage}>{paperStageMeta[stage].label}</option>)}</select></label></div>
+        {!selectedPaper ? <div className="student-quick-row new-paper"><label>论文题目<input name="paperTitle" required placeholder="暂定题目也可以" /></label><label>类型<select name="paperType" defaultValue="期刊论文">{paperTypes.map((type) => <option key={type}>{type}</option>)}</select></label><label>计划投稿<input name="plannedSubmissionDate" type="date" min={minimumDate} required /></label></div> : null}
+        <label className="wide">这次做完了什么<textarea name="summary" rows={4} required placeholder="例如：补完了实验部分，图 3 和图 4 已经换成新结果。" /></label>
+        <div className="student-quick-row"><label>下一步<input name="nextAction" required placeholder="例如：把讨论部分改完" /></label><label>准备什么时候完成<input name="nextActionDueDate" type="date" min={minimumDate} defaultValue={nextWeek} required /></label></div>
+      </> : <label className="wide">这次做完了什么<textarea name="summary" rows={4} required placeholder="例如：完成了第一轮测试，结果表已经整理好。" /></label>}
+      <label className="student-quick-file">有文件就一起放上来（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件，单个不超过 20 MB</small></label>
+      {formError ? <p className="form-error" role="alert">{formError}</p> : null}
+      <footer><span>不用另开窗口，提交后本页会自动更新。</span><button type="button" onClick={onCancel}>取消</button><button className="primary" disabled={busy}>{busy ? "正在提交…" : "提交"}</button></footer>
+    </form>
+  </section>;
+}
+
+function StudentAiMeetingPanel({ entries }: { entries: StudentProgress[] }) {
+  const meetings = [...entries].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
+  return <section className="student-ai-meetings">
+    <header><div><span>组会记录</span><h2>每次 AI 会议纪要</h2><p>飞书纪要整理好后会放到这里，点开就能看。</p></div><strong>{meetings.length}</strong></header>
+    <div>{meetings.map((entry, index) => <details key={entry.id} open={index === 0}>
+      <summary><time>{shortDate(entry.submitted_at)}</time><span><strong>{entry.title}</strong><small>{entry.evidence_sources[0]?.label || "飞书会议纪要"}</small></span><em className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</em><i>查看</i></summary>
+      <article><p>{entry.summary}</p>{entry.reviewer_note ? <blockquote><b>导师回复</b><span>{entry.reviewer_note}</span></blockquote> : null}</article>
+    </details>)}{!meetings.length ? <div className="student-portal-empty">还没有 AI 会议纪要。下一次组会整理完成后会自动出现在这里。</div> : null}</div>
+  </section>;
 }
 
 function StudentProgressPanel({ student, papers, onRefresh, onToast }: {
@@ -713,28 +801,28 @@ function StudentProgressPanel({ student, papers, onRefresh, onToast }: {
   }
 
   return <section className="student-portal-panel student-progress-feed">
-    <div className="student-portal-panel-head"><div><span>PAPER REGISTER</span><h2>论文台账与版本进展</h2><p>一篇论文一条台账；每次更新记录阶段、稿件版本、下一行动与证据。</p></div><b>{entries.length}</b></div>
+    <div className="student-portal-panel-head"><div><span>我的论文</span><h2>论文进展</h2><p>最近写了什么、导师怎么回复，都按时间放在这里。</p></div><b>{entries.length}</b></div>
     <div className="student-paper-register">{papers.map((paper) => { const due = paperDeadlineState(paper.planned_submission_date); const deadlineLabel = paper.status === "published" ? "已发表" : paper.status === "accepted" ? "已录用" : due.label; return <article key={paper.id}>
       <div><span className={`paper-stage stage-${paper.current_stage}`}>{paperStageMeta[paper.current_stage].label}</span><em className={paper.status === "active" && due.overdue ? "overdue" : ""}>{deadlineLabel}</em></div>
       <h3>{paper.title}</h3><p>{paper.paper_type}{paper.target_venue ? ` · ${paper.target_venue}` : " · 目标期刊/会议待定"}</p>
       <footer><span>{paper.update_count} 次更新</span><span>{paper.pending_count ? `${paper.pending_count} 条待反馈` : "无待反馈"}</span></footer>
-    </article>; })}{!papers.length ? <div className="student-portal-empty">尚未建立论文台账。第一次提交论文进度时，填写论文题目与计划投稿日期即可建立。</div> : null}</div>
+    </article>; })}{!papers.length ? <div className="student-portal-empty">还没有论文。点上方“记论文进展”，可以直接新建。</div> : null}</div>
     <div className="student-progress-feed-list">{entries.map((entry) => <article key={entry.id}>
       <div><span className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</span><time>{shortDate(entry.submitted_at)}</time></div>
       <h3>{entry.paper?.title || entry.title}</h3><small>{entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : "历史论文进展"}</small><p>{entry.summary}</p>
-      {entry.paper ? <dl className="student-paper-update-detail"><div><dt>下一行动</dt><dd>{entry.paper.next_action}</dd></div><div><dt>行动期限</dt><dd>{entry.paper.next_action_due_date}</dd></div>{entry.paper.submission_identifier ? <div><dt>稿件编号 / DOI</dt><dd>{entry.paper.submission_identifier}</dd></div> : null}{entry.paper.blocker ? <div className="blocker"><dt>当前阻塞</dt><dd>{entry.paper.blocker}</dd></div> : null}</dl> : null}
+      {entry.paper ? <dl className="student-paper-update-detail"><div><dt>接下来做</dt><dd>{entry.paper.next_action}</dd></div><div><dt>准备完成</dt><dd>{entry.paper.next_action_due_date}</dd></div>{entry.paper.submission_identifier ? <div><dt>稿件编号 / DOI</dt><dd>{entry.paper.submission_identifier}</dd></div> : null}{entry.paper.blocker ? <div className="blocker"><dt>卡在哪里</dt><dd>{entry.paper.blocker}</dd></div> : null}</dl> : null}
       {entry.attachments?.length ? <div className="student-attachment-list" aria-label="提交附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
-      {entry.reviewer_note ? <blockquote><b>导师反馈</b><span>{entry.reviewer_note}</span></blockquote> : null}
-      {entry.review_status === "changes_requested" ? <details><summary>补充证据并重新提交</summary><form onSubmit={(event) => void resubmit(event, entry)}>
-        <label>更新后的结论<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label>
-        <label>补充核验证据<textarea name="evidence" rows={3} required defaultValue={entry.evidence} /></label>
+      {entry.reviewer_note ? <blockquote><b>导师回复</b><span>{entry.reviewer_note}</span></blockquote> : null}
+      {entry.review_status === "changes_requested" ? <details><summary>按导师意见补一下</summary><form onSubmit={(event) => void resubmit(event, entry)}>
+        <label>改完后的内容<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label>
+        <label>补充说明<textarea name="evidence" rows={3} required defaultValue={entry.evidence} /></label>
         {entry.kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required defaultValue={entry.literature_ref} /></label> : <input type="hidden" name="literatureRef" value={entry.literature_ref || ""} />}
         {entry.paper ? <><input type="hidden" name="paperId" value={entry.paper.id} /><label>论文阶段<select name="paperStage" defaultValue={entry.paper.stage}>{paperStages.map((stage) => <option key={stage} value={stage}>{paperStageMeta[stage].label}</option>)}</select></label><label>稿件版本<input name="manuscriptVersion" required defaultValue={entry.paper.manuscript_version} /></label><label>下一行动<textarea name="nextAction" rows={2} required defaultValue={entry.paper.next_action} /></label><label>行动期限<input name="nextActionDueDate" type="date" required defaultValue={entry.paper.next_action_due_date} /></label><label>阻塞问题（可选）<textarea name="blocker" rows={2} defaultValue={entry.paper.blocker} /></label><label>稿件编号 / DOI（可选）<input name="submissionIdentifier" defaultValue={entry.paper.submission_identifier} /></label></> : null}
         <input name="gitUrl" type="hidden" value={entry.git_url || ""} />
         <label>补充附件（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件，单个不超过 20 MB，总计不超过 50 MB</small></label>
         <button className="primary" disabled={busy === entry.id}>{busy === entry.id ? "提交中…" : "重新提交"}</button>
       </form></details> : null}
-    </article>)}{!entries.length ? <div className="student-portal-empty">尚无论文进度。提交第一条带稿件版本和下一行动的更新后，会在这里看到导师反馈。</div> : null}</div>
+    </article>)}{!entries.length ? <div className="student-portal-empty">还没有论文进展。提交后会直接显示在这里。</div> : null}</div>
   </section>;
 }
 
@@ -759,29 +847,29 @@ function StudentProjectProgressPanel({ student, onRefresh, onToast }: {
     try {
       const response = await fetch("/api/progress", { method: "PATCH", body: formData });
       const payload = (await response.json()) as { error?: string; message?: string };
-      if (!response.ok) throw new Error(payload.error || "项目补证提交失败");
-      onToast(payload.message || "项目补证已重新提交");
+      if (!response.ok) throw new Error(payload.error || "课题内容提交失败");
+      onToast(payload.message || "课题内容已重新提交");
       await onRefresh();
     } catch (error) {
-      onToast(error instanceof Error ? error.message : "项目补证提交失败");
+      onToast(error instanceof Error ? error.message : "课题内容提交失败");
     } finally { setBusy(null); }
   }
 
   return <section className="student-portal-panel student-project-feed">
-    <div className="student-portal-panel-head"><div><span>PROJECT PROGRESS</span><h2>项目进度</h2><p>保留原有提交、附件和导师反馈流程。</p></div><b>{entries.length}</b></div>
+    <div className="student-portal-panel-head"><div><span>我的课题</span><h2>课题进展</h2><p>平时做完的实验、数据和阶段结果都记在这里。</p></div><b>{entries.length}</b></div>
     <div className="student-progress-feed-list">{entries.map((entry) => <article key={entry.id}>
       <div><span className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</span><time>{shortDate(entry.submitted_at)}</time></div>
-      <h3>{entry.title}</h3><small>项目进度</small><p>{entry.summary}</p>
-      {entry.attachments?.length ? <div className="student-attachment-list" aria-label="项目附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
-      {entry.reviewer_note ? <blockquote><b>导师反馈</b><span>{entry.reviewer_note}</span></blockquote> : null}
-      {entry.review_status === "changes_requested" ? <details><summary>补充证据并重新提交</summary><form onSubmit={(event) => void resubmit(event, entry)}>
-        <label>更新后的结论<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label>
-        <label>补充核验证据<textarea name="evidence" rows={3} required defaultValue={entry.evidence} /></label>
+      <h3>{entry.title}</h3><small>课题进展</small><p>{entry.summary}</p>
+      {entry.attachments?.length ? <div className="student-attachment-list" aria-label="课题附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
+      {entry.reviewer_note ? <blockquote><b>导师回复</b><span>{entry.reviewer_note}</span></blockquote> : null}
+      {entry.review_status === "changes_requested" ? <details><summary>按导师意见补一下</summary><form onSubmit={(event) => void resubmit(event, entry)}>
+        <label>改完后的内容<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label>
+        <label>补充说明<textarea name="evidence" rows={3} required defaultValue={entry.evidence} /></label>
         <input type="hidden" name="literatureRef" value="" /><label>私有 GitHub 链接（可选）<input name="gitUrl" type="url" defaultValue={entry.git_url} placeholder="仅支持 https://" /></label>
         <label>补充附件（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件，单个不超过 20 MB，总计不超过 50 MB</small></label>
         <button className="primary" disabled={busy === entry.id}>{busy === entry.id ? "提交中…" : "重新提交"}</button>
       </form></details> : null}
-    </article>)}{!entries.length ? <div className="student-portal-empty">尚无项目进度；可从页面顶部的“提交项目进度”进入原有提交流程。</div> : null}</div>
+    </article>)}{!entries.length ? <div className="student-portal-empty">还没有课题进展。点上方“记课题进展”就能添加。</div> : null}</div>
   </section>;
 }
 
@@ -846,13 +934,13 @@ function StudentMeetingRequests({ onToast }: { onToast: (message: string) => voi
   }
 
   return <section className="student-portal-panel student-meeting-panel" id="student-meeting-form">
-    <div className="student-portal-panel-head"><div><span>MEETING REQUEST</span><h2>预约导师会议</h2><p>提交希望时间与议题，等待导师确认。</p></div></div>
+    <div className="student-portal-panel-head"><div><span>找导师聊聊</span><h2>约个时间</h2><p>选时间，简单写一下想聊什么。</p></div></div>
     <form className="student-meeting-form" onSubmit={createRequest} aria-busy={busy === "create"}>
       <div><label>希望日期<input type="date" name="preferredDate" min={minimumDate} required /></label><label>希望时间<input type="time" name="preferredTime" required /></label></div>
       <label>会议时长<select name="durationMinutes" defaultValue="30"><option value="15">15 分钟</option><option value="30">30 分钟</option><option value="45">45 分钟</option><option value="60">60 分钟</option></select></label>
-      <label>会议议题<input name="topic" maxLength={200} required placeholder="例如：确认实验方案与下一步决策" /></label>
-      <label>补充说明（可选）<textarea name="note" rows={3} maxLength={2000} placeholder="只写科研议题；不要填写健康、成绩、私人评价或保密原文" /></label>
-      <button className="primary" disabled={busy === "create"}>{busy === "create" ? "提交中…" : "提交预约"}</button>
+      <label>想聊什么<input name="topic" maxLength={200} required placeholder="例如：想确认下一轮实验怎么做" /></label>
+      <label>还有什么要说明（可选）<textarea name="note" rows={3} maxLength={2000} placeholder="简单写几句即可，不要放保密材料" /></label>
+      <button className="primary" disabled={busy === "create"}>{busy === "create" ? "提交中…" : "发给导师"}</button>
     </form>
     {message ? <p className="student-meeting-message" role="status">{message}</p> : null}
     <div className="student-meeting-history"><h3>我的预约</h3>{loading ? <p>正在读取…</p> : requests.map((item) => <article key={item.id}>

@@ -58,10 +58,15 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
 
   assert.match(dashboard, /完整代码由本地 Agent 读取/);
   assert.match(dashboard, /学生个人工作台/);
-  assert.match(dashboard, /提交论文进度/);
-  assert.match(dashboard, /提交项目进度/);
-  assert.match(dashboard, /项目暂沿用原有进展流程/);
-  assert.match(dashboard, /论文台账与版本进展/);
+  assert.match(dashboard, /记论文进展/);
+  assert.match(dashboard, /记课题进展/);
+  assert.match(dashboard, /StudentQuickProgressComposer/);
+  assert.match(dashboard, /不用另开窗口，提交后本页会自动更新/);
+  assert.doesNotMatch(dashboard, /studentSubmitKind/);
+  assert.match(dashboard, /每次 AI 会议纪要/);
+  assert.match(dashboard, /entry\.kind === "组会"/);
+  assert.match(dashboard, /课题进展/);
+  assert.match(dashboard, /最近写了什么、导师怎么回复/);
   assert.match(dashboard, /稿件版本/);
   assert.match(dashboard, /下一项可交付行动/);
   assert.match(dashboard, /查看学生全部进展/);
@@ -71,7 +76,7 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /点击查看专属档案/);
   assert.doesNotMatch(dashboard, /import Link from "next\/link"/);
   assert.match(dashboard, /name="attachments" type="file" multiple/);
-  assert.match(dashboard, /预约导师会议/);
+  assert.match(dashboard, /找导师聊聊/);
   assert.ok(dashboard.indexOf('data?.viewer.role === "student"') < dashboard.indexOf('className="app-shell"'));
   assert.match(dashboard, /不会把 App Secret、飞书访问凭证或完整代码发送给云端 GPT/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS progress_entries/);
