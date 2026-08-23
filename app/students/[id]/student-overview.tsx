@@ -777,5 +777,16 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         </section>
       </aside>
     </div>
+
+    <details className="student-context-dock">
+      <summary><span>AI</span><strong>科研上下文</strong><small>{pendingGuidance.length} 待审 · {meetingSummaries.length} 份总结</small><i>⌃</i></summary>
+      <aside aria-label={`${student.name}科研上下文面板`}>
+        <header><div><span>AI RESEARCH CONTEXT</span><h2>{student.name} · 深度工作区</h2></div><em>账号隔离</em></header>
+        <nav aria-label="科研上下文快捷入口"><a href="#guidance">导师指导</a><a href="#ai-summaries">AI 总结</a><a href="#evidence">证据链</a><a href="#outputs">成果</a></nav>
+        <section><span>当前研究重点</span><strong>{student.currentFocus || "尚未填写"}</strong><small>{student.stage} · {student.gradeYear}级{student.degree}</small></section>
+        <div className="student-context-dock-grid"><div><span>待审核</span><strong>{pendingGuidance.length}</strong></div><div><span>AI 总结</span><strong>{meetingSummaries.length}</strong></div><div><span>导师指导</span><strong>{guidanceNotes.filter((note) => note.status === "open").length}</strong></div><div><span>附件</span><strong>{summary.attachmentCount}</strong></div></div>
+        <footer><i />只汇总当前学生且当前账号有权访问的数据</footer>
+      </aside>
+    </details>
   </main>;
 }

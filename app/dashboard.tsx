@@ -320,6 +320,7 @@ export default function Dashboard() {
   const [reviewNotes, setReviewNotes] = useState<Record<number, string>>({});
   const [toast, setToast] = useState("");
   const [authGate, setAuthGate] = useState<AuthGate | null>(null);
+  const globalSearchRef = useRef<HTMLInputElement>(null);
 
   const loadDashboard = useCallback(async () => {
     try {
@@ -358,6 +359,17 @@ export default function Dashboard() {
     const timer = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    function focusGlobalSearch(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        globalSearchRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", focusGlobalSearch);
+    return () => window.removeEventListener("keydown", focusGlobalSearch);
+  }, []);
 
   const filteredStudents = useMemo(() => {
     if (!data) return [];
@@ -457,14 +469,19 @@ export default function Dashboard() {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">探</div>
-          <div><strong>探研</strong><span>射线探伤 × AI</span></div>
+          <div><strong>探研</strong><span>Research Workbench</span></div>
         </div>
         <nav aria-label="主导航">
-          {visibleNavItems.map((item) => (
-            <button className={`nav-item ${view === item.id ? "active" : ""}`} key={item.id} onClick={() => setView(item.id)}>
-              <span>{item.icon}</span>{item.label}
-              {item.id === "reviews" && data?.metrics.pending ? <b>{data.metrics.pending}</b> : null}
-            </button>
+          {visibleNavItems.map((item, index) => (
+            <div className="nav-entry" key={item.id}>
+              {index === 0 ? <span className="nav-section-label">主线</span> : null}
+              {index === 2 ? <span className="nav-section-label">科研协作</span> : null}
+              {index === 5 ? <span className="nav-section-label">系统</span> : null}
+              <button className={`nav-item ${view === item.id ? "active" : ""}`} onClick={() => setView(item.id)}>
+                <span>{item.icon}</span>{item.label}
+                {item.id === "reviews" && data?.metrics.pending ? <b>{data.metrics.pending}</b> : null}
+              </button>
+            </div>
           ))}
         </nav>
         <div className="privacy-note"><span>AI 数据边界已启用</span><small>代码与保密项目仅限本地模型</small></div>
@@ -475,6 +492,29 @@ export default function Dashboard() {
       </aside>
 
       <section className="workspace">
+        <div className="global-command-bar">
+          <label className="global-search">
+            <span aria-hidden="true">⌕</span>
+            <input
+              ref={globalSearchRef}
+              aria-label="全局搜索学生、阶段或研究方向"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                if (event.target.value && view !== "overview" && view !== "students") setView("students");
+              }}
+              placeholder="搜索学生、阶段或研究方向"
+            />
+            <kbd>⌘ K</kbd>
+          </label>
+          <div className="command-shortcuts" aria-label="科研工作区快捷入口">
+            <button type="button" onClick={() => setView("overview")}>论文轨道</button>
+            <button type="button" onClick={() => setView("proposals")}>课题轨道</button>
+            <button type="button" onClick={() => setView("meetings")}>组会纪要</button>
+          </div>
+          <button className="command-sync" type="button" onClick={() => void loadDashboard()} aria-label="同步最新数据" title="同步最新数据">↻</button>
+        </div>
+
         <header className="topbar">
           <div>
             <p className="eyebrow">{today}</p>
@@ -494,19 +534,27 @@ export default function Dashboard() {
         {error ? <div className="error-state"><strong>数据暂时未加载</strong><span>{error}</span><button onClick={() => void loadDashboard()}>重试</button></div> : null}
 
         {!loading && !error && data && view === "overview" ? (
-          <>
-            <OverviewMetrics data={data} />
+          <div className="workbench-overview-layout">
+            <div className="workbench-canvas">
+              <OverviewMetrics data={data} />
 
-            <ActionBoard data={data} onReviews={() => setView("reviews")} onProposals={() => setView("proposals")} />
+              <ActionBoard data={data} onReviews={() => setView("reviews")} onProposals={() => setView("proposals")} />
 
-            <div className="content-grid">
               <section className="panel student-panel">
                 <PanelHeader title="学生进展" subtitle="按距离上次实质性进展的时间排序" action={`查看全部 ${data.metrics.total} 人 →`} onAction={() => setView("students")} />
                 <StudentFilters query={query} setQuery={setQuery} riskFilter={riskFilter} setRiskFilter={setRiskFilter} degreeFilter={degreeFilter} setDegreeFilter={setDegreeFilter} />
                 <StudentTable students={filteredStudents.slice(0, 8)} />
               </section>
+            </div>
 
-              <aside className="right-column">
+            <aside className="workbench-context-rail">
+              <ResearchAssistantRail
+                data={data}
+                onReviews={() => setView("reviews")}
+                onProposals={() => setView("proposals")}
+                onMeetings={() => setView("meetings")}
+              />
+              <div className="right-column">
                 <section className="panel decisions">
                   <PanelHeader title={isReviewerRole(data.viewer.role) ? "待您确认" : "待审核确认"} subtitle="正式科研判断由对应主导师或超级管理员完成" count={data.metrics.pending} />
                   {data.pending.slice(0, 3).map((entry) => (
@@ -524,9 +572,9 @@ export default function Dashboard() {
                   <div className="rule-line"><i className="dot orange" /><span><strong>橙色</strong>60–89 天无实质进展</span></div>
                   <div className="rule-line"><i className="dot red" /><span><strong>红色</strong>90 天及以上无实质进展</span></div>
                 </section>
-              </aside>
-            </div>
-          </>
+              </div>
+            </aside>
+          </div>
         ) : null}
 
         {!loading && !error && data && view === "students" ? (
@@ -638,33 +686,51 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
     setComposer(kind);
     window.requestAnimationFrame(() => document.getElementById("student-quick-progress")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
-  return <main className="student-portal-shell">
-    <header className="student-portal-header">
+  return <div className="student-workbench-shell">
+    <aside className="student-workbench-sidebar">
       <div className="brand"><div className="brand-mark">探</div><div><strong>探研</strong><span>学生个人工作台</span></div></div>
-      <div className="student-account"><span className="avatar">{data.viewer.name.slice(0, 1)}</span><div><strong>{data.viewer.name}</strong><small>这里只看自己的记录</small></div><button type="button" onClick={onFeishu}>飞书账号</button></div>
-    </header>
+      <nav aria-label="我的科研导航">
+        <span>主线</span>
+        <a className="active" href="#student-workbench-top"><i>⌂</i>今日工作台</a>
+        <span>我的科研</span>
+        <a href="#student-research-tracks"><i>◇</i>论文与课题</a>
+        <a href="#student-progress-overview"><i>◫</i>进展记录</a>
+        <button type="button" onClick={() => openComposer("论文")}><i>＋</i>提交进展</button>
+        <span>协作</span>
+        <a href="#student-meeting-form"><i>▣</i>组会与导师</a>
+      </nav>
+      <div className="student-workbench-boundary"><strong>本人数据空间</strong><small>论文、课题、组会和导师回复按账号隔离</small></div>
+      <button className="student-workbench-account" type="button" onClick={onFeishu}><span className="avatar">{data.viewer.name.slice(0, 1)}</span><span><strong>{data.viewer.name}</strong><small>飞书账号</small></span><i>›</i></button>
+    </aside>
 
-    <section className="student-portal-hero">
-      <div><span className="student-portal-kicker">我的科研</span><h1>{student.name}，今天进展到哪了？</h1><p>把做完的事记下来。论文、课题和每次组会记录，都在这一页。</p></div>
-      <div className="student-primary-actions">
-        <button className="primary" type="button" onClick={() => openComposer("论文")}>记论文进展</button>
-        <button type="button" onClick={() => openComposer("项目")}>记课题进展</button>
-        <button type="button" onClick={() => document.getElementById("student-meeting-form")?.scrollIntoView({ behavior: "smooth", block: "start" })}>约导师聊一聊</button>
+    <main className="student-portal-shell" id="student-workbench-top">
+      <header className="student-portal-header">
+        <div className="student-workbench-context"><span>当前工作区</span><strong>{student.currentFocus || "我的科研进展"}</strong></div>
+        <div className="student-account"><span className="student-workbench-status"><i />数据已同步</span><button type="button" onClick={onFeishu}>飞书账号</button></div>
+      </header>
+
+      <section className="student-portal-hero">
+        <div><span className="student-portal-kicker">TODAY · 我的科研</span><h1>{student.name}，今天进展到哪了？</h1><p>把做完的事记下来。论文、课题和每次组会记录，都在这一页。</p></div>
+        <div className="student-primary-actions">
+          <button className="primary" type="button" onClick={() => openComposer("论文")}>记论文进展</button>
+          <button type="button" onClick={() => openComposer("项目")}>记课题进展</button>
+          <button type="button" onClick={() => document.getElementById("student-meeting-form")?.scrollIntoView({ behavior: "smooth", block: "start" })}>约导师聊一聊</button>
+        </div>
+      </section>
+
+      {composer ? <StudentQuickProgressComposer key={composer} kind={composer} student={student} papers={papers} onCancel={() => setComposer(null)} onSaved={async () => { setComposer(null); onToast(`${composer === "论文" ? "论文" : "课题"}进展已提交，下方记录已更新`); await onRefresh(); }} /> : null}
+
+      <StudentResearchTracks student={student} papers={papers} onOpenComposer={openComposer} />
+
+      <StudentProgressOverview student={student} />
+
+      <div className="student-portal-grid">
+        <StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} />
+        <div className="student-portal-side"><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} /><StudentMeetingRequests onToast={onToast} /></div>
       </div>
-    </section>
-
-    {composer ? <StudentQuickProgressComposer key={composer} kind={composer} student={student} papers={papers} onCancel={() => setComposer(null)} onSaved={async () => { setComposer(null); onToast(`${composer === "论文" ? "论文" : "课题"}进展已提交，下方记录已更新`); await onRefresh(); }} /> : null}
-
-    <StudentResearchTracks student={student} papers={papers} onOpenComposer={openComposer} />
-
-    <StudentProgressOverview student={student} />
-
-    <div className="student-portal-grid">
-      <StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} />
-      <div className="student-portal-side"><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} /><StudentMeetingRequests onToast={onToast} /></div>
-    </div>
-    <footer className="student-portal-boundary">这里仅显示你自己的论文、课题、组会记录和导师回复。</footer>
-  </main>;
+      <footer className="student-portal-boundary">这里仅显示你自己的论文、课题、组会记录和导师回复。</footer>
+    </main>
+  </div>;
 }
 
 function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved }: {
@@ -765,7 +831,7 @@ function StudentResearchTracks({ student, papers, onOpenComposer }: {
   const rhythmOverdue = Boolean(entries.length) && updateDays > student.cadenceDays;
   const rhythmLabel = !entries.length ? "还没有记录" : updateDays === 0 ? "今天已更新" : rhythmOverdue ? `超过计划 ${updateDays - student.cadenceDays} 天` : `${updateDays} 天前更新`;
 
-  return <section className="student-research-tracks" aria-labelledby="student-research-tracks-title">
+  return <section className="student-research-tracks" id="student-research-tracks" aria-labelledby="student-research-tracks-title">
     <header>
       <div><span>先看现在，再看下一步</span><h2 id="student-research-tracks-title">论文和课题进展</h2><p>两条线分开记录，完成到哪、接下来做什么，一眼就能找到。</p></div>
       <strong>{student.stage}<small>{student.gradeYear} 级 · {student.degree}</small></strong>
@@ -818,7 +884,7 @@ function StudentProgressOverview({ student }: { student: Student }) {
   const entries = useMemo(() => [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime()), [student.progress]);
   const visibleEntries = filter === "all" ? entries : entries.filter((entry) => entry.kind === filter);
 
-  return <section className="student-progress-overview" aria-labelledby="student-progress-overview-title">
+  return <section className="student-progress-overview" id="student-progress-overview" aria-labelledby="student-progress-overview-title">
     <header className="student-progress-overview-head">
       <div><span>一页看清</span><h2 id="student-progress-overview-title">我的进展</h2><p>论文、课题和组会，按时间放在一起。</p></div>
       <strong>{entries.length}<small>条记录</small></strong>
@@ -1096,6 +1162,48 @@ function OverviewMetrics({ data }: { data: DashboardData }) {
     <article className="metric"><span>科研成果与资产</span><strong>{data.metrics.outputs}</strong><small className="positive">论文、数据、软件、专利与交付物</small></article>
     <article className="metric"><span>待我处理</span><strong>{data.metrics.pending + data.metrics.proposalPending + data.metrics.blocked}</strong><small>证据 {data.metrics.pending} · 方案 {data.metrics.proposalPending} · 节点 {data.metrics.blocked}</small></article>
     <article className="metric attention"><span>需要关注</span><strong>{data.metrics.attention}</strong><small>黄 {data.metrics.riskCounts.黄色 ?? 0} · 橙 {data.metrics.riskCounts.橙色 ?? 0} · 红 {data.metrics.riskCounts.红色 ?? 0}</small></article>
+  </section>;
+}
+
+function ResearchAssistantRail({ data, onReviews, onProposals, onMeetings }: {
+  data: DashboardData;
+  onReviews: () => void;
+  onProposals: () => void;
+  onMeetings: () => void;
+}) {
+  const decisionCount = data.metrics.pending + data.metrics.proposalPending + data.metrics.blocked;
+  const priorityTask = data.workflowTasks[0];
+  const priorityEvidence = data.pending[0];
+  const priorityStudent = [...data.students]
+    .filter((student) => student.risk.level !== "正常")
+    .sort((a, b) => b.risk.days - a.risk.days)[0];
+
+  return <section className="panel research-assistant" aria-label="科研助手上下文">
+    <header className="research-assistant-head">
+      <span className="assistant-orb" aria-hidden="true">AI</span>
+      <div><strong>探研助手</strong><small><i /> 当前数据上下文已就绪</small></div>
+      <span className="assistant-mode">今日</span>
+    </header>
+    <div className="assistant-brief">
+      <span>FOCUS BRIEF</span>
+      <h2>{decisionCount ? `先完成 ${decisionCount} 项科研决策` : "今天没有积压的科研决策"}</h2>
+      <p>{priorityEvidence
+        ? `${priorityEvidence.display_name} 的“${priorityEvidence.title}”正在等待证据确认。`
+        : priorityTask
+          ? `${priorityTask.studentName} 的“${priorityTask.title}”需要继续跟进。`
+          : "可以把精力放在下一轮论文、课题与组会推进上。"}</p>
+    </div>
+    <div className="assistant-context-list">
+      <div><span>待审核证据</span><strong>{data.metrics.pending}</strong><button type="button" onClick={onReviews}>打开审核</button></div>
+      <div><span>研究方案</span><strong>{data.metrics.proposalPending}</strong><button type="button" onClick={onProposals}>查看方案</button></div>
+      <div><span>风险关注</span><strong>{data.metrics.attention}</strong>{priorityStudent ? <a href={`/students/${encodeURIComponent(priorityStudent.id)}`}>{priorityStudent.name} · {priorityStudent.risk.days} 天</a> : <small>当前平稳</small>}</div>
+    </div>
+    <div className="assistant-actions">
+      <button type="button" onClick={onReviews}><span>✓</span>审核证据</button>
+      <button type="button" onClick={onProposals}><span>◇</span>研究方案</button>
+      <button type="button" onClick={onMeetings}><span>▣</span>组会与提醒</button>
+    </div>
+    <footer><i />AI 只读取当前账号有权访问的科研数据</footer>
   </section>;
 }
 
