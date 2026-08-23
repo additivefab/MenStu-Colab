@@ -703,12 +703,12 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
     });
   }
 
-  function openDeepTool(ref: { current: HTMLDetailsElement | null }, targetId: string) {
+  function openDeepTool(ref: { current: HTMLDetailsElement | null }, targetId: string, expandNested = false) {
     if (ref.current) ref.current.open = true;
     window.requestAnimationFrame(() => {
       const target = document.getElementById(targetId);
       target?.scrollIntoView({ behavior: studentScrollBehavior(), block: "center" });
-      const supplement = target?.querySelector("details");
+      const supplement = expandNested ? target?.querySelector("details") : null;
       if (supplement instanceof HTMLDetailsElement) supplement.open = true;
       const focusTarget = supplement?.querySelector("summary") ?? target;
       if (focusTarget instanceof HTMLElement) focusTarget.focus({ preventScroll: true });
@@ -717,7 +717,19 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
 
   function openSupplement(entry: StudentProgress) {
     const ref = entry.kind === "项目" ? projectToolsRef : paperToolsRef;
-    openDeepTool(ref, `student-action-entry-${entry.id}`);
+    openDeepTool(ref, `student-action-entry-${entry.id}`, true);
+  }
+
+  function openResearchSource(entry: StudentProgress) {
+    if (entry.kind === "论文" || entry.kind === "项目") {
+      openDeepTool(entry.kind === "项目" ? projectToolsRef : paperToolsRef, `student-action-entry-${entry.id}`);
+      return;
+    }
+    const target = document.getElementById(`student-progress-${entry.id}`);
+    if (target instanceof HTMLDetailsElement) target.open = true;
+    target?.scrollIntoView({ behavior: studentScrollBehavior(), block: "center" });
+    const focusTarget = target?.querySelector("summary") ?? target;
+    if (focusTarget instanceof HTMLElement) focusTarget.focus({ preventScroll: true });
   }
 
   function openMeetingDesk() {
@@ -731,6 +743,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
         <a className="active" href="#student-workbench-top"><i aria-hidden="true">⌂</i>今日工作台</a>
         <span>我的科研</span>
         <a href="#student-research-tracks"><i aria-hidden="true">◇</i>论文与课题</a>
+        <a href="#student-research-library"><i aria-hidden="true">▤</i>科研资料</a>
         <a href="#student-progress-overview"><i aria-hidden="true">◫</i>进展记录</a>
         <button type="button" aria-controls="student-quick-progress" aria-expanded={Boolean(composer)} onClick={() => openComposer("论文")}><i aria-hidden="true">＋</i>提交进展</button>
         <span>协作</span>
@@ -761,6 +774,8 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
       {composer ? <StudentQuickProgressComposer key={composer} kind={composer} student={student} papers={papers} onCancel={() => setComposer(null)} onSaved={async () => { setComposer(null); onToast(`${composer === "论文" ? "论文" : "课题"}进展已提交，下方记录已更新`); await onRefresh(); }} /> : null}
 
       <StudentResearchTracks student={student} papers={papers} onOpenComposer={openComposer} />
+
+      <StudentResearchLibrary student={student} onOpenSource={openResearchSource} />
 
       <StudentProgressOverview student={student} />
 
@@ -1021,6 +1036,104 @@ function StudentResearchTracks({ student, papers, onOpenComposer }: {
   </section>;
 }
 
+type StudentLibraryMode = "files" | "sources";
+type StudentLibraryKind = "all" | "论文" | "项目" | "组会";
+type StudentLibraryReview = "all" | "waiting" | "accepted" | "attention";
+type StudentLibrarySort = "recent" | "name" | "size";
+
+const studentLibraryKinds: Array<{ value: StudentLibraryKind; label: string }> = [
+  { value: "all", label: "全部" },
+  { value: "论文", label: "论文" },
+  { value: "项目", label: "课题" },
+  { value: "组会", label: "AI 组会" },
+];
+
+function studentLibraryReviewMatches(status: StudentProgress["review_status"], filter: StudentLibraryReview) {
+  if (filter === "all") return true;
+  if (filter === "waiting") return status === "submitted" || status === "in_review";
+  if (filter === "accepted") return status === "accepted";
+  return status === "changes_requested" || status === "rejected";
+}
+
+function studentEvidenceHref(source: StudentProgress["evidence_sources"][number]) {
+  if ((source.source_type === "git" || source.source_type === "url") && source.source_ref.startsWith("https://")) return source.source_ref;
+  if (source.source_type === "doi" && /^10\.\d{4,9}\//u.test(source.source_ref)) return `https://doi.org/${source.source_ref}`;
+  return "";
+}
+
+function StudentResearchLibrary({ student, onOpenSource }: { student: Student; onOpenSource: (entry: StudentProgress) => void }) {
+  const [mode, setMode] = useState<StudentLibraryMode>("files");
+  const [query, setQuery] = useState("");
+  const [kindFilter, setKindFilter] = useState<StudentLibraryKind>("all");
+  const [reviewFilter, setReviewFilter] = useState<StudentLibraryReview>("all");
+  const [sort, setSort] = useState<StudentLibrarySort>("recent");
+  const files = useMemo(() => student.progress.flatMap((entry) => entry.attachments.map((attachment) => ({ entry, attachment }))), [student.progress]);
+  const sources = useMemo(() => student.progress.flatMap((entry) => entry.evidence_sources
+    .filter((source) => source.source_type !== "attachment")
+    .map((source) => ({ entry, source }))), [student.progress]);
+  const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+  const fileMatches = files.filter(({ entry, attachment }) => {
+    const matchesQuery = !normalizedQuery || [attachment.file_name, entry.title, entry.summary, entry.paper?.title, entry.paper?.manuscript_version]
+      .some((value) => value?.toLocaleLowerCase("zh-CN").includes(normalizedQuery));
+    return matchesQuery && (kindFilter === "all" || entry.kind === kindFilter) && studentLibraryReviewMatches(entry.review_status, reviewFilter);
+  });
+  const sourceMatches = sources.filter(({ entry, source }) => {
+    const matchesQuery = !normalizedQuery || [source.label, source.source_ref, entry.title, entry.summary, entry.paper?.title]
+      .some((value) => value?.toLocaleLowerCase("zh-CN").includes(normalizedQuery));
+    return matchesQuery && (kindFilter === "all" || entry.kind === kindFilter) && studentLibraryReviewMatches(entry.review_status, reviewFilter);
+  });
+  const visibleFiles = [...fileMatches].sort((a, b) => sort === "name"
+    ? a.attachment.file_name.localeCompare(b.attachment.file_name, "zh-CN")
+    : sort === "size"
+      ? b.attachment.size_bytes - a.attachment.size_bytes
+      : new Date(b.entry.submitted_at).getTime() - new Date(a.entry.submitted_at).getTime());
+  const visibleSources = [...sourceMatches].sort((a, b) => sort === "name"
+    ? a.source.label.localeCompare(b.source.label, "zh-CN")
+    : new Date(b.entry.submitted_at).getTime() - new Date(a.entry.submitted_at).getTime());
+  const acceptedFiles = files.filter(({ entry }) => entry.review_status === "accepted").length;
+  const totalBytes = files.reduce((sum, { attachment }) => sum + attachment.size_bytes, 0);
+  const visibleCount = mode === "files" ? visibleFiles.length : visibleSources.length;
+
+  return <section className="student-research-library" id="student-research-library" aria-labelledby="student-research-library-title">
+    <header>
+      <div><span>ARTIFACTS &amp; SOURCES</span><h2 id="student-research-library-title">我的科研资料库</h2><p>跨论文和课题查找资料，并追溯到提交、审核与校验指纹。</p></div>
+      <div className="student-research-library-summary"><strong>{files.length}</strong><small>个文件 · {files.length ? fileSizeText(totalBytes) : "0 KB"}</small><em>{acceptedFiles} 个已确认</em></div>
+    </header>
+    <nav className="student-research-library-tabs" aria-label="科研资料类型">
+      <button type="button" className={mode === "files" ? "active" : ""} aria-pressed={mode === "files"} onClick={() => setMode("files")}><span>研究文件</span><b>{files.length}</b></button>
+      <button type="button" className={mode === "sources" ? "active" : ""} aria-pressed={mode === "sources"} onClick={() => { setMode("sources"); if (sort === "size") setSort("recent"); }}><span>证据来源</span><b>{sources.length}</b></button>
+    </nav>
+    <div className="student-research-library-toolbar">
+      <label className="student-research-library-search"><span>搜索资料</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="文件名、论文、进展或来源" /></label>
+      <label><span>审核状态</span><select value={reviewFilter} onChange={(event) => setReviewFilter(event.target.value as StudentLibraryReview)}><option value="all">全部状态</option><option value="waiting">等待导师</option><option value="accepted">已确认</option><option value="attention">需处理</option></select></label>
+      <label><span>排序</span><select value={sort} onChange={(event) => setSort(event.target.value as StudentLibrarySort)}><option value="recent">最近提交</option><option value="name">名称</option>{mode === "files" ? <option value="size">文件大小</option> : null}</select></label>
+    </div>
+    <div className="student-research-library-filters">
+      {studentLibraryKinds.map((option) => { const count = mode === "files" ? files.filter(({ entry }) => option.value === "all" || entry.kind === option.value).length : sources.filter(({ entry }) => option.value === "all" || entry.kind === option.value).length; return <button type="button" key={option.value} className={kindFilter === option.value ? "active" : ""} aria-pressed={kindFilter === option.value} onClick={() => setKindFilter(option.value)}><span>{option.label}</span><b>{count}</b></button>; })}
+      <small aria-live="polite">当前显示 {visibleCount} 项</small>
+    </div>
+
+    {mode === "files" ? <div className="student-research-library-list">
+      {visibleFiles.map(({ entry, attachment }) => { const extension = attachment.file_name.split(".").pop()?.slice(0, 5).toUpperCase() || "FILE"; return <article className={`kind-${studentProgressKindMeta(entry.kind).className}`} key={attachment.id}>
+        <span className="student-research-file-type" aria-hidden="true">{extension}</span>
+        <div className="student-research-file-main"><span><strong>{attachment.file_name}</strong><em className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</em></span><small>{studentProgressKindMeta(entry.kind).label} · {entry.paper?.title || entry.title}</small><p>{entry.paper?.manuscript_version ? `${entry.paper.manuscript_version} · ` : ""}{shortDate(entry.submitted_at)} · {fileSizeText(attachment.size_bytes)}</p></div>
+        <details className="student-research-provenance">
+          <summary>来源与校验<i aria-hidden="true" /></summary>
+          <div><dl><div><dt>所属进展</dt><dd>{entry.title}</dd></div><div><dt>内容指纹</dt><dd>{attachment.content_sha256 ? `${attachment.content_sha256}…` : "未记录"}</dd></div><div><dt>审核事件</dt><dd>{entry.audit.length} 条</dd></div><div><dt>导师回复</dt><dd>{entry.reviewer_note || "暂无"}</dd></div></dl><footer><button type="button" onClick={() => onOpenSource(entry)}>打开来源记录</button><a href={attachment.download_url} download>下载原文件</a></footer></div>
+        </details>
+      </article>; })}
+      {!visibleFiles.length ? <div className="student-portal-empty">{files.length ? "没有找到匹配的科研文件。" : "提交进展时上传附件后，文件会自动汇总到这里。"}</div> : null}
+    </div> : <div className="student-research-library-list source-list">
+      {visibleSources.map(({ entry, source }) => { const externalHref = studentEvidenceHref(source); return <article className={`kind-${studentProgressKindMeta(entry.kind).className}`} key={`${entry.id}-${source.id}`}>
+        <span className="student-research-file-type source" aria-hidden="true">源</span>
+        <div className="student-research-file-main"><span><strong>{source.label}</strong><em>{studentProgressKindMeta(entry.kind).label}</em></span><small>{entry.paper?.title || entry.title}</small><p>{source.source_ref || "已保存来源快照"} · {shortDate(entry.submitted_at)}</p></div>
+        <div className="student-research-source-actions"><button type="button" onClick={() => onOpenSource(entry)}>来源记录</button>{externalHref ? <a href={externalHref} target="_blank" rel="noreferrer">打开来源</a> : null}<small>指纹 {source.content_sha256 ? `${source.content_sha256}…` : "未记录"}</small></div>
+      </article>; })}
+      {!visibleSources.length ? <div className="student-portal-empty">{sources.length ? "没有找到匹配的证据来源。" : "进展中的文字证据、DOI、Git 链接和组会来源会汇总到这里。"}</div> : null}
+    </div>}
+  </section>;
+}
+
 type StudentProgressFilter = "all" | "论文" | "项目" | "组会";
 
 const studentProgressFilters: Array<{ value: StudentProgressFilter; label: string }> = [
@@ -1112,7 +1225,7 @@ function StudentProgressPanel({ student, papers, onRefresh, onToast }: {
       <h3>{paper.title}</h3><p>{paper.paper_type}{paper.target_venue ? ` · ${paper.target_venue}` : " · 目标期刊/会议待定"}</p>
       <footer><span>{paper.update_count} 次更新</span><span>{paper.pending_count ? `${paper.pending_count} 条待反馈` : "无待反馈"}</span></footer>
     </article>; })}{!papers.length ? <div className="student-portal-empty">还没有论文。点上方“记论文进展”，可以直接新建。</div> : null}</div>
-    <div className="student-progress-feed-list">{entries.map((entry) => <article id={`student-action-entry-${entry.id}`} key={entry.id}>
+    <div className="student-progress-feed-list">{entries.map((entry) => <article id={`student-action-entry-${entry.id}`} tabIndex={-1} key={entry.id}>
       <div><span className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</span><time>{shortDate(entry.submitted_at)}</time></div>
       <h3>{entry.paper?.title || entry.title}</h3><small>{entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : "历史论文进展"}</small><p>{entry.summary}</p>
       {entry.paper ? <dl className="student-paper-update-detail"><div><dt>接下来做</dt><dd>{entry.paper.next_action}</dd></div><div><dt>准备完成</dt><dd>{entry.paper.next_action_due_date}</dd></div>{entry.paper.submission_identifier ? <div><dt>稿件编号 / DOI</dt><dd>{entry.paper.submission_identifier}</dd></div> : null}{entry.paper.blocker ? <div className="blocker"><dt>卡在哪里</dt><dd>{entry.paper.blocker}</dd></div> : null}</dl> : null}
@@ -1162,7 +1275,7 @@ function StudentProjectProgressPanel({ student, onRefresh, onToast }: {
 
   return <section className="student-portal-panel student-project-feed">
     <div className="student-portal-panel-head"><div><span>我的课题</span><h2>课题进展</h2><p>平时做完的实验、数据和阶段结果都记在这里。</p></div><b>{entries.length}</b></div>
-    <div className="student-progress-feed-list">{entries.map((entry) => <article id={`student-action-entry-${entry.id}`} key={entry.id}>
+    <div className="student-progress-feed-list">{entries.map((entry) => <article id={`student-action-entry-${entry.id}`} tabIndex={-1} key={entry.id}>
       <div><span className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</span><time>{shortDate(entry.submitted_at)}</time></div>
       <h3>{entry.title}</h3><small>课题进展</small><p>{entry.summary}</p>
       {entry.attachments?.length ? <div className="student-attachment-list" aria-label="课题附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}

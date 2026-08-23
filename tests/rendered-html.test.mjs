@@ -69,6 +69,11 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /先做这一件事/);
   assert.match(dashboard, /role="progressbar"/);
   assert.match(dashboard, /记录节奏/);
+  assert.match(dashboard, /StudentResearchLibrary/);
+  assert.match(dashboard, /我的科研资料库/);
+  assert.match(dashboard, /attachment\.content_sha256/);
+  assert.match(dashboard, /studentEvidenceHref/);
+  assert.match(dashboard, /打开来源记录/);
   assert.match(dashboard, /论文、课题和组会，按时间放在一起/);
   assert.match(dashboard, /StudentProgressOverview/);
   assert.match(dashboard, /AI 组会/);
