@@ -1,7 +1,7 @@
 import { canReviewStudent } from "../../../lib/authorization";
 import { ensureDatabase, getD1 } from "../../../lib/database";
 import { assertSameOrigin, requireAppUser } from "../../../lib/feishu-auth";
-import { isPaperStage } from "../../../lib/paper-progress";
+import { isIsoDate, isPaperStage } from "../../../lib/paper-progress";
 import { legacyProgressStatus, type ProgressAssessment, type ReviewStatus } from "../../../lib/progress-evidence";
 
 const finalActions = new Set(["substantive", "supporting", "supplement", "rejected"]);
@@ -11,6 +11,7 @@ type EntryRow = {
   id: number;
   student_id: string;
   kind: string;
+  title: string;
   review_status: ReviewStatus;
   reviewed_by_user_id: number | null;
   review_claimed_at: string | null;
@@ -71,6 +72,16 @@ export async function POST(request: Request) {
     const id = Number(body.id);
     const action = String(body.action ?? "");
     const note = String(body.note ?? "").trim();
+    const guidanceValue = body.guidance;
+    if (guidanceValue !== undefined && (typeof guidanceValue !== "object" || guidanceValue === null || Array.isArray(guidanceValue))) {
+      return Response.json({ error: "指导参数无效" }, { status: 400 });
+    }
+    const guidanceInput = guidanceValue as Record<string, unknown> | undefined;
+    const guidance = guidanceInput ? {
+      nextAction: String(guidanceInput.nextAction ?? "").trim(),
+      dueDate: String(guidanceInput.dueDate ?? "").trim(),
+      acceptanceCriteria: String(guidanceInput.acceptanceCriteria ?? "").trim(),
+    } : null;
     if (!Number.isInteger(id) || (!["start_review", "release_review"].includes(action) && !finalActions.has(action))) {
       return Response.json({ error: "审核参数无效" }, { status: 400 });
     }
@@ -78,9 +89,21 @@ export async function POST(request: Request) {
     if ((action === "supplement" || action === "rejected") && !note) {
       return Response.json({ error: "需要补充或判定为非进展时，必须填写具体理由" }, { status: 400 });
     }
+    if (guidance && action !== "supplement") {
+      return Response.json({ error: "只有退回补充时可以同时发送指导" }, { status: 400 });
+    }
+    if (guidance) {
+      if (!guidance.nextAction) return Response.json({ error: "请填写学生下一步行动" }, { status: 400 });
+      if (!guidance.acceptanceCriteria) return Response.json({ error: "请填写可判断的完成标准" }, { status: 400 });
+      if (guidance.nextAction.length > 800) return Response.json({ error: "下一步行动不能超过 800 个字符" }, { status: 400 });
+      if (guidance.acceptanceCriteria.length > 1200) return Response.json({ error: "完成标准不能超过 1200 个字符" }, { status: 400 });
+      if (guidance.dueDate && !isIsoDate(guidance.dueDate)) {
+        return Response.json({ error: "完成期限不是有效日期" }, { status: 400 });
+      }
+    }
 
     const d1 = getD1();
-    const entry = await d1.prepare(`SELECT p.id, p.student_id, p.kind, p.review_status,
+    const entry = await d1.prepare(`SELECT p.id, p.student_id, p.kind, p.title, p.review_status,
       p.reviewed_by_user_id, p.review_claimed_at, p.submitted_by_user_id, p.current_revision,
       pr.review_status AS revision_review_status,
       pr.reviewed_by_user_id AS revision_reviewed_by_user_id,
@@ -346,6 +369,50 @@ export async function POST(request: Request) {
         SELECT ?, ?, 'user', ?, ?, ?, ?, ? WHERE changes() > 0`)
         .bind(id, auth.user.id, action, entry.review_status, reviewStatus, assessment ?? "", note),
     ];
+    let guidanceResultIndex: number | null = null;
+    let guidanceEventResultIndex: number | null = null;
+    if (guidance && reviewStatus === "changes_requested") {
+      const guidanceType = entry.kind === "论文"
+        ? "paper"
+        : entry.kind === "项目"
+          ? "milestone"
+          : entry.kind === "组会"
+            ? "meeting_followup"
+            : "general";
+      const guidanceTitle = `补充进展：${entry.title}`.slice(0, 200);
+      guidanceResultIndex = statements.length;
+      statements.push(d1.prepare(`INSERT INTO student_guidance_notes
+        (student_id, mentor_user_id, source_progress_entry_id, guidance_type,
+         title, content, next_action, due_date, acceptance_criteria, verification_mode)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'mentor_verify'
+        WHERE changes() > 0 AND EXISTS (SELECT 1 FROM progress_entries
+          WHERE id = ? AND student_id = ? AND current_revision = ?
+            AND review_status = 'changes_requested' AND reviewed_by_user_id = ?
+            AND reviewer_note = ?)`)
+        .bind(
+          entry.student_id,
+          auth.user.id,
+          id,
+          guidanceType,
+          guidanceTitle,
+          note,
+          guidance.nextAction,
+          guidance.dueDate || null,
+          guidance.acceptanceCriteria,
+          id,
+          entry.student_id,
+          entry.current_revision,
+          auth.user.id,
+          note,
+        ));
+      guidanceEventResultIndex = statements.length;
+      statements.push(d1.prepare(`INSERT INTO student_guidance_events
+        (guidance_note_id, actor_user_id, actor_type, action, note)
+        SELECT id, ?, 'staff', 'created', ? FROM student_guidance_notes
+        WHERE changes() > 0 AND id = last_insert_rowid() AND student_id = ?
+          AND mentor_user_id = ? AND source_progress_entry_id = ?`)
+        .bind(auth.user.id, guidanceTitle, entry.student_id, auth.user.id, id));
+    }
     if (assessment === "substantive") {
       statements.push(d1.prepare(`UPDATE students SET last_substantive_at = (
         SELECT MAX(submitted_at) FROM progress_entries
@@ -416,10 +483,22 @@ export async function POST(request: Request) {
       await synchronizeCurrentRevision();
       return Response.json({ error: "记录、修订或关联节点已被其他操作更新" }, { status: 409 });
     }
+    if (
+      guidanceResultIndex !== null
+      && guidanceEventResultIndex !== null
+      && (!results[guidanceResultIndex]?.meta.changes || !results[guidanceEventResultIndex]?.meta.changes)
+    ) {
+      return Response.json({ error: "审核已保存，但指导记录写入异常，请刷新确认" }, { status: 409 });
+    }
     if (milestoneResultIndex !== null && !results[milestoneResultIndex]?.meta.changes) {
       return Response.json({ error: "审核已保存，但关联节点状态已变化，请刷新确认" }, { status: 409 });
     }
-    return Response.json({ message: "审核已保存并写入证据审计记录", reviewStatus, assessment });
+    return Response.json({
+      message: guidance ? "已退回补充并把指导发送给学生" : "审核已保存并写入证据审计记录",
+      reviewStatus,
+      assessment,
+      guidanceCreated: Boolean(guidance),
+    });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "审核失败" }, { status: 500 });
   }

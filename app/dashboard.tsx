@@ -61,6 +61,7 @@ type StudentProgress = {
   submitted_at: string;
   reviewed_at: string | null;
   current_revision: number;
+  ai_summary_origin: boolean;
   paper: {
     id: number;
     title: string;
@@ -162,6 +163,7 @@ type PendingEntry = {
   paper: StudentProgress["paper"];
   project: StudentProgress["project"];
   current_revision: number;
+  ai_summary_origin: boolean;
   revisions: ProgressRevision[];
   can_finalize: boolean;
   can_decide: boolean;
@@ -170,6 +172,12 @@ type PendingEntry = {
   evidence_sources: StudentProgress["evidence_sources"];
   attachments: StudentProgress["attachments"];
   submitted_at: string;
+};
+
+type ReviewGuidance = {
+  nextAction: string;
+  dueDate: string;
+  acceptanceCriteria: string;
 };
 
 type ProposalStatus = "draft" | "submitted" | "changes_requested" | "approved";
@@ -558,7 +566,7 @@ export default function Dashboard() {
       .sort((a, b) => b.risk.days - a.risk.days);
   }, [data, degreeFilter, query, riskFilter]);
 
-  async function review(entry: PendingEntry, action: string) {
+  async function review(entry: PendingEntry, action: string, guidance?: ReviewGuidance) {
     if (!entry.can_finalize) {
       setToast(entry.reviewer_name ? `该证据正在由 ${entry.reviewer_name} 审核` : "当前账号没有导师审核权限");
       return;
@@ -567,16 +575,20 @@ export default function Dashboard() {
       setToast("退回补证或判定为非进展时，必须先填写具体理由");
       return;
     }
+    if (guidance && (!guidance.nextAction.trim() || !guidance.acceptanceCriteria.trim())) {
+      setToast("请填写学生下一步和可判断的完成标准");
+      return;
+    }
     setReviewBusy(entry.id);
     try {
       const response = await fetch("/api/reviews", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: entry.id, action, note: reviewNotes[entry.id] || "" }),
+        body: JSON.stringify({ id: entry.id, action, note: reviewNotes[entry.id] || "", guidance }),
       });
       const result = (await response.json()) as { error?: string; message?: string };
       if (!response.ok) throw new Error(result.error || "审核失败");
-      setToast(action === "start_review" ? (entry.claim_stale ? "已重新领取超时审核" : "已接手审核") : action === "release_review" ? "已释放审核" : action === "substantive" ? "已确认为实质性进展" : "审核结果已保存");
+      setToast(guidance ? (result.message || "已退回并发送指导") : action === "start_review" ? (entry.claim_stale ? "已重新领取超时审核" : "已接手审核") : action === "release_review" ? "已释放审核" : action === "substantive" ? "已确认为实质性进展" : "审核结果已保存");
       await loadDashboard();
     } catch (reviewError) {
       setToast(reviewError instanceof Error ? reviewError.message : "审核失败");
@@ -773,7 +785,7 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
   reviewBusy: number | null;
   reviewNotes: Record<number, string>;
   setReviewNotes: Dispatch<SetStateAction<Record<number, string>>>;
-  onReview: (entry: PendingEntry, action: string) => Promise<void>;
+  onReview: (entry: PendingEntry, action: string, guidance?: ReviewGuidance) => Promise<void>;
   onToast: (message: string) => void;
   onRefresh: () => Promise<void>;
   meetingRequests: MeetingRequest[];
@@ -880,7 +892,7 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
         {filtered.map((task) => {
           const student = task.kind === "progress" ? task.entry.display_name : task.kind === "workflow" ? task.task.studentName : task.request.student_name;
           const title = task.kind === "progress" ? task.entry.paper?.title || task.entry.title : task.kind === "workflow" ? task.task.title : task.request.topic;
-          const meta = task.kind === "progress" ? `${task.entry.kind} · V${task.entry.current_revision}` : task.kind === "workflow" ? task.task.detail : `${task.request.preferred_date} ${task.request.preferred_time}`;
+          const meta = task.kind === "progress" ? `${isAiSummaryCandidate(task.entry) ? "AI 纪要候选" : task.entry.kind} · V${task.entry.current_revision}` : task.kind === "workflow" ? task.task.detail : `${task.request.preferred_date} ${task.request.preferred_time}`;
           return <button key={task.key} className={selected?.key === task.key ? "active" : ""} onClick={() => {
             setSelectedKey(task.key);
             if (window.matchMedia("(max-width: 780px)").matches) window.requestAnimationFrame(() => {
@@ -896,11 +908,12 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
       </div>
       <div className="mentor-task-detail" ref={detailRef} tabIndex={-1}>
         {selected?.kind === "progress" ? <MentorProgressDecision
+          key={selected.entry.id}
           entry={selected.entry}
           busy={reviewBusy === selected.entry.id}
           note={reviewNotes[selected.entry.id] || ""}
           onNote={(value) => setReviewNotes((current) => ({ ...current, [selected.entry.id]: value }))}
-          onReview={(action) => onReview(selected.entry, action)}
+          onReview={(action, guidance) => onReview(selected.entry, action, guidance)}
         /> : null}
         {selected?.kind === "workflow" ? <article className="mentor-workflow-detail">
           <span className={`mentor-task-category ${selected.category}`}>{mentorTaskLabels[selected.category]}</span>
@@ -930,19 +943,33 @@ function snapshotText(snapshot: Record<string, unknown> | undefined, key: string
   return typeof value === "string" ? value : "";
 }
 
+function isAiSummaryCandidate(entry: PendingEntry) {
+  return entry.ai_summary_origin;
+}
+
 function MentorProgressDecision({ entry, busy, note, onNote, onReview }: {
   entry: PendingEntry;
   busy: boolean;
   note: string;
   onNote: (value: string) => void;
-  onReview: (action: string) => Promise<void>;
+  onReview: (action: string, guidance?: ReviewGuidance) => Promise<void>;
 }) {
+  const [guidanceOpen, setGuidanceOpen] = useState(false);
+  const [nextAction, setNextAction] = useState(entry.paper?.next_action || entry.project?.next_action || "");
+  const [dueDate, setDueDate] = useState(entry.paper?.next_action_due_date || entry.project?.next_action_due_date || "");
+  const [acceptanceCriteria, setAcceptanceCriteria] = useState(entry.project?.evidence_target || "");
   const currentRevision = entry.revisions.find((revision) => revision.revision_number === entry.current_revision);
   const previousRevision = entry.revisions.find((revision) => revision.revision_number === entry.current_revision - 1);
   const previousSummary = snapshotText(previousRevision?.snapshot, "summary");
   const previousEvidence = snapshotText(previousRevision?.snapshot, "evidence");
+  const aiCandidate = isAiSummaryCandidate(entry);
+  async function submitGuidance(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await onReview("supplement", { nextAction, dueDate, acceptanceCriteria });
+  }
   return <article className="mentor-progress-decision">
-    <header><div><span>{entry.kind} · 当前 V{entry.current_revision}</span><h2>{entry.paper?.title || entry.title}</h2><p>{entry.display_name} · {shortDate(entry.submitted_at)}提交</p></div><a href={`/students/${encodeURIComponent(entry.student_id)}#evidence`}>完整档案 ↗</a></header>
+    <header><div><span>{aiCandidate ? "AI 纪要候选" : entry.kind} · 当前 V{entry.current_revision}</span><h2>{entry.paper?.title || entry.title}</h2><p>{entry.display_name} · {shortDate(entry.submitted_at)}提交</p></div><a href={`/students/${encodeURIComponent(entry.student_id)}#evidence`}>完整档案 ↗</a></header>
+    {aiCandidate ? <div className="mentor-ai-candidate-note"><b>AI 已从组会纪要提取候选进展</b><span>以下内容尚未生效；只有您的勾选或退回指导会形成正式记录。</span></div> : null}
     <div className="mentor-decision-status"><span className={`status-pill ${entry.review_status === "in_review" ? "reviewing" : "pending"}`}>{entry.claim_stale ? "接手已超时" : entry.review_status === "in_review" ? `${entry.reviewer_name || "导师"}审核中` : "等待判断"}</span><small>正式判断将写入版本与审计记录</small></div>
     <section className="mentor-version-diff">
       <div><span>本版新增结论</span><p>{entry.summary || snapshotText(currentRevision?.snapshot, "summary") || "未填写"}</p></div>
@@ -953,15 +980,34 @@ function MentorProgressDecision({ entry, busy, note, onNote, onReview }: {
     {entry.paper ? <div className="mentor-decision-facts"><div><span>论文阶段</span><strong>{paperStageMeta[entry.paper.stage].label}</strong></div><div><span>下一行动</span><strong>{entry.paper.next_action}</strong></div><div><span>期限</span><strong>{entry.paper.next_action_due_date}</strong></div>{entry.paper.blocker ? <div className="blocker"><span>阻塞</span><strong>{entry.paper.blocker}</strong></div> : null}</div> : null}
     {entry.project ? <div className="mentor-decision-facts"><div><span>培养节点</span><strong>{entry.project.milestone_title || "未关联节点"}</strong></div><div><span>下一行动</span><strong>{entry.project.next_action}</strong></div><div><span>期限</span><strong>{entry.project.next_action_due_date}</strong></div>{entry.project.blocker ? <div className="blocker"><span>阻塞</span><strong>{entry.project.blocker}</strong></div> : null}</div> : null}
     <div className="mentor-evidence-strip">{entry.evidence_sources.map((source) => <span key={source.id}><b>{source.label}</b>{source.source_ref ? <a href={source.source_ref} target="_blank" rel="noreferrer">打开证据</a> : null}{source.content_sha256 ? <small>指纹 {source.content_sha256}</small> : null}</span>)}{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)}</small></a>)}</div>
-    <label className="review-note-field">判断依据或反馈<textarea rows={3} value={note} onChange={(event) => onNote(event.target.value)} disabled={!entry.can_finalize} placeholder="退回补证或判定为非进展时必须说明具体理由" /></label>
-    <div className="mentor-decision-effect"><b>保存后影响</b><span>“实质性进展”会更新最近进展日期；“支持性工作”仅留痕；退回与非进展不会重置预警。</span></div>
-    <div className="review-actions">
-      {entry.review_status === "submitted" && entry.can_finalize ? <button disabled={busy} onClick={() => void onReview("start_review")}>接手审核</button> : null}
-      {entry.claim_stale && entry.can_finalize ? <button className="primary" disabled={busy} onClick={() => void onReview("start_review")}>重新领取超时审核</button> : null}
-      {entry.can_release ? <button disabled={busy} onClick={() => void onReview("release_review")}>释放审核</button> : null}
-      {entry.can_decide ? <><button className="approve" disabled={busy} onClick={() => void onReview("substantive")}>实质性进展</button><button disabled={busy} onClick={() => void onReview("supporting")}>支持性工作</button><button disabled={busy || !note.trim()} onClick={() => void onReview("supplement")}>需要补充</button><button disabled={busy || !note.trim()} onClick={() => void onReview("rejected")}>非进展</button></> : null}
-      {!entry.can_finalize ? <p>{entry.reviewer_name ? `等待 ${entry.reviewer_name} 完成判断` : "当前账号没有该学生的审核权限"}</p> : null}
-    </div>
+    {entry.can_decide ? <section className="mentor-binary-review" aria-label="快速判断">
+      <div className="mentor-binary-review-head"><div><span>只做一个判断</span><strong>这可以作为学生的正式进展吗？</strong></div><small>确认后自动进入下一项</small></div>
+      <div className="mentor-binary-actions" role="group" aria-label="确认或指导">
+        <button type="button" className="confirm" disabled={busy} onClick={() => void onReview("substantive")}><span aria-hidden="true">✓</span><b>{busy ? "处理中…" : "确认进展"}</b><small>计入实质进展</small></button>
+        <button type="button" className="guide" disabled={busy} aria-expanded={guidanceOpen} onClick={() => setGuidanceOpen((open) => !open)}><span aria-hidden="true">×</span><b>需要指导</b><small>退回并明确下一步</small></button>
+      </div>
+      {guidanceOpen ? <form className="mentor-inline-guidance" onSubmit={(event) => void submitGuidance(event)}>
+        <header><div><span>退回指导</span><strong>一次写清问题、下一步和完成标准</strong></div><button type="button" onClick={() => setGuidanceOpen(false)} aria-label="收起指导表单">收起</button></header>
+        <label className="wide">问题与指导<textarea rows={3} maxLength={3000} required value={note} onChange={(event) => onNote(event.target.value)} placeholder="例如：目前结论缺少对照实验，无法确认增益来自方法本身。" /></label>
+        <label className="wide">学生下一步<textarea rows={2} maxLength={800} required value={nextAction} onChange={(event) => setNextAction(event.target.value)} placeholder="例如：补做无增强基线并更新结果表。" /></label>
+        <label>建议期限<input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label>
+        <label>导师验收方式<input value="按完成标准确认" disabled /></label>
+        <label className="wide">完成标准<textarea rows={2} maxLength={1200} required value={acceptanceCriteria} onChange={(event) => setAcceptanceCriteria(event.target.value)} placeholder="例如：提交包含同一数据划分、三次重复结果和误差条的对照表。" /></label>
+        <footer><small>提交后，学生会在指导记录中看到下一步；完成后回到您的待办验收。</small><button type="submit" disabled={busy || !note.trim() || !nextAction.trim() || !acceptanceCriteria.trim()}>{busy ? "发送中…" : "退回并发送指导"}</button></footer>
+      </form> : null}
+    </section> : null}
+    {!entry.can_decide && entry.claim_stale && entry.can_finalize ? <div className="mentor-reclaim-action"><p>上一位导师的接手已超时，领取后即可判断。</p><button className="primary" disabled={busy} onClick={() => void onReview("start_review")}>重新领取超时审核</button></div> : null}
+    {!entry.can_finalize ? <div className="mentor-reclaim-action"><p>{entry.reviewer_name ? `等待 ${entry.reviewer_name} 完成判断` : "当前账号没有该学生的审核权限"}</p></div> : null}
+    {entry.can_finalize ? <details className="mentor-advanced-review">
+      <summary>其他判断与协作操作</summary>
+      <p>仅留痕的支持性工作、明确判定为非进展，或需要先接手/释放审核时使用。</p>
+      <label className="review-note-field">其他判断依据<textarea rows={3} value={note} onChange={(event) => onNote(event.target.value)} placeholder="判定为非进展时必须说明具体理由" /></label>
+      <div className="review-actions">
+        {entry.review_status === "submitted" ? <button disabled={busy} onClick={() => void onReview("start_review")}>接手审核</button> : null}
+        {entry.can_release ? <button disabled={busy} onClick={() => void onReview("release_review")}>释放审核</button> : null}
+        {entry.can_decide ? <><button disabled={busy} onClick={() => void onReview("supporting")}>仅记为支持性工作</button><button disabled={busy || !note.trim()} onClick={() => void onReview("rejected")}>判定为非进展</button></> : null}
+      </div>
+    </details> : null}
   </article>;
 }
 

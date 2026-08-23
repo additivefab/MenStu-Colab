@@ -347,6 +347,10 @@ export async function GET(request: Request) {
           blocker: entry.project_blocker ?? "",
           completion_requested: Boolean(entry.project_completion_requested),
         } : null,
+        ai_summary_origin: entry.kind === "组会" && evidenceRows.some((source) => (
+          source.progress_entry_id === entry.id
+          && (source.source_type.startsWith("feishu_") || /智能纪要|飞书妙记/u.test(source.label))
+        )),
         evidence_sources: evidenceRows
           .filter((source) => source.progress_entry_id === entry.id)
           .map((source) => ({

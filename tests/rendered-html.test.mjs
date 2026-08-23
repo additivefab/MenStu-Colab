@@ -179,8 +179,9 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(studentOverview, /\/api\/student-guidance/);
   assert.match(studentOverview, /论文推进图谱/);
   assert.match(studentOverview, /paper-stage-roadmap/);
-  assert.match(studentOverview, /确认实质性进展/);
-  assert.match(studentOverview, /要求补充证据/);
+  assert.match(studentOverview, /确认进展/);
+  assert.match(studentOverview, /需要指导/);
+  assert.match(studentOverview, /退回并发送指导/);
   assert.match(studentOverview, /\/api\/reviews/);
   assert.match(studentOverview, /entry\.can_finalize/);
   assert.match(studentOverview, /window\.location\.replace\("\/"\)/);

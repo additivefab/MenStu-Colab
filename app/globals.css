@@ -1310,6 +1310,24 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-guidance-list footer button.reject { color: #98545a; }
 .student-guidance-list footer button:disabled { cursor: not-allowed; opacity: .45; }
 .student-guidance-list footer p { margin: 0; color: #8a6b3d; font-size: 9px; }
+.student-formal-binary { margin: 14px 0 0 51px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.student-formal-binary button { min-height: 62px; padding: 10px 13px; display: grid; gap: 4px; border: 1px solid; border-radius: 10px; text-align: left; }
+.student-formal-binary button b, .student-formal-binary button small { display: block; }
+.student-formal-binary button b { font-size: 10px; }
+.student-formal-binary button small { font-size: 7px; }
+.student-formal-binary button.approve { border-color: #acd7c2; color: #246f52; background: #edf9f3; }
+.student-formal-binary button.guide { border-color: #e1c1b8; color: #8b493d; background: #fff5f2; }
+.student-formal-binary button:disabled { cursor: wait; opacity: .5; }
+.student-formal-guidance { margin: 9px 0 0 51px; padding: 13px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; border: 1px solid #e4cbc4; border-radius: 10px; background: #fff9f7; }
+.student-formal-guidance > .wide, .student-formal-guidance > .send-guidance { grid-column: 1 / -1; }
+.student-guidance-list .student-formal-guidance label { margin-left: 0; }
+.student-formal-guidance input { min-height: 36px; width: 100%; padding: 0 10px; border: 1px solid #d8e1eb; border-radius: 8px; color: #33465d; background: #fff; font: inherit; }
+.student-formal-guidance .send-guidance { min-height: 38px; border: 1px solid #b75848; border-radius: 8px; color: #fff; background: #b75848; font-size: 8px; font-weight: 900; }
+.student-formal-guidance .send-guidance:disabled { cursor: not-allowed; opacity: .45; }
+.student-formal-advanced { margin: 10px 0 0 51px; padding: 11px 12px; border: 1px solid #e4e8ed; border-radius: 9px; color: #607187; background: #fff; }
+.student-formal-advanced > summary { cursor: pointer; font-size: 8px; font-weight: 900; }
+.student-guidance-list .student-formal-advanced > label { margin: 10px 0 0; }
+.student-guidance-list .student-formal-advanced > footer { margin: 9px 0 0; }
 .student-guidance-clear { min-height: 105px; padding: 22px 0; display: flex; align-items: center; gap: 13px; }
 .student-guidance-clear > i { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; color: #267956; background: #e7f7ef; font-style: normal; font-weight: 900; }
 .student-guidance-clear strong, .student-guidance-clear p { display: block; }
@@ -1504,6 +1522,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .mentor-progress-decision > header h2, .mentor-workflow-detail h2 { margin: 7px 0 4px; font-size: 20px; }
 .mentor-progress-decision > header p, .mentor-workflow-detail > p { margin: 0; color: #7e8981; font-size: 10px; line-height: 1.65; }
 .mentor-progress-decision > header a { color: #1471ad; font-size: 9px; font-weight: 800; text-decoration: none; white-space: nowrap; }
+.mentor-ai-candidate-note { margin: 15px 0 0; padding: 11px 13px; display: grid; gap: 4px; border: 1px solid #cbddec; border-radius: 10px; color: #315b78; background: linear-gradient(120deg, #eaf5fc, #f8fbfd); }
+.mentor-ai-candidate-note b { font-size: 10px; }
+.mentor-ai-candidate-note span { color: #6c8190; font-size: 9px; line-height: 1.55; }
 .mentor-decision-status { margin: 18px 0 12px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; border-radius: 9px; background: #f7f8f7; }
 .mentor-decision-status small { color: #8c958e; font-size: 9px; }
 .mentor-version-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -1522,6 +1543,47 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .mentor-evidence-strip b { font-size: 9px; }
 .mentor-evidence-strip small { color: #8a938c; }
 .mentor-evidence-strip a { color: #1471ad; }
+.mentor-binary-review { margin-top: 18px; padding: 17px; border: 1px solid #d9e2dc; border-radius: 13px; background: #fbfcfb; }
+.mentor-binary-review-head { display: flex; align-items: end; justify-content: space-between; gap: 18px; }
+.mentor-binary-review-head span, .mentor-binary-review-head strong { display: block; }
+.mentor-binary-review-head span { color: #718078; font-size: 8px; font-weight: 850; letter-spacing: .08em; }
+.mentor-binary-review-head strong { margin-top: 5px; font-size: 13px; }
+.mentor-binary-review-head small { color: #869189; font-size: 8px; }
+.mentor-binary-actions { margin-top: 13px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mentor-binary-actions button { min-height: 86px; padding: 14px 16px; display: grid; grid-template-columns: 38px 1fr; grid-template-rows: auto auto; align-content: center; align-items: center; column-gap: 12px; border: 1px solid; border-radius: 12px; text-align: left; }
+.mentor-binary-actions button > span { grid-row: 1 / 3; width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; font-size: 19px; font-weight: 900; }
+.mentor-binary-actions button b { align-self: end; font-size: 12px; }
+.mentor-binary-actions button small { align-self: start; margin-top: 3px; font-size: 8px; }
+.mentor-binary-actions button.confirm { border-color: #a8d4bf; color: #246c50; background: #edf9f3; }
+.mentor-binary-actions button.confirm > span { color: #fff; background: #32956c; }
+.mentor-binary-actions button.guide { border-color: #e4c3ba; color: #8b493d; background: #fff5f2; }
+.mentor-binary-actions button.guide > span { color: #fff; background: #c86b59; }
+.mentor-binary-actions button:hover:not(:disabled) { filter: brightness(.985); box-shadow: 0 5px 16px #25352a12; transform: translateY(-1px); }
+.mentor-binary-actions button:disabled { cursor: wait; opacity: .58; }
+.mentor-inline-guidance { margin-top: 13px; padding: 15px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; border: 1px solid #e3cbc4; border-radius: 11px; background: #fff; }
+.mentor-inline-guidance > header, .mentor-inline-guidance > footer, .mentor-inline-guidance > .wide { grid-column: 1 / -1; }
+.mentor-inline-guidance > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.mentor-inline-guidance > header span, .mentor-inline-guidance > header strong { display: block; }
+.mentor-inline-guidance > header span { color: #a25b4d; font-size: 8px; font-weight: 900; }
+.mentor-inline-guidance > header strong { margin-top: 4px; font-size: 11px; }
+.mentor-inline-guidance > header button { padding: 3px 0; border: 0; color: #78827c; background: transparent; font-size: 8px; font-weight: 800; }
+.mentor-inline-guidance label { min-width: 0; display: grid; gap: 6px; color: #5d6962; font-size: 9px; font-weight: 800; }
+.mentor-inline-guidance input, .mentor-inline-guidance textarea { width: 100%; padding: 9px 10px; border: 1px solid #dce2de; border-radius: 8px; color: var(--ink); background: #fbfcfb; font: inherit; line-height: 1.55; }
+.mentor-inline-guidance input { min-height: 38px; }
+.mentor-inline-guidance textarea { resize: vertical; }
+.mentor-inline-guidance input:focus, .mentor-inline-guidance textarea:focus { border-color: #b98072; outline: 0; box-shadow: 0 0 0 3px #f9ece8; }
+.mentor-inline-guidance input:disabled { color: #7d8881; background: #f0f2f0; }
+.mentor-inline-guidance > footer { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.mentor-inline-guidance > footer small { max-width: 440px; color: #7f8983; font-size: 8px; line-height: 1.55; }
+.mentor-inline-guidance > footer button, .mentor-reclaim-action button { min-height: 38px; padding: 0 14px; border: 1px solid #b75848; border-radius: 9px; color: #fff; background: #b75848; font-size: 9px; font-weight: 850; white-space: nowrap; }
+.mentor-inline-guidance > footer button:disabled { cursor: not-allowed; opacity: .5; }
+.mentor-advanced-review { margin-top: 12px; padding: 12px 14px; border: 1px solid #e5e8e6; border-radius: 10px; color: #616c65; background: #fff; }
+.mentor-advanced-review > summary { cursor: pointer; font-size: 9px; font-weight: 850; }
+.mentor-advanced-review > p { margin: 9px 0 0; color: #879089; font-size: 8px; line-height: 1.55; }
+.mentor-advanced-review .review-actions { flex-wrap: wrap; }
+.mentor-reclaim-action { margin-top: 16px; padding: 13px 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid #e4d4aa; border-radius: 10px; color: #745b25; background: #fff9ea; }
+.mentor-reclaim-action p { margin: 0; font-size: 9px; line-height: 1.55; }
+.mentor-reclaim-action button.primary { border-color: #9b7625; background: #9b7625; }
 .mentor-decision-effect { margin: 12px 0; padding: 12px 14px; display: flex; gap: 12px; border-left: 3px solid #3882b3; color: #60717c; background: #eff7fb; font-size: 9px; line-height: 1.6; }
 .mentor-decision-effect b { flex: 0 0 auto; color: #255f84; }
 .mentor-workflow-detail { max-width: 720px; padding: 14px 4px; }
@@ -1651,6 +1713,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .mentor-task-queue { max-height: 330px; border-right: 0; border-bottom: 1px solid #e5e7e4; }
   .mentor-task-detail { padding: 20px 16px; }
   .mentor-version-diff, .mentor-decision-facts { grid-template-columns: 1fr; }
+  .mentor-binary-actions, .mentor-inline-guidance { grid-template-columns: 1fr; }
+  .mentor-inline-guidance > header, .mentor-inline-guidance > footer, .mentor-inline-guidance > .wide, .mentor-inline-guidance > label { grid-column: 1; }
+  .mentor-inline-guidance > footer, .mentor-reclaim-action { align-items: stretch; flex-direction: column; }
+  .mentor-inline-guidance > footer button, .mentor-reclaim-action button { width: 100%; min-height: 44px; }
   .mentor-version-diff > details { grid-column: 1; }
   .mentor-decision-facts > div { border-right: 0; border-bottom: 1px solid #e5e9e6; }
   .research-ledger-tabs { overflow-x: auto; }
@@ -1761,7 +1827,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-guidance-steps > span:first-child { border-top: 0; }
   .student-guidance-steps small { white-space: normal; }
   .student-guidance-list { padding-inline: 20px; }
-  .student-guidance-evidence, .student-guidance-assets, .student-guidance-list label, .student-guidance-list footer { margin-left: 0; }
+  .student-guidance-evidence, .student-guidance-assets, .student-guidance-list label, .student-guidance-list footer, .student-formal-binary, .student-formal-guidance, .student-formal-advanced { margin-left: 0; }
+  .student-formal-binary, .student-formal-guidance { grid-template-columns: 1fr; }
+  .student-formal-guidance > .wide, .student-formal-guidance > .send-guidance, .student-formal-guidance > label { grid-column: 1; }
   .student-guidance-assets b, .student-guidance-assets small, .student-guidance-assets span > a { font-size: 11px; }
   .student-guidance-list article > header { grid-template-columns: 39px minmax(0, 1fr); }
   .student-guidance-list header em { grid-column: 2; justify-self: start; }
