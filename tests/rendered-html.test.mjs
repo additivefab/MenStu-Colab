@@ -101,6 +101,11 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /飞书 AI 会议总结自动归档/);
   assert.match(dashboard, /\/students\/\$\{encodeURIComponent\(student\.id\)\}/);
   assert.match(dashboard, /管理员（导师）行动台/);
+  assert.match(dashboard, /if \(pending\) return/);
+  assert.match(dashboard, /无需反复点击飞书授权/);
+  assert.match(dashboard, /重新检查权限/);
+  assert.match(dashboard, /切换飞书账号/);
+  assert.match(dashboard, /key=\{authGate\.kind\}/);
   assert.doesNotMatch(dashboard, /value="mentor"/);
   assert.match(dashboard, /未来 7 天更新/);
   assert.match(studentOverview, /科研培养流程图/);

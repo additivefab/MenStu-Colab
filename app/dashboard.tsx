@@ -423,7 +423,7 @@ export default function Dashboard() {
   }).format(new Date());
 
   if (!loading && authGate) {
-    return <FeishuAccessGate gate={authGate} onAuthenticated={loadDashboard} />;
+    return <FeishuAccessGate key={authGate.kind} gate={authGate} onAuthenticated={loadDashboard} />;
   }
 
   if (loading && !data) {
@@ -1620,7 +1620,8 @@ function AccountManagement({ viewer, students }: { viewer: DashboardData["viewer
 }
 
 function FeishuAccessGate({ gate, onAuthenticated }: { gate: AuthGate; onAuthenticated: () => Promise<void> }) {
-  const [status, setStatus] = useState<"checking" | "ready" | "authorizing" | "error">("checking");
+  const pending = gate.kind === "pending";
+  const [status, setStatus] = useState<"checking" | "ready" | "authorizing" | "error">(pending ? "ready" : "checking");
   const [message, setMessage] = useState(gate.message);
   const [config, setConfig] = useState<{ configured: boolean; appId: string; sdkUrl: string } | null>(null);
 
@@ -1669,6 +1670,7 @@ function FeishuAccessGate({ gate, onAuthenticated }: { gate: AuthGate; onAuthent
   }, [onAuthenticated]);
 
   useEffect(() => {
+    if (pending) return;
     let cancelled = false;
     fetch("/api/auth/feishu/config", { cache: "no-store" })
       .then((response) => response.json())
@@ -1689,11 +1691,26 @@ function FeishuAccessGate({ gate, onAuthenticated }: { gate: AuthGate; onAuthent
         if (!cancelled) { setStatus("error"); setMessage("无法读取飞书应用配置。"); }
       });
     return () => { cancelled = true; };
-  }, [authorize]);
+  }, [authorize, pending]);
 
-  const pending = gate.kind === "pending";
+  const checkAccess = useCallback(async () => {
+    setStatus("checking");
+    try {
+      await onAuthenticated();
+    } finally {
+      setStatus("ready");
+    }
+  }, [onAuthenticated]);
+
+  const switchAccount = useCallback(async () => {
+    setStatus("authorizing");
+    setMessage("正在退出当前系统登录并切换飞书账号…");
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.assign("/api/auth/feishu/browser/start");
+  }, []);
+
   const setup = gate.kind === "setup" || config?.configured === false;
-  return <main className="access-shell"><section className="access-card"><div className="access-brand"><div className="brand-mark">探</div><div><strong>探研</strong><span>射线探伤 × AI</span></div></div><div className={`access-orb ${pending ? "pending" : ""}`}>{pending ? "…" : "飞"}</div><p className="access-kicker">飞书企业自建应用</p><h1>{pending ? "身份已验证，等待分配角色" : setup ? "飞书接入等待应用配置" : "正在通过飞书安全登录"}</h1><p className="access-copy">{message}</p>{setup ? <div className="setup-steps"><span><b>1</b>创建企业自建应用并添加“网页应用”能力</span><span><b>2</b>将应用主页设为当前系统地址</span><span><b>3</b>安全配置 App ID 和 App Secret 后发布</span></div> : null}{status === "authorizing" || status === "checking" ? <div className="access-loading"><i /><span>正在确认飞书环境…</span></div> : null}{status === "error" && config?.configured ? <button className="primary access-retry" onClick={() => void authorize(config)}>重新尝试飞书登录</button> : null}<div className="access-safe">不会把 App Secret、飞书访问凭证或完整代码发送给云端 GPT</div></section></main>;
+  return <main className="access-shell"><section className="access-card"><div className="access-brand"><div className="brand-mark">探</div><div><strong>探研</strong><span>射线探伤 × AI</span></div></div><div className={`access-orb ${pending ? "pending" : ""}`}>{pending ? "✓" : "飞"}</div><p className="access-kicker">飞书企业自建应用</p><h1>{pending ? "飞书身份已验证" : setup ? "飞书接入等待应用配置" : "正在通过飞书安全登录"}</h1><p className="access-copy">{pending ? "当前账号已经完成飞书登录，现在只差系统角色授权，无需反复点击飞书授权。" : message}</p>{pending ? <><div className="access-pending-note"><strong>下一步由超级管理员处理</strong><span>请在“系统设置 → 飞书账号与高权限授权”中，为当前账号分配学生或导师角色。</span></div><div className="access-actions"><button className="primary" disabled={status === "checking" || status === "authorizing"} onClick={() => void checkAccess()}>{status === "checking" ? "检查中…" : "重新检查权限"}</button><button disabled={status === "authorizing"} onClick={() => void switchAccount()}>{status === "authorizing" ? "切换中…" : "切换飞书账号"}</button></div></> : null}{setup ? <div className="setup-steps"><span><b>1</b>创建企业自建应用并添加“网页应用”能力</span><span><b>2</b>将应用主页设为当前系统地址</span><span><b>3</b>安全配置 App ID 和 App Secret 后发布</span></div> : null}{!pending && (status === "authorizing" || status === "checking") ? <div className="access-loading"><i /><span>正在确认飞书环境…</span></div> : null}{!pending && status === "error" && config?.configured ? <button className="primary access-retry" onClick={() => void authorize(config)}>重新尝试飞书登录</button> : null}<div className="access-safe">不会把 App Secret、飞书访问凭证或完整代码发送给云端 GPT</div></section></main>;
 }
 
 function LoadingState() {
