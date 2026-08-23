@@ -30,8 +30,8 @@ test("server-renders the standalone student overview route", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /学生科研全景/);
-  assert.match(html, /正在整理学生科研全景/);
+  assert.match(html, /学生科研前景速览/);
+  assert.match(html, /正在整理学生科研前景速览/);
 });
 
 test("keeps the database and Feishu boundaries explicit in source", async () => {
@@ -110,8 +110,8 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /完整档案 ↗/);
   assert.match(dashboard, /进入学生档案/);
   assert.match(dashboard, /href=\{`\/students\/\$\{encodeURIComponent\(entry\.student_id\)\}#evidence`\}/);
-  assert.match(dashboard, /打开 \$\{student\.name\} 的专属档案与全部进展/);
-  assert.match(dashboard, /点击查看专属档案/);
+  assert.match(dashboard, /打开 \$\{student\.name\} 的科研前景速览与全部进展/);
+  assert.match(dashboard, /点击查看科研前景速览/);
   assert.doesNotMatch(dashboard, /import Link from "next\/link"/);
   assert.match(dashboard, /name="attachments" type="file" multiple/);
   assert.match(dashboard, /找导师聊聊/);
@@ -153,6 +153,18 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /只呈现下一步动作；正式判断不会自动批量执行/);
   assert.match(studentOverview, /科研培养流程图/);
   assert.match(studentOverview, /导师决策视图/);
+  assert.match(studentOverview, /10-SECOND RESEARCH OUTLOOK/);
+  assert.match(studentOverview, /论文前景信号/);
+  assert.match(studentOverview, /项目前景信号/);
+  assert.match(studentOverview, /导师现在处理/);
+  assert.match(studentOverview, /不对学生能力或人格作自动评级/);
+  assert.match(studentOverview, /project: \{/);
+  assert.match(studentOverview, /Boolean\(entry\.evidence\.trim\(\)\) \|\| entry\.evidence_sources\.length > 0 \|\| entry\.attachments\.length > 0/);
+  assert.match(studentOverview, /mentorView=research&researchTab=proposals&proposal=\$\{proposal\.id\}/);
+  assert.match(studentOverview, /if \(entry\.claim_stale\) return 0/);
+  assert.ok(studentOverview.indexOf("entry.paper?.blocker || entry.project?.blocker") < studentOverview.indexOf("if (entry.can_decide) return 3"));
+  assert.match(studentOverview, /focusPaper\?\.status === "active"/);
+  assert.match(studentOverview, /paper\.status === "active"\s*\? paperDeadlineState/);
   assert.match(studentOverview, /导师自由指导区/);
   assert.match(studentOverview, /指导主题（可选）/);
   assert.match(studentOverview, /导师想说的话/);

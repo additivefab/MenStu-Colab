@@ -1170,6 +1170,52 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-hero-evidence small { margin-top: 2px; color: #7d857f; font-size: 8px; }
 .student-hero-evidence p { margin: 0; color: #7d857f; font-size: 8px; white-space: nowrap; }
 
+.student-outlook-brief { margin-top: 18px; scroll-margin-top: 58px; overflow: hidden; border: 1px solid #cfdce8; border-radius: 18px; background: #fff; box-shadow: 0 12px 34px #193d6810; }
+.student-outlook-brief.attention { border-color: #e2c48f; }
+.student-outlook-brief.steady { border-color: #badfce; }
+.student-outlook-brief.insufficient { border-color: #d8d8d2; }
+.student-outlook-head { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr); color: #fff; background: linear-gradient(128deg, #173a61, #245d91 72%, #2f76ad); }
+.student-outlook-brief.attention .student-outlook-head { background: linear-gradient(128deg, #543a1f, #8b632d 72%, #b07d35); }
+.student-outlook-brief.steady .student-outlook-head { background: linear-gradient(128deg, #173f38, #256653 72%, #2f8066); }
+.student-outlook-brief.insufficient .student-outlook-head { background: linear-gradient(128deg, #343d46, #53616c 72%, #687782); }
+.student-outlook-head > div { padding: 25px 28px; }
+.student-outlook-head > div > span { color: #9dd4ff; font-size: 9px; font-weight: 900; letter-spacing: .14em; }
+.student-outlook-brief.attention .student-outlook-head > div > span { color: #ffe0a6; }
+.student-outlook-brief.steady .student-outlook-head > div > span { color: #a9ead2; }
+.student-outlook-status { width: max-content; margin-top: 12px; padding: 5px 9px; display: flex; align-items: center; gap: 6px; border: 1px solid #ffffff2e; border-radius: 999px; color: #eff8ff; background: #ffffff14; font-size: 9px; font-weight: 850; }
+.student-outlook-status i { width: 7px; height: 7px; border-radius: 50%; background: #8ed2ff; box-shadow: 0 0 0 4px #8ed2ff1e; }
+.student-outlook-brief.attention .student-outlook-status i { background: #ffd47a; box-shadow: 0 0 0 4px #ffd47a1e; }
+.student-outlook-brief.steady .student-outlook-status i { background: #7de0b8; box-shadow: 0 0 0 4px #7de0b81e; }
+.student-outlook-head h2 { max-width: 800px; margin: 12px 0 7px; font-size: clamp(20px, 2.2vw, 29px); line-height: 1.35; letter-spacing: -.025em; }
+.student-outlook-head > div > p { margin: 0; color: #d5e5f4; font-size: 11px; line-height: 1.7; }
+.student-outlook-head > aside { padding: 23px 25px; display: grid; align-content: center; gap: 7px; border-left: 1px solid #ffffff1f; background: #06182a26; }
+.student-outlook-head > aside > span { color: #a9d7ff; font-size: 9px; font-weight: 900; letter-spacing: .08em; }
+.student-outlook-head > aside > strong { font-size: 15px; line-height: 1.45; }
+.student-outlook-head > aside > p { margin: 0; color: #d2e2f0; font-size: 10px; line-height: 1.65; }
+.student-outlook-head > aside > a { width: max-content; margin-top: 6px; padding: 8px 11px; border: 1px solid #ffffff38; border-radius: 8px; color: #fff; background: #ffffff12; text-decoration: none; font-size: 9px; font-weight: 850; }
+.student-outlook-head > aside > a:hover { background: #ffffff20; }
+.student-outlook-tracks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.student-outlook-tracks > article { min-width: 0; padding: 20px 22px; border-left: 1px solid #e2e8ed; background: #fff; }
+.student-outlook-tracks > article:first-child { border-left: 0; }
+.student-outlook-tracks > article.attention { background: #fffaf1; }
+.student-outlook-tracks > article.empty { background: #fafaf8; }
+.student-outlook-tracks article > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.student-outlook-tracks article > header > span { color: #59718c; font-size: 9px; font-weight: 900; letter-spacing: .06em; }
+.student-outlook-tracks article > header > b { max-width: 55%; padding: 4px 7px; overflow: hidden; border-radius: 99px; color: #2d6a9b; background: #e9f3fb; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.student-outlook-tracks article.attention > header > b { color: #94601e; background: #fff0d3; }
+.student-outlook-tracks article.empty > header > b { color: #717873; background: #eceeeb; }
+.student-outlook-tracks h3 { min-height: 42px; margin: 11px 0 12px; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.student-outlook-tracks dl { margin: 0; display: grid; gap: 8px; }
+.student-outlook-tracks dl > div { padding: 9px 10px; border-radius: 9px; background: #f6f8fa; }
+.student-outlook-tracks article.attention dl > div { background: #fff4df; }
+.student-outlook-tracks dt { color: #84909d; font-size: 8px; font-weight: 850; }
+.student-outlook-tracks dd { margin: 4px 0 0; color: #3e5063; font-size: 10px; line-height: 1.55; overflow-wrap: anywhere; }
+.student-outlook-tracks article > a { margin-top: 12px; display: inline-flex; color: #276da7; text-decoration: none; font-size: 9px; font-weight: 850; }
+.student-outlook-tracks article > a:hover { text-decoration: underline; }
+.student-outlook-brief > footer { min-height: 46px; padding: 10px 22px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-top: 1px solid #e5e9ec; color: #76818c; background: #f8f9f8; font-size: 9px; line-height: 1.55; }
+.student-outlook-brief > footer small { flex: 0 0 auto; color: #586b7b; font-size: 9px; font-weight: 750; }
+.student-formal-review { scroll-margin-top: 58px; }
+
 .student-guidance-workbench, .student-paper-landscape, .student-ai-summary-archive { margin-top: 18px; scroll-margin-top: 58px; border: 1px solid #dce5ef; border-radius: 18px; background: white; box-shadow: 0 12px 34px #193d6810; overflow: hidden; }
 .student-guidance-intro { padding: 25px 27px 20px; display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; color: white; background: linear-gradient(125deg, #15385f, #225a91 70%, #2b73b7); }
 .student-guidance-intro span { color: #9fd1ff; font-size: 8px; font-weight: 900; letter-spacing: .15em; }
@@ -1558,6 +1604,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-page-side { grid-template-columns: 1fr 1fr; }
   .student-page-side > section:first-child { grid-column: 1 / -1; }
   .student-hero { grid-template-columns: minmax(230px, .75fr) minmax(300px, 1.2fr) 125px; }
+  .student-outlook-head { grid-template-columns: 1fr; }
+  .student-outlook-head > aside { border-top: 1px solid #ffffff1f; border-left: 0; }
+  .student-outlook-tracks { grid-template-columns: 1fr 1fr; }
+  .student-outlook-tracks > article:nth-child(3) { grid-column: 1 / -1; border-top: 1px solid #e2e8ed; border-left: 0; }
   .student-guidance-evidence, .student-paper-decision { grid-template-columns: 1fr; }
   .student-guidance-evidence > div, .student-paper-decision > div { border-top: 1px solid #e2e8ef; border-left: 0; }
   .student-guidance-evidence > div:first-child, .student-paper-decision > div:first-child { border-top: 0; }
@@ -1674,6 +1724,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-hero-focus { width: 100%; }
   .student-hero-evidence { width: 100%; display: flex; align-items: center; justify-content: flex-start; }
   .student-hero-evidence > div { width: 88px; height: 88px; }
+  .student-outlook-head > div, .student-outlook-head > aside { padding: 22px 20px; }
+  .student-outlook-head h2 { font-size: 21px; }
+  .student-outlook-head > div > p, .student-outlook-head > aside > p { font-size: 12px; }
+  .student-outlook-head > aside > strong { font-size: 16px; }
+  .student-outlook-head > aside > a { min-height: 44px; display: inline-flex; align-items: center; font-size: 12px; }
+  .student-outlook-tracks { grid-template-columns: 1fr; }
+  .student-outlook-tracks > article, .student-outlook-tracks > article:nth-child(3) { grid-column: auto; padding: 19px 20px; border-top: 1px solid #e2e8ed; border-left: 0; }
+  .student-outlook-tracks > article:first-child { border-top: 0; }
+  .student-outlook-tracks article > header > span, .student-outlook-tracks article > header > b, .student-outlook-tracks dt, .student-outlook-tracks article > a { font-size: 11px; }
+  .student-outlook-tracks h3 { min-height: auto; font-size: 15px; }
+  .student-outlook-tracks dd { font-size: 13px; }
+  .student-outlook-brief > footer { align-items: flex-start; flex-direction: column; font-size: 11px; }
+  .student-outlook-brief > footer small { font-size: 11px; }
   .student-guidance-intro { padding: 22px 20px; }
   .student-guidance-compose { grid-template-columns: 1fr; padding: 20px; }
   .student-guidance-compose-title, .student-guidance-compose label.wide, .student-guidance-compose-actions { grid-column: auto; }

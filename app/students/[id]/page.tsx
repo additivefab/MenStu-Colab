@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import StudentOverview from "./student-overview";
 
 export const metadata: Metadata = {
-  title: "学生科研全景｜探研",
-  description: "学生研究方案、培养节点、个人进展、审核与风险状态全景页",
+  title: "学生科研前景速览｜探研",
+  description: "用论文、项目、培养节点和可核验证据快速判断学生当前科研推进态势",
   openGraph: { images: [] },
   twitter: { images: [] },
 };
