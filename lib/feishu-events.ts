@@ -1,12 +1,18 @@
 const encoder = new TextEncoder();
 
+function ownedBytes(bytes: Uint8Array) {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy;
+}
+
 function bytesToHex(bytes: Uint8Array) {
   return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 async function sha256(value: string | Uint8Array) {
   const input = typeof value === "string" ? encoder.encode(value) : value;
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", input));
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", ownedBytes(input)));
 }
 
 export async function secureTextEqual(left: string, right: string) {

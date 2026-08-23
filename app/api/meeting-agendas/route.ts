@@ -28,6 +28,31 @@ type AgendaItemInput = {
   durationMinutes?: unknown;
 };
 
+type AgendaRow = {
+  id: number;
+  mentor_user_id: number;
+  mentor_name: string;
+  title: string;
+  meeting_date: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type AgendaItemRow = {
+  id: number;
+  agenda_id: number;
+  student_id: string;
+  student_name: string;
+  topic: string;
+  reason: string;
+  duration_minutes: number;
+  sort_order: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
 async function readAgendas(userId: number, all: boolean) {
   const d1 = getD1();
   const agendas = all
@@ -35,22 +60,22 @@ async function readAgendas(userId: number, all: boolean) {
         a.title, a.meeting_date, a.status, a.created_at, a.updated_at
         FROM meeting_agendas a JOIN app_users u ON u.id = a.mentor_user_id
         ORDER BY CASE a.status WHEN 'draft' THEN 0 WHEN 'scheduled' THEN 1 ELSE 2 END,
-          COALESCE(a.meeting_date, '9999-12-31'), a.updated_at DESC LIMIT 80`).all<Record<string, unknown>>()
+          COALESCE(a.meeting_date, '9999-12-31'), a.updated_at DESC LIMIT 80`).all<AgendaRow>()
     : await d1.prepare(`SELECT a.id, a.mentor_user_id, u.display_name AS mentor_name,
         a.title, a.meeting_date, a.status, a.created_at, a.updated_at
         FROM meeting_agendas a JOIN app_users u ON u.id = a.mentor_user_id
         WHERE a.mentor_user_id = ?
         ORDER BY CASE a.status WHEN 'draft' THEN 0 WHEN 'scheduled' THEN 1 ELSE 2 END,
           COALESCE(a.meeting_date, '9999-12-31'), a.updated_at DESC LIMIT 80`)
-      .bind(userId).all<Record<string, unknown>>();
+      .bind(userId).all<AgendaRow>();
   const ids = agendas.results.map((agenda) => Number(agenda.id));
   const items = ids.length
     ? await d1.prepare(`SELECT i.id, i.agenda_id, i.student_id, s.display_name AS student_name,
         i.topic, i.reason, i.duration_minutes, i.sort_order, i.status, i.created_at, i.updated_at
         FROM meeting_agenda_items i JOIN students s ON s.id = i.student_id
         WHERE i.agenda_id IN (${ids.map(() => "?").join(",")})
-        ORDER BY i.agenda_id, i.sort_order, i.id`).bind(...ids).all<Record<string, unknown>>()
-    : { results: [] as Record<string, unknown>[] };
+        ORDER BY i.agenda_id, i.sort_order, i.id`).bind(...ids).all<AgendaItemRow>()
+    : { results: [] as AgendaItemRow[] };
   return agendas.results.map((agenda) => ({
     ...agenda,
     items: items.results.filter((item) => Number(item.agenda_id) === Number(agenda.id)),
