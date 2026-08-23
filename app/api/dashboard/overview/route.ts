@@ -16,7 +16,7 @@ function privateResponse(response: Response) {
 export async function GET(request: Request) {
   try {
     const auth = await requireAppUser(request, ["superadmin", "admin"]);
-    if ("response" in auth) return privateResponse(auth.response);
+    if ("response" in auth && auth.response) return privateResponse(auth.response);
     await ensureDatabase();
     const overview = await loadMentorOverview(auth.user);
     return Response.json(overview, { headers: privateHeaders });

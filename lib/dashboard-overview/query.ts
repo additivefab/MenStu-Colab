@@ -145,7 +145,7 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
   if (studentResult.results.length > 100) {
     throw new Error("当前导师范围超过 100 人，请启用服务端分页后再使用全组总览");
   }
-  const baseStudents = studentResult.results;
+  const baseStudents = studentResult.results as StudentRow[];
   const studentIds = baseStudents.map((student) => student.id);
 
   const emptyCounts = Object.fromEntries(overviewStates.map((state) => [state, 0])) as Record<OverviewState, number>;
@@ -177,17 +177,26 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
     d1.prepare(guidanceOverviewSql(studentIds.length)).bind(...studentIds).all<GuidanceRow>(),
     d1.prepare(paperPositionSql(studentIds.length)).bind(...studentIds).all<PaperRow>(),
   ]);
-  const reviewableIds = new Set(reviewableResult.results.map((row) => row.student_id));
+  const reviewableRows = reviewableResult.results as Array<{ student_id: string }>;
+  const substantiveRows = substantiveResult.results as SubstantiveRow[];
+  const acceptedTrackRows = trackResult.results as TrackProgressRow[];
+  const submittedRows = submittedResult.results as LatestSubmittedRow[];
+  const outstandingRows = outstandingResult.results as OutstandingProgressRow[];
+  const proposalRows = proposalResult.results as ProposalRow[];
+  const milestoneRows = milestoneResult.results as MilestoneRow[];
+  const guidanceRows = guidanceResult.results as GuidanceRow[];
+  const paperRows = paperResult.results as PaperRow[];
+  const reviewableIds = new Set(reviewableRows.map((row) => row.student_id));
 
   const students: MentorOverviewStudent[] = baseStudents.map((student) => {
-    const substantive = substantiveResult.results.filter((row) => row.student_id === student.id);
-    const acceptedTracks = trackResult.results.filter((row) => row.student_id === student.id);
-    const latestSubmitted = submittedResult.results.find((row) => row.student_id === student.id) ?? null;
-    const outstanding = outstandingResult.results.filter((row) => row.student_id === student.id);
-    const proposal = proposalResult.results.find((row) => row.student_id === student.id) ?? null;
-    const milestones = milestoneResult.results.filter((row) => row.student_id === student.id);
-    const guidance = guidanceResult.results.filter((row) => row.student_id === student.id);
-    const paper = paperResult.results.find((row) => row.student_id === student.id) ?? null;
+    const substantive = substantiveRows.filter((row) => row.student_id === student.id);
+    const acceptedTracks = acceptedTrackRows.filter((row) => row.student_id === student.id);
+    const latestSubmitted = submittedRows.find((row) => row.student_id === student.id) ?? null;
+    const outstanding = outstandingRows.filter((row) => row.student_id === student.id);
+    const proposal = proposalRows.find((row) => row.student_id === student.id) ?? null;
+    const milestones = milestoneRows.filter((row) => row.student_id === student.id);
+    const guidance = guidanceRows.filter((row) => row.student_id === student.id);
+    const paper = paperRows.find((row) => row.student_id === student.id) ?? null;
     const canReview = reviewableIds.has(student.id);
     const tracks = filterCurrentAcceptedTracks(acceptedTracks, outstanding);
 
