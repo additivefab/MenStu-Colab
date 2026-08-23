@@ -700,7 +700,7 @@ type StudentNavigationIntent = {
 };
 
 const studentViewMeta: Record<StudentView, { label: string; icon: string }> = {
-  today: { label: "今日", icon: "⌂" },
+  today: { label: "下一步", icon: "⌂" },
   research: { label: "研究", icon: "◇" },
   progress: { label: "进展", icon: "＋" },
   library: { label: "资料", icon: "▤" },
@@ -838,18 +838,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
         <div className="student-account"><span className="student-workbench-status"><i />数据已同步</span><button type="button" onClick={onFeishu}>飞书账号</button></div>
       </header>
 
-      {view === "today" ? <div className="student-today-layout">
-        <section className="student-portal-hero">
-          <div><span className="student-portal-kicker">TODAY · 我的科研</span><h1 id="student-view-today-title">{student.name}，今天进展到哪了？</h1><p>先完成最重要的一件事，再把论文、课题或组会成果记下来。</p></div>
-          <div className="student-primary-actions">
-            <button className="primary" type="button" aria-controls="student-quick-progress" aria-expanded={composer === "论文"} onClick={() => openComposer("论文")}>记论文进展</button>
-            <button type="button" aria-controls="student-quick-progress" aria-expanded={composer === "项目"} onClick={() => openComposer("项目")}>记课题进展</button>
-            <button type="button" onClick={openMeetingDesk}>约导师聊一聊</button>
-          </div>
-        </section>
-        <StudentGuidanceInbox compact onToast={onToast} />
-        <StudentTodayDesk student={student} papers={papers} onPaper={() => openComposer("论文")} onProject={() => openComposer("项目")} onMeeting={openMeetingDesk} onSupplement={openSupplement} onOpenProgress={(entry) => navigateStudent({ view: entry.kind === "组会" ? "mentor" : "progress", entryId: entry.id })} />
-      </div> : null}
+      {view === "today" ? <StudentNextAction student={student} papers={papers} onPaper={() => openComposer("论文")} onProject={() => openComposer("项目")} onMeeting={openMeetingDesk} onSupplement={openSupplement} /> : null}
 
       {view === "research" ? <>
         <StudentViewIntro id="student-view-research-title" eyebrow="RESEARCH TRACKS" title="论文与课题，分开推进" description="选择一条研究线，只看这一类的阶段、台账、导师反馈和待补材料。" metric={`${paperReturned + projectReturned}`} metricLabel="项待补充">
@@ -893,19 +882,16 @@ function StudentViewIntro({ id, eyebrow, title, description, metric, metricLabel
   </section>;
 }
 
-function StudentTodayDesk({ student, papers, onPaper, onProject, onMeeting, onSupplement, onOpenProgress }: {
+function StudentNextAction({ student, papers, onPaper, onProject, onMeeting, onSupplement }: {
   student: Student;
   papers: StudentPaper[];
   onPaper: () => void;
   onProject: () => void;
   onMeeting: () => void;
   onSupplement: (entry: StudentProgress) => void;
-  onOpenProgress: (entry: StudentProgress) => void;
 }) {
   const entries = [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
   const returnedEntry = entries.find((entry) => (entry.kind === "论文" || entry.kind === "项目") && entry.review_status === "changes_requested");
-  const latestReply = entries.find((entry) => Boolean(entry.reviewer_note?.trim()));
-  const pendingCount = entries.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
   const projectEntries = entries.filter((entry) => entry.kind === "项目");
   const activePaper = papers.find((paper) => paper.status === "active") ?? papers.find((paper) => paper.status === "on_hold") ?? papers[0];
   const latestPaperEntry = entries.find((entry) => entry.kind === "论文" && (!activePaper || entry.paper?.id === activePaper.id)) ?? entries.find((entry) => entry.kind === "论文");
@@ -925,7 +911,7 @@ function StudentTodayDesk({ student, papers, onPaper, onProject, onMeeting, onSu
         title: returnedEntry.paper?.title || returnedEntry.title,
         detail: returnedEntry.reviewer_note || "按导师意见补充结论、证据或附件后重新提交。",
         meta: "补充后重新提交，原审核记录会保留",
-        kind: returnedEntry.kind === "项目" ? "项目" as const : "论文" as const,
+        action: "supplement" as const,
         attention: true,
       }
     : paperAction && paperDeadline.overdue
@@ -934,7 +920,7 @@ function StudentTodayDesk({ student, papers, onPaper, onProject, onMeeting, onSu
           title: paperAction,
           detail: paperContext,
           meta: `${paperActionDate} · ${paperDeadline.label}`,
-          kind: "论文" as const,
+          action: "paper" as const,
           attention: true,
         }
       : paperBlocker
@@ -943,7 +929,7 @@ function StudentTodayDesk({ student, papers, onPaper, onProject, onMeeting, onSu
             title: paperBlocker,
             detail: paperContext,
             meta: "需要导师决策、资源或协作时，可直接发起预约",
-            kind: "论文" as const,
+            action: "meeting" as const,
             attention: true,
           }
         : paperAction
@@ -952,7 +938,7 @@ function StudentTodayDesk({ student, papers, onPaper, onProject, onMeeting, onSu
               title: paperAction,
               detail: paperContext,
               meta: paperActionDate ? `${paperActionDate} · ${paperDeadline.label}` : "完成后记一条论文进展",
-              kind: "论文" as const,
+              action: "paper" as const,
               attention: false,
             }
           : student.nextMilestone
@@ -961,7 +947,7 @@ function StudentTodayDesk({ student, papers, onPaper, onProject, onMeeting, onSu
                 title: student.nextMilestone,
                 detail: student.currentFocus || "围绕节点目标形成一项可核验成果。",
                 meta: student.nextMilestoneDate ? `${student.nextMilestoneDate} · ${milestoneDeadline.label}` : "完成后记一条课题进展",
-                kind: "项目" as const,
+                action: "project" as const,
                 attention: milestoneDeadline.overdue,
               }
             : projectRhythmOverdue
@@ -970,7 +956,7 @@ function StudentTodayDesk({ student, papers, onPaper, onProject, onMeeting, onSu
                   title: "补充一条可核验的课题进展",
                   detail: student.currentFocus || "记录最近完成的实验、数据整理或阶段结果。",
                   meta: `距上次课题记录 ${projectUpdateDays} 天 · 建议每 ${student.cadenceDays} 天更新`,
-                  kind: "项目" as const,
+                  action: "project" as const,
                   attention: true,
                 }
               : {
@@ -978,24 +964,44 @@ function StudentTodayDesk({ student, papers, onPaper, onProject, onMeeting, onSu
                   title: student.currentFocus || "记录下一项可核验进展",
                   detail: `建议每 ${student.cadenceDays} 天至少更新一次。`,
                   meta: "完成后记一条进展",
-                  kind: activePaper || latestPaperEntry ? "论文" as const : "项目" as const,
+                  action: activePaper || latestPaperEntry ? "paper" as const : "project" as const,
                   attention: false,
                 };
 
-  return <aside className="student-today-desk" aria-labelledby="student-today-title">
-    <header><div><span>MY NEXT ACTION</span><h2 id="student-today-title">今天先做什么</h2></div><em className={student.risk.level === "正常" ? "steady" : "attention"}>{student.risk.level}</em></header>
-    <div className={`student-today-focus ${focus.attention ? "attention" : ""}`}>
-      <span>{focus.kicker}</span><strong>{focus.title}</strong><p>{focus.detail}</p>
+  const actionLabel = focus.action === "supplement"
+    ? "补充这项进展"
+    : focus.action === "meeting"
+      ? "约导师解决阻塞"
+      : focus.action === "paper"
+        ? "完成后记录论文进展"
+        : "完成后记录课题进展";
+
+  function runAction() {
+    if (focus.action === "supplement") {
+      if (returnedEntry) onSupplement(returnedEntry);
+      return;
+    }
+    if (focus.action === "meeting") {
+      onMeeting();
+      return;
+    }
+    if (focus.action === "paper") {
+      onPaper();
+      return;
+    }
+    onProject();
+  }
+
+  return <section className="student-next-action-page" aria-labelledby="student-view-today-title">
+    <header><span>NEXT ACTION</span><h1 id="student-view-today-title">下一步行动</h1></header>
+    <article className={`student-next-action-card ${focus.attention ? "attention" : ""}`}>
+      <span>{focus.kicker}</span>
+      <strong>{focus.title}</strong>
+      <p>{focus.detail}</p>
       <small>{focus.meta}</small>
-    </div>
-    <div className="student-today-signals">
-      <span><b>{pendingCount}</b><small>条等待导师</small></span>
-      <span><b>{student.risk.days}</b><small>天距实质进展</small></span>
-      <span><b>{papers.length}</b><small>篇论文在册</small></span>
-    </div>
-    {latestReply ? <a className="student-latest-reply" href={studentNavigationHref({ view: latestReply.kind === "组会" ? "mentor" : "progress", entryId: latestReply.id })} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onOpenProgress(latestReply); }}><span>导师最近回复</span><strong>{latestReply.reviewer_note}</strong><small>{shortDate(latestReply.reviewed_at || latestReply.submitted_at)} · 查看记录 ↓</small></a> : <div className="student-latest-reply empty"><span>导师反馈</span><strong>暂时没有新的回复</strong><small>{pendingCount ? "进展正在等待导师确认" : "可以继续推进下一项行动"}</small></div>}
-    <footer>{returnedEntry ? <button className="primary" type="button" onClick={() => onSupplement(returnedEntry)}>补充这项进展</button> : <button className="primary" type="button" onClick={focus.kind === "论文" ? onPaper : onProject}>记录{focus.kind}进展</button>}<button type="button" onClick={onMeeting}>约导师</button></footer>
-  </aside>;
+      <button className="primary" type="button" onClick={runAction}>{actionLabel}</button>
+    </article>
+  </section>;
 }
 
 function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved }: {

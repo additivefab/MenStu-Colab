@@ -73,6 +73,11 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /window\.addEventListener\("popstate"/);
   assert.match(dashboard, /aria-current=\{view === itemView \? "page" : undefined\}/);
   assert.match(dashboard, /view === "today"/);
+  assert.match(dashboard, /today: \{ label: "下一步", icon: "⌂" \}/);
+  assert.match(dashboard, /id="student-view-today-title">下一步行动/);
+  assert.match(dashboard, /约导师解决阻塞/);
+  assert.doesNotMatch(dashboard, /TODAY · 我的科研|今天进展到哪了|今天先做什么/);
+  assert.doesNotMatch(dashboard, /<StudentGuidanceInbox compact/);
   assert.match(dashboard, /view === "research"/);
   assert.match(dashboard, /view === "progress"/);
   assert.match(dashboard, /view === "library"/);
