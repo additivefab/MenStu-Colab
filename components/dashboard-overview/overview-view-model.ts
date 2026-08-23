@@ -26,11 +26,18 @@ function compareNullableDate(left: string | null, right: string | null, nullLast
 }
 
 export function sortOverviewStudents(left: MentorOverviewStudent, right: MentorOverviewStudent) {
-  const leftDue = left.issues.find((issue) => issue.dueDate)?.dueDate ?? null;
-  const rightDue = right.issues.find((issue) => issue.dueDate)?.dueDate ?? null;
+  const leftDue = earliestOverviewDueDate(left);
+  const rightDue = earliestOverviewDueDate(right);
   return overviewStateMeta[left.primaryState].order - overviewStateMeta[right.primaryState].order
     || compareNullableDate(leftDue, rightDue)
     || compareNullableDate(left.latestSubstantiveAt, right.latestSubstantiveAt, false)
     || left.displayName.localeCompare(right.displayName, "zh-CN")
     || left.studentId.localeCompare(right.studentId);
+}
+
+export function earliestOverviewDueDate(student: Pick<MentorOverviewStudent, "issues">) {
+  return student.issues.reduce<string | null>((earliest, issue) => {
+    if (!issue.dueDate) return earliest;
+    return earliest === null || issue.dueDate < earliest ? issue.dueDate : earliest;
+  }, null);
 }

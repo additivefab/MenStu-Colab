@@ -15,7 +15,8 @@ export function overviewActionLabel(student: MentorOverviewStudent) {
     case "verify_guidance": return "核对验收";
     case "view_guidance": return "查看指导";
     case "view_progress": return "查看待补交";
-    case "complete_profile": return "补齐信息";
+    case "view_proposal": return "查看待修改";
+    case "complete_profile": return "查看档案缺口";
     default: return "查看";
   }
 }
@@ -23,18 +24,27 @@ export function overviewActionLabel(student: MentorOverviewStudent) {
 export function overviewActionHref(student: MentorOverviewStudent) {
   const studentPath = `/students/${encodeURIComponent(student.studentId)}`;
   const primaryIssue = student.issues[0];
+  const target = Number(student.primaryActionTargetId);
+  const targetId = Number.isInteger(target) && target > 0 ? target : null;
   switch (student.primaryAction) {
-    case "review_progress": return `${studentPath}#formal-review`;
+    case "review_progress": return targetId ? `${studentPath}#review-progress-${targetId}` : `${studentPath}#formal-review`;
     case "review_proposal": {
-      const target = Number(student.primaryActionTargetId);
-      return Number.isInteger(target) && target > 0
-        ? `/?mentorView=research&researchTab=proposals&proposal=${target}`
+      return targetId
+        ? `/?mentorView=research&researchTab=proposals&proposal=${targetId}`
         : `${studentPath}#proposal`;
     }
+    case "view_proposal": return targetId
+      ? `/?mentorView=research&researchTab=proposals&proposal=${targetId}`
+      : `${studentPath}#proposal`;
     case "verify_guidance":
-    case "view_guidance": return `${studentPath}#guidance`;
-    case "view_progress": return `${studentPath}#evidence`;
-    case "resolve_blocker": return `${studentPath}${primaryIssue?.sourceType === "paper" ? "#papers" : "#milestones"}`;
+    case "view_guidance": return targetId ? `${studentPath}#guidance-${targetId}` : `${studentPath}#guidance`;
+    case "view_progress": return targetId ? `${studentPath}#progress-${targetId}` : `${studentPath}#evidence`;
+    case "resolve_blocker": {
+      if (!targetId) return `${studentPath}#outlook`;
+      if (primaryIssue?.sourceType === "milestone") return `${studentPath}#milestone-${targetId}`;
+      if (primaryIssue?.sourceType === "guidance") return `${studentPath}#guidance-${targetId}`;
+      return `${studentPath}#progress-${targetId}`;
+    }
     case "complete_profile":
     case "view_student":
     default: return `${studentPath}#outlook`;

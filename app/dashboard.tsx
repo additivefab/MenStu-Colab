@@ -463,6 +463,7 @@ export default function Dashboard() {
   const [meetingRequests, setMeetingRequests] = useState<MeetingRequest[]>([]);
   const [meetingLoadError, setMeetingLoadError] = useState("");
   const [toast, setToast] = useState("");
+  const [overviewRefreshRequest, setOverviewRefreshRequest] = useState(0);
   const [authGate, setAuthGate] = useState<AuthGate | null>(null);
   const globalSearchRef = useRef<HTMLInputElement>(null);
 
@@ -683,7 +684,10 @@ export default function Dashboard() {
   }).format(new Date());
 
   if (!loading && authGate) {
-    return <FeishuAccessGate key={authGate.kind} gate={authGate} onAuthenticated={loadDashboard} />;
+    return <FeishuAccessGate key={authGate.kind} gate={authGate} onAuthenticated={() => {
+      if (mentorViewFromUrl() === "overview") void loadOverviewShell();
+      else void loadDashboard();
+    }} />;
   }
 
   const currentViewer = data?.viewer ?? viewer;
@@ -693,7 +697,10 @@ export default function Dashboard() {
   }
 
   if (!currentViewer && error) {
-    return <main className="student-portal-shell"><div className="error-state"><strong>系统暂时无法加载</strong><span>{error}</span><button onClick={() => void loadDashboard()}>重试</button></div></main>;
+    return <main className="student-portal-shell"><div className="error-state"><strong>系统暂时无法加载</strong><span>{error}</span><button onClick={() => {
+      if (mentorViewFromUrl() === "overview") void loadOverviewShell();
+      else void loadDashboard();
+    }}>重试</button></div></main>;
   }
 
   if (!currentViewer) return <main className="student-portal-shell"><LoadingState /></main>;
@@ -770,7 +777,10 @@ export default function Dashboard() {
             <button type="button" onClick={() => navigateMentor("research")}>研究台账</button>
             <button type="button" onClick={() => navigateMentor("meetings")}>组会议程</button>
           </div>
-          <button className="command-sync" type="button" onClick={() => void loadDashboard()} aria-label="同步最新数据" title="同步最新数据">↻</button>
+          <button className="command-sync" type="button" onClick={() => {
+            if (activeView === "overview") setOverviewRefreshRequest((current) => current + 1);
+            else void loadDashboard();
+          }} aria-label="同步最新数据" title="同步最新数据">↻</button>
         </div>
 
         <header className="topbar">
@@ -797,7 +807,7 @@ export default function Dashboard() {
         {error ? <div className="error-state"><strong>数据暂时未加载</strong><span>{error}</span><button onClick={() => void loadDashboard()}>重试</button></div> : null}
 
         {!loading && !error && activeView === "overview" ? (
-          <MentorGroupOverview query={query} onQueryChange={setQuery} />
+          <MentorGroupOverview query={query} onQueryChange={setQuery} refreshRequest={overviewRefreshRequest} />
         ) : null}
 
         {!loading && !error && data && activeView === "inbox" ? (
@@ -3088,8 +3098,8 @@ function FeishuAccessGate({ gate, onAuthenticated }: { gate: AuthGate; onAuthent
     if (pending) return;
     let cancelled = false;
     fetch("/api/auth/feishu/config", { cache: "no-store" })
-      .then((response) => response.json())
-      .then((value: { configured: boolean; appId: string; sdkUrl: string }) => {
+      .then(async (response) => (await response.json()) as { configured: boolean; appId: string; sdkUrl: string })
+      .then((value) => {
         if (cancelled) return;
         setConfig(value);
         if (!value.configured) return void authorize(value);

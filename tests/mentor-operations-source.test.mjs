@@ -32,10 +32,12 @@ test("mentor decision inbox, leased reviews, guidance verification, agendas, and
   assert.match(dashboardRoute, /ai_summary_origin/);
   assert.match(studentOverview, /student-formal-binary/);
   assert.match(studentOverview, /reviewProgress\(entry, "supplement", \{ nextAction: draft\.nextAction/);
+  assert.match(studentOverview, /entry\.project \? <div><span>课题下一行动/);
+  assert.match(studentOverview, /关联课题节点/);
   assert.match(dashboard, /记录指导/);
   assert.match(dashboard, /mentorViewFromUrl/);
   assert.match(dashboard, /window\.history\[replace \|\| sameDestination \? "replaceState" : "pushState"\]/);
-  assert.match(dashboard, /data\?\.viewer\.role === "superadmin"\s*\? navItems/);
+  assert.match(dashboard, /currentViewer\.role === "superadmin"\s*\? navItems/);
   assert.match(dashboard, /categoryPriority: Record<MentorTaskCategory, number>/);
   assert.match(dashboard, /meetingRequests=\{meetingRequests\}/);
   assert.match(dashboard, /function StaffMeetingRequests\(\{ requests, loadError, onChanged \}/);

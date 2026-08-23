@@ -1,22 +1,60 @@
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { overviewStateMeta, type MentorOverviewStudent } from "../../lib/dashboard-overview/types";
 import { overviewActionHref, overviewActionLabel, overviewDate, overviewOwnerLabels } from "./overview-actions";
+import { earliestOverviewDueDate } from "./overview-view-model";
 
 export function StudentOverviewDrawer({ student, onClose }: { student: MentorOverviewStudent; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  const layerRef = useRef<HTMLDivElement>(null);
   const meta = overviewStateMeta[student.primaryState];
 
   useEffect(() => {
+    const drawer = drawerRef.current;
+    const layer = layerRef.current;
     closeRef.current?.focus();
+    const background = Array.from(document.body.children).filter((element) => element !== layer);
+    const backgroundState = background.map((element) => ({
+      element,
+      inert: element.hasAttribute("inert"),
+      ariaHidden: element.getAttribute("aria-hidden"),
+    }));
+    background.forEach((element) => {
+      element.setAttribute("inert", "");
+      element.setAttribute("aria-hidden", "true");
+    });
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
+      if (event.key !== "Tab" || !drawer) return;
+      const focusable = Array.from(drawer.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => element.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !drawer.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !drawer.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      backgroundState.forEach(({ element, inert, ariaHidden }) => {
+        if (!inert) element.removeAttribute("inert");
+        if (ariaHidden === null) element.removeAttribute("aria-hidden");
+        else element.setAttribute("aria-hidden", ariaHidden);
+      });
+    };
   }, [onClose]);
 
-  return <div className="group-overview-drawer-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <aside className="group-overview-drawer" role="dialog" aria-modal="true" aria-labelledby="group-overview-drawer-title">
+  return createPortal(<div ref={layerRef} className="group-overview-drawer-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <aside ref={drawerRef} className="group-overview-drawer" role="dialog" aria-modal="true" aria-labelledby="group-overview-drawer-title">
       <header>
         <div><span>STUDENT BRIEF</span><h2 id="group-overview-drawer-title">{student.displayName}</h2><p>{student.grade}级{student.degreeLevel} · {student.stage} · {student.currentFocus || "研究方向待补齐"}</p></div>
         <button type="button" ref={closeRef} onClick={onClose} aria-label="关闭学生进度摘要">×</button>
@@ -24,7 +62,7 @@ export function StudentOverviewDrawer({ student, onClose }: { student: MentorOve
       <section className={`group-overview-drawer-primary ${student.primaryState}`}>
         <div><i aria-hidden="true">{meta.icon}</i><span><small>当前主状态</small><strong>{meta.label}</strong></span></div>
         <p>{student.primaryReasonLabel}</p>
-        <dl><div><dt>下一责任人</dt><dd>{overviewOwnerLabels[student.nextOwner]}</dd></div><div><dt>最早期限</dt><dd>{student.issues.find((issue) => issue.dueDate)?.dueDate ? overviewDate(student.issues.find((issue) => issue.dueDate)?.dueDate ?? null, true) : "暂无硬期限"}</dd></div></dl>
+        <dl><div><dt>下一责任人</dt><dd>{overviewOwnerLabels[student.nextOwner]}</dd></div><div><dt>最早期限</dt><dd>{earliestOverviewDueDate(student) ? overviewDate(earliestOverviewDueDate(student), true) : "暂无硬期限"}</dd></div></dl>
       </section>
 
       <section className="group-overview-drawer-section">
@@ -52,5 +90,5 @@ export function StudentOverviewDrawer({ student, onClose }: { student: MentorOve
         <a href={overviewActionHref(student)}>{overviewActionLabel(student)} →</a>
       </footer>
     </aside>
-  </div>;
+  </div>, document.body);
 }

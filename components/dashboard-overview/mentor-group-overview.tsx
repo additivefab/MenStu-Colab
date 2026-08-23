@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MentorOverviewResponse, OverviewState } from "../../lib/dashboard-overview/types";
 import { OverviewFilters, type OverviewDegreeFilter } from "./overview-filters";
 import { OverviewMetrics } from "./overview-metrics";
@@ -14,7 +14,7 @@ function readOverviewUrl() {
   return parseOverviewUrl(window.location.href);
 }
 
-export function MentorGroupOverview({ query, onQueryChange }: { query: string; onQueryChange: (value: string) => void }) {
+export function MentorGroupOverview({ query, onQueryChange, refreshRequest }: { query: string; onQueryChange: (value: string) => void; refreshRequest: number }) {
   const initial = readOverviewUrl();
   const [data, setData] = useState<MentorOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -23,6 +23,7 @@ export function MentorGroupOverview({ query, onQueryChange }: { query: string; o
   const [stateFilter, setStateFilter] = useState<OverviewState | "all">(initial.state);
   const [degreeFilter, setDegreeFilter] = useState<OverviewDegreeFilter>(initial.degree);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(initial.studentId);
+  const lastRefreshRequest = useRef(refreshRequest);
 
   const updateUrl = useCallback((updates: Record<string, string | null>, replace = false) => {
     const url = new URL(window.location.href);
@@ -50,9 +51,11 @@ export function MentorGroupOverview({ query, onQueryChange }: { query: string; o
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
+    const refresh = refreshRequest !== lastRefreshRequest.current;
+    lastRefreshRequest.current = refreshRequest;
+    const timer = window.setTimeout(() => void load(refresh), 0);
     return () => window.clearTimeout(timer);
-  }, [load]);
+  }, [load, refreshRequest]);
 
   useEffect(() => {
     const onPopState = () => {
