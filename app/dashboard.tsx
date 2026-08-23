@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { paperDeadlineState, paperStageMeta, paperStages, paperTypes, type PaperStage } from "../lib/paper-progress";
 
 declare global {
@@ -672,142 +672,218 @@ const studentReviewLabels: Record<StudentProgress["review_status"], string> = {
   rejected: "暂未通过",
 };
 
+type StudentView = "today" | "research" | "progress" | "library" | "mentor";
+type StudentResearchTrack = "paper" | "project";
+type StudentNavigationIntent = {
+  view: StudentView;
+  researchTrack?: StudentResearchTrack;
+  entryId?: number;
+  action?: "supplement";
+  composerKind?: "论文" | "项目";
+  focus?: "meeting";
+};
+
+const studentViewMeta: Record<StudentView, { label: string; icon: string }> = {
+  today: { label: "今日", icon: "⌂" },
+  research: { label: "研究", icon: "◇" },
+  progress: { label: "进展", icon: "＋" },
+  library: { label: "资料", icon: "▤" },
+  mentor: { label: "导师", icon: "▣" },
+};
+
+function studentNavigationHref(intent: StudentNavigationIntent) {
+  const params = new URLSearchParams();
+  if (intent.view !== "today") params.set("studentView", intent.view);
+  if (intent.view === "research") params.set("track", intent.researchTrack || "paper");
+  if (intent.entryId) params.set("entry", String(intent.entryId));
+  if (intent.action) params.set("action", intent.action);
+  if (intent.composerKind) params.set("compose", intent.composerKind === "论文" ? "paper" : "project");
+  if (intent.focus) params.set("focus", intent.focus);
+  return params.size ? `/?${params.toString()}` : "/";
+}
+
+function studentNavigationFromLocation(href: string): StudentNavigationIntent {
+  const params = new URL(href).searchParams;
+  const rawView = params.get("studentView");
+  const view: StudentView = rawView === "research" || rawView === "progress" || rawView === "library" || rawView === "mentor" ? rawView : "today";
+  const rawEntry = Number(params.get("entry"));
+  const compose = params.get("compose");
+  return {
+    view,
+    researchTrack: params.get("track") === "project" ? "project" : "paper",
+    entryId: Number.isInteger(rawEntry) && rawEntry > 0 ? rawEntry : undefined,
+    action: params.get("action") === "supplement" ? "supplement" : undefined,
+    composerKind: compose === "paper" ? "论文" : compose === "project" ? "项目" : undefined,
+    focus: params.get("focus") === "meeting" ? "meeting" : undefined,
+  };
+}
+
+function studentScrollBehavior(): ScrollBehavior {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+}
+
 function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
   data: DashboardData;
   onRefresh: () => Promise<void>;
   onToast: (message: string) => void;
   onFeishu: () => void;
 }) {
+  const [view, setView] = useState<StudentView>("today");
+  const [researchTrack, setResearchTrack] = useState<StudentResearchTrack>("paper");
   const [composer, setComposer] = useState<"论文" | "项目" | null>(null);
-  const paperToolsRef = useRef<HTMLDetailsElement>(null);
-  const projectToolsRef = useRef<HTMLDetailsElement>(null);
-  const meetingToolsRef = useRef<HTMLDetailsElement>(null);
+  const [pendingNavigation, setPendingNavigation] = useState<StudentNavigationIntent | null>(null);
   const student = data.students.find((item) => item.id === data.viewer.studentId);
-  if (!student) return <main className="student-portal-shell"><div className="error-state"><strong>学生档案尚未绑定</strong><span>请联系管理员核对飞书账号与学生记录。</span></div></main>;
-  const papers = data.papers.filter((paper) => paper.student_id === student.id);
-  const paperEntries = student.progress.filter((entry) => entry.kind === "论文");
-  const projectEntries = student.progress.filter((entry) => entry.kind === "项目");
+  const papers = student ? data.papers.filter((paper) => paper.student_id === student.id) : [];
+  const paperEntries = student?.progress.filter((entry) => entry.kind === "论文") ?? [];
+  const projectEntries = student?.progress.filter((entry) => entry.kind === "项目") ?? [];
   const paperReturned = paperEntries.filter((entry) => entry.review_status === "changes_requested").length;
   const projectReturned = projectEntries.filter((entry) => entry.review_status === "changes_requested").length;
+  const waitingCount = student?.progress.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length ?? 0;
 
-  function studentScrollBehavior(): ScrollBehavior {
-    return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  const applyStudentNavigation = useCallback((intent: StudentNavigationIntent) => {
+    setView(intent.view);
+    setResearchTrack(intent.researchTrack || "paper");
+    if (intent.composerKind) setComposer(intent.composerKind);
+    setPendingNavigation(intent);
+  }, []);
+
+  function navigateStudent(intent: StudentNavigationIntent) {
+    const nextIntent = intent.view === "progress" && !intent.composerKind && composer ? { ...intent, composerKind: composer } : intent;
+    window.history.pushState({ studentView: nextIntent.view }, "", studentNavigationHref(nextIntent));
+    applyStudentNavigation(nextIntent);
   }
 
-  function openComposer(kind: "论文" | "项目") {
-    setComposer(kind);
-    window.requestAnimationFrame(() => {
-      const target = document.getElementById("student-quick-progress");
-      target?.scrollIntoView({ behavior: studentScrollBehavior(), block: "start" });
-      target?.focus({ preventScroll: true });
-    });
-  }
+  useEffect(() => {
+    function restoreStudentNavigation() {
+      applyStudentNavigation(studentNavigationFromLocation(window.location.href));
+    }
+    restoreStudentNavigation();
+    window.addEventListener("popstate", restoreStudentNavigation);
+    return () => window.removeEventListener("popstate", restoreStudentNavigation);
+  }, [applyStudentNavigation]);
 
-  function openDeepTool(ref: { current: HTMLDetailsElement | null }, targetId: string, expandNested = false) {
-    if (ref.current) ref.current.open = true;
-    window.requestAnimationFrame(() => {
+  useEffect(() => {
+    if (!pendingNavigation || pendingNavigation.view !== view) return;
+    const frame = window.requestAnimationFrame(() => {
+      const targetId = pendingNavigation.focus === "meeting"
+        ? "student-meeting-form"
+        : pendingNavigation.entryId
+          ? pendingNavigation.view === "research" ? `student-action-entry-${pendingNavigation.entryId}` : `student-progress-${pendingNavigation.entryId}`
+          : pendingNavigation.composerKind ? "student-quick-progress" : "student-view-main";
       const target = document.getElementById(targetId);
-      target?.scrollIntoView({ behavior: studentScrollBehavior(), block: "center" });
-      const supplement = expandNested ? target?.querySelector("details") : null;
+      if (target instanceof HTMLDetailsElement) target.open = true;
+      const supplement = pendingNavigation.action === "supplement" ? target?.querySelector("details") : null;
       if (supplement instanceof HTMLDetailsElement) supplement.open = true;
       const focusTarget = supplement?.querySelector("summary") ?? target;
+      target?.scrollIntoView({ behavior: studentScrollBehavior(), block: targetId === "student-view-main" ? "start" : "center" });
       if (focusTarget instanceof HTMLElement) focusTarget.focus({ preventScroll: true });
+      setPendingNavigation(null);
     });
+    return () => window.cancelAnimationFrame(frame);
+  }, [pendingNavigation, view]);
+
+  if (!student) return <main className="student-portal-shell"><div className="error-state"><strong>学生档案尚未绑定</strong><span>请联系管理员核对飞书账号与学生记录。</span></div></main>;
+
+  function openComposer(kind: "论文" | "项目") {
+    navigateStudent({ view: "progress", composerKind: kind });
   }
 
   function openSupplement(entry: StudentProgress) {
-    const ref = entry.kind === "项目" ? projectToolsRef : paperToolsRef;
-    openDeepTool(ref, `student-action-entry-${entry.id}`, true);
+    navigateStudent({ view: "research", researchTrack: entry.kind === "项目" ? "project" : "paper", entryId: entry.id, action: "supplement" });
   }
 
   function openResearchSource(entry: StudentProgress) {
     if (entry.kind === "论文" || entry.kind === "项目") {
-      openDeepTool(entry.kind === "项目" ? projectToolsRef : paperToolsRef, `student-action-entry-${entry.id}`);
+      navigateStudent({ view: "research", researchTrack: entry.kind === "项目" ? "project" : "paper", entryId: entry.id });
       return;
     }
-    const target = document.getElementById(`student-progress-${entry.id}`);
-    if (target instanceof HTMLDetailsElement) target.open = true;
-    target?.scrollIntoView({ behavior: studentScrollBehavior(), block: "center" });
-    const focusTarget = target?.querySelector("summary") ?? target;
-    if (focusTarget instanceof HTMLElement) focusTarget.focus({ preventScroll: true });
+    navigateStudent({ view: entry.kind === "组会" ? "mentor" : "progress", entryId: entry.id });
   }
 
   function openMeetingDesk() {
-    openDeepTool(meetingToolsRef, "student-meeting-form");
+    navigateStudent({ view: "mentor", focus: "meeting" });
   }
+  const currentView = studentViewMeta[view];
   return <div className="student-workbench-shell">
+    <a className="student-skip-link" href="#student-view-main">跳到当前界面</a>
     <aside className="student-workbench-sidebar">
       <div className="brand"><div className="brand-mark">探</div><div><strong>探研</strong><span>学生个人工作台</span></div></div>
       <nav aria-label="我的科研导航">
-        <span>主线</span>
-        <a className="active" href="#student-workbench-top"><i aria-hidden="true">⌂</i>今日工作台</a>
-        <span>我的科研</span>
-        <a href="#student-research-tracks"><i aria-hidden="true">◇</i>论文与课题</a>
-        <a href="#student-research-library"><i aria-hidden="true">▤</i>科研资料</a>
-        <a href="#student-progress-overview"><i aria-hidden="true">◫</i>进展记录</a>
-        <button type="button" aria-controls="student-quick-progress" aria-expanded={Boolean(composer)} onClick={() => openComposer("论文")}><i aria-hidden="true">＋</i>提交进展</button>
-        <span>协作</span>
-        <button type="button" onClick={openMeetingDesk}><i aria-hidden="true">▣</i>组会与导师</button>
+        {(Object.entries(studentViewMeta) as Array<[StudentView, (typeof studentViewMeta)[StudentView]]>).map(([itemView, item]) => <a key={itemView} className={view === itemView ? "active" : ""} aria-current={view === itemView ? "page" : undefined} href={studentNavigationHref({ view: itemView })} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigateStudent({ view: itemView }); }}><i aria-hidden="true">{item.icon}</i><span>{item.label}</span></a>)}
       </nav>
+      <button className="student-workbench-create" type="button" aria-controls="student-quick-progress" aria-expanded={Boolean(composer)} onClick={() => openComposer("论文")}><i aria-hidden="true">＋</i>提交新进展</button>
       <div className="student-workbench-boundary"><strong>本人数据空间</strong><small>论文、课题、组会和导师回复按账号隔离</small></div>
       <button className="student-workbench-account" type="button" onClick={onFeishu}><span className="avatar">{data.viewer.name.slice(0, 1)}</span><span><strong>{data.viewer.name}</strong><small>飞书账号</small></span><i>›</i></button>
     </aside>
 
-    <main className="student-portal-shell" id="student-workbench-top">
+    <main className="student-portal-shell" id="student-view-main" tabIndex={-1} aria-labelledby={`student-view-${view}-title`}>
       <header className="student-portal-header">
-        <div className="student-workbench-context"><span>当前工作区</span><strong>{student.currentFocus || "我的科研进展"}</strong></div>
+        <div className="student-workbench-context"><span>当前界面</span><strong>{currentView.label} · {student.currentFocus || "我的科研进展"}</strong></div>
         <div className="student-account"><span className="student-workbench-status"><i />数据已同步</span><button type="button" onClick={onFeishu}>飞书账号</button></div>
       </header>
 
-      <div className="student-today-layout">
+      {view === "today" ? <div className="student-today-layout">
         <section className="student-portal-hero">
-          <div><span className="student-portal-kicker">TODAY · 我的科研</span><h1>{student.name}，今天进展到哪了？</h1><p>先完成最重要的一件事，再把论文、课题或组会成果记下来。</p></div>
+          <div><span className="student-portal-kicker">TODAY · 我的科研</span><h1 id="student-view-today-title">{student.name}，今天进展到哪了？</h1><p>先完成最重要的一件事，再把论文、课题或组会成果记下来。</p></div>
           <div className="student-primary-actions">
             <button className="primary" type="button" aria-controls="student-quick-progress" aria-expanded={composer === "论文"} onClick={() => openComposer("论文")}>记论文进展</button>
             <button type="button" aria-controls="student-quick-progress" aria-expanded={composer === "项目"} onClick={() => openComposer("项目")}>记课题进展</button>
             <button type="button" onClick={openMeetingDesk}>约导师聊一聊</button>
           </div>
         </section>
-        <StudentTodayDesk student={student} papers={papers} onPaper={() => openComposer("论文")} onProject={() => openComposer("项目")} onMeeting={openMeetingDesk} onSupplement={openSupplement} />
-      </div>
+        <StudentTodayDesk student={student} papers={papers} onPaper={() => openComposer("论文")} onProject={() => openComposer("项目")} onMeeting={openMeetingDesk} onSupplement={openSupplement} onOpenProgress={(entry) => navigateStudent({ view: entry.kind === "组会" ? "mentor" : "progress", entryId: entry.id })} />
+      </div> : null}
 
-      {composer ? <StudentQuickProgressComposer key={composer} kind={composer} student={student} papers={papers} onCancel={() => setComposer(null)} onSaved={async () => { setComposer(null); onToast(`${composer === "论文" ? "论文" : "课题"}进展已提交，下方记录已更新`); await onRefresh(); }} /> : null}
+      {view === "research" ? <>
+        <StudentViewIntro id="student-view-research-title" eyebrow="RESEARCH TRACKS" title="论文与课题，分开推进" description="选择一条研究线，只看这一类的阶段、台账、导师反馈和待补材料。" metric={`${paperReturned + projectReturned}`} metricLabel="项待补充">
+          <nav className="student-research-switch" aria-label="选择研究线">
+            <a className={researchTrack === "paper" ? "active" : ""} aria-current={researchTrack === "paper" ? "page" : undefined} href={studentNavigationHref({ view: "research", researchTrack: "paper" })} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigateStudent({ view: "research", researchTrack: "paper" }); }}>论文研究<span>{papers.length} 篇</span></a>
+            <a className={researchTrack === "project" ? "active" : ""} aria-current={researchTrack === "project" ? "page" : undefined} href={studentNavigationHref({ view: "research", researchTrack: "project" })} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigateStudent({ view: "research", researchTrack: "project" }); }}>课题研究<span>{projectEntries.length} 条</span></a>
+          </nav>
+        </StudentViewIntro>
+        <StudentResearchTracks scope={researchTrack} student={student} papers={papers} onOpenComposer={openComposer} />
+        {researchTrack === "paper" ? <StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} /> : <StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} />}
+      </> : null}
 
-      <StudentResearchTracks student={student} papers={papers} onOpenComposer={openComposer} />
+      {view === "progress" ? <StudentViewIntro id="student-view-progress-title" eyebrow="PROGRESS" title="提交与查看全部进展" description="论文和课题在这里提交；全部记录、审核状态和导师回复按时间统一查看。" metric={`${waitingCount}`} metricLabel="条等待导师">
+        <div className="student-view-intro-actions"><button className="primary" type="button" onClick={() => openComposer("论文")}>记论文进展</button><button type="button" onClick={() => openComposer("项目")}>记课题进展</button></div>
+      </StudentViewIntro> : null}
+      {composer ? <div className="student-persistent-composer" hidden={view !== "progress"}><StudentQuickProgressComposer key={composer} kind={composer} student={student} papers={papers} onCancel={() => { setComposer(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); }} onSaved={async () => { const savedKind = composer; setComposer(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); onToast(`${savedKind === "论文" ? "论文" : "课题"}进展已提交，记录已更新`); await onRefresh(); }} /></div> : null}
+      {view === "progress" ? <StudentProgressOverview student={student} /> : null}
 
-      <StudentResearchLibrary student={student} onOpenSource={openResearchSource} />
+      {view === "library" ? <><StudentViewIntro id="student-view-library-title" eyebrow="ARTIFACT LIBRARY" title="科研资料与证据来源" description="文件、DOI、Git 链接和组会来源集中检索，不再回到每条进展里翻找。" /><StudentResearchLibrary student={student} onOpenSource={openResearchSource} /></> : null}
 
-      <StudentProgressOverview student={student} />
+      {view === "mentor" ? <><StudentViewIntro id="student-view-mentor-title" eyebrow="MENTOR COLLABORATION" title="组会与导师协作" description="发起预约、查看导师处理结果，并回看 AI 组会总结形成的进展。" /><div className="student-mentor-grid"><StudentMeetingRequests onToast={onToast} /><StudentProgressOverview student={student} fixedFilter="组会" /></div></> : null}
 
-      <section className="student-deep-workspace" id="student-deep-workspace" aria-labelledby="student-deep-workspace-title">
-        <header><div><span>DEEP WORKSPACE</span><h2 id="student-deep-workspace-title">完整记录与补充材料</h2><p>日常先看上方统一时间线；需要查论文台账、补交证据或预约导师时再展开。</p></div><strong>{paperReturned + projectReturned}<small>项待补充</small></strong></header>
-        <div className="student-deep-workspace-grid">
-          <details ref={paperToolsRef} className="student-deep-tool">
-            <summary><span className="paper">文</span><div><strong>论文台账与补证</strong><small>{papers.length} 篇论文 · {paperEntries.length} 条记录</small></div>{paperReturned ? <em>{paperReturned} 项待补</em> : <em className="clear">当前清晰</em>}<i aria-hidden="true" /></summary>
-            <div className="student-deep-tool-body"><StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} /></div>
-          </details>
-          <details ref={projectToolsRef} className="student-deep-tool">
-            <summary><span className="project">题</span><div><strong>课题记录与补证</strong><small>{projectEntries.length} 条课题进展</small></div>{projectReturned ? <em>{projectReturned} 项待补</em> : <em className="clear">当前清晰</em>}<i aria-hidden="true" /></summary>
-            <div className="student-deep-tool-body"><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} /></div>
-          </details>
-          <details ref={meetingToolsRef} className="student-deep-tool">
-            <summary><span className="meeting">会</span><div><strong>导师预约与记录</strong><small>发起预约、查看回复或取消已有预约</small></div><em className="clear">协作入口</em><i aria-hidden="true" /></summary>
-            <div className="student-deep-tool-body"><StudentMeetingRequests onToast={onToast} /></div>
-          </details>
-        </div>
-      </section>
       <footer className="student-portal-boundary">这里仅显示你自己的论文、课题、组会记录和导师回复。</footer>
     </main>
   </div>;
 }
 
-function StudentTodayDesk({ student, papers, onPaper, onProject, onMeeting, onSupplement }: {
+function StudentViewIntro({ id, eyebrow, title, description, metric, metricLabel, children }: {
+  id: string;
+  eyebrow: string;
+  title: string;
+  description: string;
+  metric?: string;
+  metricLabel?: string;
+  children?: ReactNode;
+}) {
+  return <section className="student-view-intro">
+    <div><span>{eyebrow}</span><h1 id={id}>{title}</h1><p>{description}</p></div>
+    {children}
+    {metric ? <strong>{metric}<small>{metricLabel}</small></strong> : null}
+  </section>;
+}
+
+function StudentTodayDesk({ student, papers, onPaper, onProject, onMeeting, onSupplement, onOpenProgress }: {
   student: Student;
   papers: StudentPaper[];
   onPaper: () => void;
   onProject: () => void;
   onMeeting: () => void;
   onSupplement: (entry: StudentProgress) => void;
+  onOpenProgress: (entry: StudentProgress) => void;
 }) {
   const entries = [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
   const returnedEntry = entries.find((entry) => (entry.kind === "论文" || entry.kind === "项目") && entry.review_status === "changes_requested");
@@ -900,7 +976,7 @@ function StudentTodayDesk({ student, papers, onPaper, onProject, onMeeting, onSu
       <span><b>{student.risk.days}</b><small>天距实质进展</small></span>
       <span><b>{papers.length}</b><small>篇论文在册</small></span>
     </div>
-    {latestReply ? <a className="student-latest-reply" href={`#student-progress-${latestReply.id}`} onClick={() => { const target = document.getElementById(`student-progress-${latestReply.id}`); if (target instanceof HTMLDetailsElement) target.open = true; }}><span>导师最近回复</span><strong>{latestReply.reviewer_note}</strong><small>{shortDate(latestReply.reviewed_at || latestReply.submitted_at)} · 查看记录 ↓</small></a> : <div className="student-latest-reply empty"><span>导师反馈</span><strong>暂时没有新的回复</strong><small>{pendingCount ? "进展正在等待导师确认" : "可以继续推进下一项行动"}</small></div>}
+    {latestReply ? <a className="student-latest-reply" href={studentNavigationHref({ view: latestReply.kind === "组会" ? "mentor" : "progress", entryId: latestReply.id })} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onOpenProgress(latestReply); }}><span>导师最近回复</span><strong>{latestReply.reviewer_note}</strong><small>{shortDate(latestReply.reviewed_at || latestReply.submitted_at)} · 查看记录 ↓</small></a> : <div className="student-latest-reply empty"><span>导师反馈</span><strong>暂时没有新的回复</strong><small>{pendingCount ? "进展正在等待导师确认" : "可以继续推进下一项行动"}</small></div>}
     <footer>{returnedEntry ? <button className="primary" type="button" onClick={() => onSupplement(returnedEntry)}>补充这项进展</button> : <button className="primary" type="button" onClick={focus.kind === "论文" ? onPaper : onProject}>记录{focus.kind}进展</button>}<button type="button" onClick={onMeeting}>约导师</button></footer>
   </aside>;
 }
@@ -978,7 +1054,8 @@ function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved
   </section>;
 }
 
-function StudentResearchTracks({ student, papers, onOpenComposer }: {
+function StudentResearchTracks({ scope, student, papers, onOpenComposer }: {
+  scope: StudentResearchTrack;
   student: Student;
   papers: StudentPaper[];
   onOpenComposer: (kind: "论文" | "项目") => void;
@@ -990,10 +1067,10 @@ function StudentResearchTracks({ student, papers, onOpenComposer }: {
   const projectEntries = entries.filter((entry) => entry.kind === "项目");
   const latestPaperEntry = paperEntries.find((entry) => !leadPaper || entry.paper?.id === leadPaper.id) ?? paperEntries[0];
   const latestProjectEntry = projectEntries[0];
-  const latestEntry = entries[0];
-  const pendingCount = entries.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
-  const repliedCount = entries.filter((entry) => Boolean(entry.reviewer_note?.trim())).length;
-  const meetingCount = entries.filter((entry) => entry.kind === "组会").length;
+  const scopedEntries = scope === "paper" ? paperEntries : projectEntries;
+  const latestEntry = scopedEntries[0];
+  const pendingCount = scopedEntries.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
+  const repliedCount = scopedEntries.filter((entry) => Boolean(entry.reviewer_note?.trim())).length;
   const stageIndex = leadPaper ? paperStages.indexOf(leadPaper.current_stage) : -1;
   const stagePercent = stageIndex < 0 ? 0 : Math.round((stageIndex / (paperStages.length - 1)) * 100);
   const nextAction = latestPaperEntry?.paper?.next_action || student.nextMilestone || student.currentFocus || "把下一件要完成的事写清楚";
@@ -1005,12 +1082,12 @@ function StudentResearchTracks({ student, papers, onOpenComposer }: {
 
   return <section className="student-research-tracks" id="student-research-tracks" aria-labelledby="student-research-tracks-title">
     <header>
-      <div><span>先看现在，再看下一步</span><h2 id="student-research-tracks-title">论文和课题进展</h2><p>两条线分开记录，完成到哪、接下来做什么，一眼就能找到。</p></div>
+      <div><span>先看现在，再看下一步</span><h2 id="student-research-tracks-title">{scope === "paper" ? "论文推进概览" : "课题推进概览"}</h2><p>{scope === "paper" ? "阶段、下一行动和投稿计划集中在这一条研究线。" : "阶段成果、培养节点和记录节奏集中在这一条研究线。"}</p></div>
       <strong>{student.stage}<small>{student.gradeYear} 级 · {student.degree}</small></strong>
     </header>
 
-    <div className="student-research-track-grid">
-      <article className="student-research-track paper-track">
+    <div className="student-research-track-grid single">
+      {scope === "paper" ? <article className="student-research-track paper-track">
         <div className="student-research-track-head"><span className="student-research-track-icon">文</span><div><small>论文这条线</small><strong>{leadPaper?.title || "还没有建立论文"}</strong></div><em>{paperEntries.length} 次更新</em></div>
         {leadPaper ? <>
           <div className="student-paper-stage-summary"><span>当前阶段</span><strong>{paperStageMeta[leadPaper.current_stage].label}</strong><em>第 {stageIndex + 1} / {paperStages.length} 阶段</em></div>
@@ -1020,19 +1097,19 @@ function StudentResearchTracks({ student, papers, onOpenComposer }: {
           <div className={`student-track-next-action ${actionDeadline.overdue ? "overdue" : ""}`}><span>先做这一件事</span><strong>{nextAction}</strong><small>{nextActionDate ? `准备完成：${nextActionDate} · ${actionDeadline.label}` : "完成后记一条论文进展"}</small></div>
         </> : <div className="student-track-empty"><strong>先把论文建起来</strong><span>题目可以先写暂定名，后面随时继续更新。</span></div>}
         <button type="button" onClick={() => onOpenComposer("论文")}>{leadPaper ? "记录论文进展" : "新建论文并记录"}</button>
-      </article>
+      </article> : null}
 
-      <article className="student-research-track project-track">
+      {scope === "project" ? <article className="student-research-track project-track">
         <div className="student-research-track-head"><span className="student-research-track-icon">题</span><div><small>课题这条线</small><strong>{latestProjectEntry ? "最近一次课题记录" : "还没有课题记录"}</strong></div><em>{projectEntries.length} 次更新</em></div>
         {latestProjectEntry ? <div className="student-project-latest"><time>{shortDate(latestProjectEntry.submitted_at)}</time><h3>{latestProjectEntry.title}</h3><p>{latestProjectEntry.summary || latestProjectEntry.evidence}</p>{latestProjectEntry.attachments.length ? <small>{latestProjectEntry.attachments.length} 个附件已保存</small> : <small>这次没有附件</small>}</div> : <div className="student-track-empty"><strong>先记下最近做完的事</strong><span>实验、测试、数据整理和阶段结果都可以写。</span></div>}
         {student.nextMilestone ? <div className="student-project-next"><span>下一培养节点</span><strong>{student.nextMilestone}</strong><small>{student.nextMilestoneDate ? `目标 ${student.nextMilestoneDate}` : "围绕节点形成一项可核验成果"}</small></div> : null}
         <div className={`student-project-rhythm ${rhythmOverdue ? "overdue" : ""}`}><span>记录节奏</span><strong>{rhythmLabel}</strong><small>建议每 {student.cadenceDays} 天至少更新一次</small></div>
         <div className="student-project-review"><span>最近状态</span><strong>{latestProjectEntry ? studentReviewLabels[latestProjectEntry.review_status] : "等待第一条记录"}</strong></div>
         <button type="button" onClick={() => onOpenComposer("项目")}>记录课题进展</button>
-      </article>
+      </article> : null}
     </div>
 
-    <footer className="student-research-track-facts"><span><b>{meetingCount}</b> 次 AI 组会</span><span><b>{pendingCount}</b> 条等导师回复</span><span><b>{repliedCount}</b> 条已有导师意见</span><span><b>{latestEntry ? shortDate(latestEntry.submitted_at) : "—"}</b> 最近记录</span></footer>
+    <footer className="student-research-track-facts"><span><b>{scopedEntries.length}</b> 次{scope === "paper" ? "论文" : "课题"}更新</span><span><b>{pendingCount}</b> 条等导师回复</span><span><b>{repliedCount}</b> 条已有导师意见</span><span><b>{latestEntry ? shortDate(latestEntry.submitted_at) : "—"}</b> 最近记录</span></footer>
   </section>;
 }
 
@@ -1150,23 +1227,24 @@ function studentProgressKindMeta(kind: string) {
   return { label: kind || "进展", icon: "记", className: "other" };
 }
 
-function StudentProgressOverview({ student }: { student: Student }) {
+function StudentProgressOverview({ student, fixedFilter }: { student: Student; fixedFilter?: Exclude<StudentProgressFilter, "all"> }) {
   const [filter, setFilter] = useState<StudentProgressFilter>("all");
   const entries = useMemo(() => [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime()), [student.progress]);
-  const visibleEntries = filter === "all" ? entries : entries.filter((entry) => entry.kind === filter);
+  const activeFilter = fixedFilter || filter;
+  const visibleEntries = activeFilter === "all" ? entries : entries.filter((entry) => entry.kind === activeFilter);
 
   return <section className="student-progress-overview" id="student-progress-overview" aria-labelledby="student-progress-overview-title">
     <header className="student-progress-overview-head">
-      <div><span>一页看清</span><h2 id="student-progress-overview-title">我的进展</h2><p>论文、课题和组会，按时间放在一起。</p></div>
-      <strong>{entries.length}<small>条记录</small></strong>
+      <div><span>{fixedFilter === "组会" ? "AI MEETING NOTES" : "一页看清"}</span><h2 id="student-progress-overview-title">{fixedFilter === "组会" ? "AI 组会记录" : "我的进展"}</h2><p>{fixedFilter === "组会" ? "会议总结形成的本人进展、证据来源和导师回复。" : "论文、课题和组会，按时间放在一起。"}</p></div>
+      <strong>{visibleEntries.length}<small>条记录</small></strong>
     </header>
 
-    <nav className="student-progress-filters" aria-label="筛选我的进展">
+    {!fixedFilter ? <nav className="student-progress-filters" aria-label="筛选我的进展">
       {studentProgressFilters.map((option) => { const count = option.value === "all" ? entries.length : entries.filter((entry) => entry.kind === option.value).length; return <button key={option.value} type="button" className={filter === option.value ? "active" : ""} aria-pressed={filter === option.value} onClick={() => setFilter(option.value)}><span>{option.label}</span><b>{count}</b></button>; })}
-    </nav>
+    </nav> : null}
 
     <div className="student-progress-overview-list">
-      {visibleEntries.map((entry, index) => { const kind = studentProgressKindMeta(entry.kind); const context = entry.reviewer_note ? `导师已回复：${entry.reviewer_note}` : entry.kind === "组会" ? entry.evidence_sources[0]?.label || "飞书会议纪要" : entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : "点开查看完整内容"; return <details id={`student-progress-${entry.id}`} key={`${filter}-${entry.id}`} className={`student-progress-entry kind-${kind.className}`} open={index === 0}>
+      {visibleEntries.map((entry, index) => { const kind = studentProgressKindMeta(entry.kind); const context = entry.reviewer_note ? `导师已回复：${entry.reviewer_note}` : entry.kind === "组会" ? entry.evidence_sources[0]?.label || "飞书会议纪要" : entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : "点开查看完整内容"; return <details id={`student-progress-${entry.id}`} key={`${activeFilter}-${entry.id}`} className={`student-progress-entry kind-${kind.className}`} open={index === 0}>
         <summary>
           <span className="student-progress-entry-icon" aria-hidden="true">{kind.icon}</span>
           <span className="student-progress-entry-date"><time>{shortDate(entry.submitted_at)}</time><small>{kind.label}</small></span>
@@ -1194,8 +1272,7 @@ function StudentProgressPanel({ student, papers, onRefresh, onToast }: {
   const [busy, setBusy] = useState<number | null>(null);
   const entries = [...student.progress]
     .filter((entry) => entry.kind === "论文")
-    .sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime())
-    .slice(0, 12);
+    .sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
 
   async function resubmit(event: FormEvent<HTMLFormElement>, entry: StudentProgress) {
     event.preventDefault();
@@ -1252,8 +1329,7 @@ function StudentProjectProgressPanel({ student, onRefresh, onToast }: {
   const [busy, setBusy] = useState<number | null>(null);
   const entries = [...student.progress]
     .filter((entry) => entry.kind === "项目")
-    .sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime())
-    .slice(0, 8);
+    .sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
 
   async function resubmit(event: FormEvent<HTMLFormElement>, entry: StudentProgress) {
     event.preventDefault();
@@ -1351,7 +1427,7 @@ function StudentMeetingRequests({ onToast }: { onToast: (message: string) => voi
     finally { setBusy(null); }
   }
 
-  return <section className="student-portal-panel student-meeting-panel" id="student-meeting-form">
+  return <section className="student-portal-panel student-meeting-panel" id="student-meeting-form" tabIndex={-1}>
     <div className="student-portal-panel-head"><div><span>找导师聊聊</span><h2>约个时间</h2><p>选时间，简单写一下想聊什么。</p></div></div>
     <form className="student-meeting-form" onSubmit={createRequest} aria-busy={busy === "create"}>
       <div><label>希望日期<input type="date" name="preferredDate" min={minimumDate} required /></label><label>希望时间<input type="time" name="preferredTime" required /></label></div>

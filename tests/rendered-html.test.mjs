@@ -35,8 +35,9 @@ test("server-renders the standalone student overview route", async () => {
 });
 
 test("keeps the database and Feishu boundaries explicit in source", async () => {
-  const [dashboard, studentOverview, database, feishuAuth, browserStart, browserCallback, rosterImport, proposals, proposalMigration, feishuEvents, feishuEventRoute, feishuMessageImport, feishuLongConnection, feishuBridge, meetingImports, feishuMigration, hosting, packageJson] = await Promise.all([
+  const [dashboard, styles, studentOverview, database, feishuAuth, browserStart, browserCallback, rosterImport, proposals, proposalMigration, feishuEvents, feishuEventRoute, feishuMessageImport, feishuLongConnection, feishuBridge, meetingImports, feishuMigration, hosting, packageJson] = await Promise.all([
     readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/students/[id]/student-overview.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/database.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/feishu-auth.ts", import.meta.url), "utf8"),
@@ -65,7 +66,26 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.doesNotMatch(dashboard, /studentSubmitKind/);
   assert.match(dashboard, /我的进展/);
   assert.match(dashboard, /StudentResearchTracks/);
-  assert.match(dashboard, /论文和课题进展/);
+  assert.match(dashboard, /论文与课题，分开推进/);
+  assert.match(dashboard, /type StudentView = "today" \| "research" \| "progress" \| "library" \| "mentor"/);
+  assert.match(dashboard, /studentNavigationHref/);
+  assert.match(dashboard, /studentNavigationFromLocation/);
+  assert.match(dashboard, /window\.addEventListener\("popstate"/);
+  assert.match(dashboard, /aria-current=\{view === itemView \? "page" : undefined\}/);
+  assert.match(dashboard, /view === "today"/);
+  assert.match(dashboard, /view === "research"/);
+  assert.match(dashboard, /view === "progress"/);
+  assert.match(dashboard, /view === "library"/);
+  assert.match(dashboard, /view === "mentor"/);
+  assert.match(dashboard, /论文研究/);
+  assert.match(dashboard, /课题研究/);
+  assert.match(dashboard, /提交与查看全部进展/);
+  assert.match(dashboard, /组会与导师协作/);
+  assert.match(dashboard, /if \(intent\.composerKind\) setComposer\(intent\.composerKind\)/);
+  assert.match(dashboard, /className="student-persistent-composer" hidden=\{view !== "progress"\}/);
+  assert.match(dashboard, /id="student-meeting-form" tabIndex=\{-1\}/);
+  assert.match(styles, /\.student-workbench-shell ~ \.toast/);
+  assert.match(styles, /pointer-events: none/);
   assert.match(dashboard, /先做这一件事/);
   assert.match(dashboard, /role="progressbar"/);
   assert.match(dashboard, /记录节奏/);
