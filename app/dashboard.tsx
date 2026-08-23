@@ -2,6 +2,7 @@
 
 import { FormEvent, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { paperDeadlineState, paperStageMeta, paperStages, paperTypes, type PaperStage } from "../lib/paper-progress";
+import { MentorGroupOverview } from "../components/dashboard-overview/mentor-group-overview";
 
 declare global {
   interface Window {
@@ -376,6 +377,7 @@ type AuthGate = {
 };
 
 const navItems = [
+  { id: "overview", label: "全组进度", icon: "◫" },
   { id: "inbox", label: "待我处理", icon: "✓" },
   { id: "students", label: "学生", icon: "◎" },
   { id: "research", label: "研究台账", icon: "◇" },
@@ -388,8 +390,14 @@ type MentorView = (typeof navItems)[number]["id"];
 
 function mentorViewFromUrl(): MentorView {
   if (typeof window === "undefined") return "inbox";
-  const requested = new URL(window.location.href).searchParams.get("mentorView");
+  const params = new URL(window.location.href).searchParams;
+  const requested = params.get("mentorView") ?? (params.get("view") === "overview" ? "overview" : null);
   return navItems.some((item) => item.id === requested) ? requested as MentorView : "inbox";
+}
+
+function dashboardQueryFromUrl() {
+  if (typeof window === "undefined") return "";
+  return new URL(window.location.href).searchParams.get("q") ?? "";
 }
 
 const progressKinds = ["文献", "实验", "算法", "数据", "论文", "复现", "项目", "组会"];
@@ -441,6 +449,7 @@ function daysSinceSubstantiveProgress(student: Student) {
 
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
+  const [viewer, setViewer] = useState<DashboardData["viewer"] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [view, setView] = useState<MentorView>("inbox");
@@ -459,6 +468,7 @@ export default function Dashboard() {
 
   const navigateMentor = useCallback((next: MentorView, replace = false) => {
     setView(next);
+    if (next === "overview") setError("");
     const url = new URL(window.location.href);
     const sameDestination = mentorViewFromUrl() === next;
     url.searchParams.set("mentorView", next);
@@ -470,6 +480,7 @@ export default function Dashboard() {
   }, []);
 
   const loadDashboard = useCallback(async () => {
+    setLoading(true);
     try {
       setError("");
       const [response, meetingResponse] = await Promise.all([
@@ -492,6 +503,7 @@ export default function Dashboard() {
       if (!response.ok) throw new Error(payload.error || "加载失败");
       setAuthGate(null);
       setData(payload);
+      setViewer(payload.viewer);
       if (payload.viewer.role !== "student") {
         if (!meetingResponse) {
           setMeetingLoadError("预约服务暂时不可用");
@@ -512,30 +524,80 @@ export default function Dashboard() {
     }
   }, []);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => void loadDashboard(), 0);
-    return () => window.clearTimeout(timer);
+  const loadOverviewShell = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/session", { cache: "no-store" });
+      const payload = await response.json().catch(() => ({})) as {
+        configured?: boolean;
+        user?: { id: number; displayName: string; avatarUrl: string; role: ViewerRole | "pending"; studentId: string | null } | null;
+      };
+      if (response.status === 503 || payload.configured === false) {
+        setAuthGate({ kind: "setup", message: "飞书应用尚未配置" });
+        return;
+      }
+      if (response.status === 401 || !payload.user) {
+        setAuthGate({ kind: "required", message: "请使用飞书登录" });
+        return;
+      }
+      if (payload.user.role === "pending") {
+        setAuthGate({ kind: "pending", message: "账号等待系统授权" });
+        return;
+      }
+      if (payload.user.role === "student") {
+        await loadDashboard();
+        return;
+      }
+      if (!response.ok) throw new Error("登录状态读取失败");
+      setAuthGate(null);
+      setViewer({
+        id: payload.user.id,
+        name: payload.user.displayName,
+        avatarUrl: payload.user.avatarUrl,
+        role: payload.user.role,
+        studentId: payload.user.studentId,
+      });
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "登录状态读取失败");
+    } finally {
+      setLoading(false);
+    }
   }, [loadDashboard]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setView(mentorViewFromUrl()), 0);
+    const timer = window.setTimeout(() => {
+      if (mentorViewFromUrl() === "overview") void loadOverviewShell();
+      else void loadDashboard();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadDashboard, loadOverviewShell]);
+
+  useEffect(() => {
+    if (view === "overview" || data || !viewer || viewer.role === "student" || loading) return;
+    const timer = window.setTimeout(() => void loadDashboard(), 0);
+    return () => window.clearTimeout(timer);
+  }, [data, loadDashboard, loading, view, viewer]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { setView(mentorViewFromUrl()); setQuery(dashboardQueryFromUrl()); }, 0);
     if (!new URL(window.location.href).searchParams.has("mentorView")) {
       const url = new URL(window.location.href);
       url.searchParams.set("mentorView", mentorViewFromUrl());
       window.history.replaceState({}, "", url);
     }
-    const onPopState = () => setView(mentorViewFromUrl());
+    const onPopState = () => { setView(mentorViewFromUrl()); setQuery(dashboardQueryFromUrl()); };
     window.addEventListener("popstate", onPopState);
     return () => { window.clearTimeout(timer); window.removeEventListener("popstate", onPopState); };
   }, []);
 
   useEffect(() => {
-    if (data?.viewer.role !== "superadmin" && view === "settings") {
+    if (viewer?.role !== "superadmin" && view === "settings") {
       const url = new URL(window.location.href);
       url.searchParams.set("mentorView", "inbox");
       window.history.replaceState({}, "", url);
     }
-  }, [data?.viewer.role, view]);
+  }, [view, viewer?.role]);
 
   useEffect(() => {
     if (!toast) return;
@@ -624,13 +686,17 @@ export default function Dashboard() {
     return <FeishuAccessGate key={authGate.kind} gate={authGate} onAuthenticated={loadDashboard} />;
   }
 
-  if (loading && !data) {
+  const currentViewer = data?.viewer ?? viewer;
+
+  if (loading && !currentViewer) {
     return <main className="student-portal-shell"><LoadingState /></main>;
   }
 
-  if (!data && error) {
+  if (!currentViewer && error) {
     return <main className="student-portal-shell"><div className="error-state"><strong>系统暂时无法加载</strong><span>{error}</span><button onClick={() => void loadDashboard()}>重试</button></div></main>;
   }
+
+  if (!currentViewer) return <main className="student-portal-shell"><LoadingState /></main>;
 
   if (data?.viewer.role === "student") {
     return <>
@@ -645,14 +711,14 @@ export default function Dashboard() {
     </>;
   }
 
-  const visibleNavItems = data?.viewer.role === "superadmin"
+  const visibleNavItems = currentViewer.role === "superadmin"
     ? navItems
     : navItems.filter((item) => item.id !== "settings");
-  const activeView: MentorView = data?.viewer.role !== "superadmin" && view === "settings" ? "inbox" : view;
+  const activeView: MentorView = currentViewer.role !== "superadmin" && view === "settings" ? "inbox" : view;
 
-  const viewerRoleLabel = data?.viewer.role === "superadmin"
+  const viewerRoleLabel = currentViewer.role === "superadmin"
     ? "超级管理员"
-    : data?.viewer.role === "admin" ? "管理员（导师）" : "学生";
+    : currentViewer.role === "admin" ? "管理员（导师）" : "学生";
   const meetingPendingCount = meetingRequests.filter((request) => request.status === "requested").length;
 
   return (
@@ -666,7 +732,7 @@ export default function Dashboard() {
           {visibleNavItems.map((item, index) => (
             <div className="nav-entry" key={item.id}>
               {index === 0 ? <span className="nav-section-label">主线</span> : null}
-              {index === 2 ? <span className="nav-section-label">科研协作</span> : null}
+              {index === 3 ? <span className="nav-section-label">科研协作</span> : null}
               {item.id === "settings" ? <span className="nav-section-label">系统</span> : null}
               <button className={`nav-item ${activeView === item.id ? "active" : ""}`} onClick={() => navigateMentor(item.id)}>
                 <span>{item.icon}</span>{item.label}
@@ -678,8 +744,8 @@ export default function Dashboard() {
         </nav>
         <div className="privacy-note"><span>AI 数据边界已启用</span><small>代码与保密项目仅限本地模型</small></div>
         <div className="sidebar-foot">
-          <div className="avatar">{data?.viewer.name.slice(0, 1) || "佘"}</div>
-          <div><strong>{data?.viewer.name || "佘阳"}</strong><span>{viewerRoleLabel}</span></div>
+          <div className="avatar">{currentViewer.name.slice(0, 1) || "佘"}</div>
+          <div><strong>{currentViewer.name || "佘阳"}</strong><span>{viewerRoleLabel}</span></div>
         </div>
       </aside>
 
@@ -693,7 +759,7 @@ export default function Dashboard() {
               value={query}
               onChange={(event) => {
                 setQuery(event.target.value);
-                if (event.target.value && activeView !== "students") navigateMentor("students");
+                if (event.target.value && activeView !== "students" && activeView !== "overview") navigateMentor("students");
               }}
               placeholder="搜索学生、阶段或研究方向"
             />
@@ -712,7 +778,8 @@ export default function Dashboard() {
             <p className="eyebrow">{today}</p>
             <h1>{navItems.find((item) => item.id === activeView)?.label}</h1>
             <p className="subtitle">
-              {activeView === "inbox" ? "按判断、协调和跟进顺序处理；完成后自动进入下一项。"
+              {activeView === "overview" ? "先定位需要介入的人，再处理导师待办；状态、原因和下一动作均来自服务端权威摘要。"
+                : activeView === "inbox" ? "按判断、协调和跟进顺序处理；完成后自动进入下一项。"
                 : activeView === "research" ? "统一查看论文、课题方案与成果状态，正式判断均保留版本记录。"
                   : activeView === "meetings" ? "从阻塞和逾期事项生成可保存议程，并追踪提醒是否送达。"
                     : activeView === "students" ? "按学生进入完整档案与指导闭环。"
@@ -728,6 +795,10 @@ export default function Dashboard() {
 
         {loading ? <LoadingState /> : null}
         {error ? <div className="error-state"><strong>数据暂时未加载</strong><span>{error}</span><button onClick={() => void loadDashboard()}>重试</button></div> : null}
+
+        {!loading && !error && activeView === "overview" ? (
+          <MentorGroupOverview query={query} onQueryChange={setQuery} />
+        ) : null}
 
         {!loading && !error && data && activeView === "inbox" ? (
           <MentorDecisionInbox
@@ -761,7 +832,7 @@ export default function Dashboard() {
       </section>
 
       {guidanceOpen && data ? <GuidanceQuickModal students={data.students} onClose={() => setGuidanceOpen(false)} onSaved={async () => { setGuidanceOpen(false); setToast("指导已保存，并进入学生下一步行动"); await loadDashboard(); }} /> : null}
-      {feishuOpen && data ? <FeishuModal viewer={data.viewer} onClose={() => setFeishuOpen(false)} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.reload(); }} /> : null}
+      {feishuOpen ? <FeishuModal viewer={currentViewer} onClose={() => setFeishuOpen(false)} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.reload(); }} /> : null}
       {toast ? <div className="toast" role="status">{toast}</div> : null}
     </main>
   );
