@@ -716,28 +716,55 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-quick-progress footer span { margin-right: auto; color: #7d8999; font-size: 11px; }
 .student-quick-progress footer button { min-height: 40px; padding: 0 15px; border: 1px solid #d7e0ea; border-radius: 9px; color: #53677f; background: white; font-weight: 750; }
 .student-quick-progress footer button.primary { border-color: #2f6fbb; color: white; background: #2f6fbb; }
-.student-ai-meetings { margin-bottom: 18px; overflow: hidden; border: 1px solid #e1e8f0; border-radius: 19px; background: #fff; box-shadow: 0 10px 28px rgba(56, 78, 108, .07); }
-.student-ai-meetings > header { padding: 22px 25px 17px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid #edf1f5; }
-.student-ai-meetings > header span { color: #3971ba; font-size: 11px; font-weight: 800; }
-.student-ai-meetings > header h2 { margin: 5px 0 3px; font-size: 19px; }
-.student-ai-meetings > header p { margin: 0; color: #8793a4; font-size: 13px; }
-.student-ai-meetings > header > strong { min-width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; color: #2d6cb7; background: #eaf3ff; font-size: 14px; }
-.student-ai-meetings details { border-bottom: 1px solid #edf1f5; }
-.student-ai-meetings details:last-child { border-bottom: 0; }
-.student-ai-meetings summary { min-height: 68px; padding: 13px 24px; display: grid; grid-template-columns: 74px minmax(0, 1fr) auto auto; align-items: center; gap: 13px; cursor: pointer; list-style: none; }
-.student-ai-meetings summary::-webkit-details-marker { display: none; }
-.student-ai-meetings summary time { color: #74869a; font-size: 12px; }
-.student-ai-meetings summary > span strong, .student-ai-meetings summary > span small { display: block; }
-.student-ai-meetings summary > span strong { font-size: 14px; line-height: 1.45; }
-.student-ai-meetings summary > span small { margin-top: 4px; color: #8b98a8; font-size: 11px; }
-.student-ai-meetings summary > em { font-style: normal; }
-.student-ai-meetings summary i { color: #326db3; font-size: 11px; font-style: normal; font-weight: 800; }
-.student-ai-meetings details[open] summary { background: #f8fbff; }
-.student-ai-meetings details[open] summary i { font-size: 0; }
-.student-ai-meetings details[open] summary i::after { content: "收起"; font-size: 11px; }
-.student-ai-meetings details > article { padding: 5px 24px 20px 111px; }
-.student-ai-meetings details > article > p { margin: 0; color: #42566f; font-size: 13px; line-height: 1.8; white-space: pre-wrap; }
-.student-ai-meetings blockquote { display: grid; gap: 4px; margin: 13px 0 0; padding: 11px 13px; border: 0; border-left: 3px solid #e1a636; border-radius: 0 9px 9px 0; color: #66553a; background: #fff9eb; font-size: 12px; }
+.student-progress-overview { margin-bottom: 18px; overflow: hidden; border: 1px solid #dce5ef; border-radius: 21px; background: #fff; box-shadow: 0 12px 32px rgba(43, 77, 119, .08); }
+.student-progress-overview-head { padding: 23px 25px 18px; display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.student-progress-overview-head span { color: #3971ba; font-size: 11px; font-weight: 800; letter-spacing: .12em; }
+.student-progress-overview-head h2 { margin: 5px 0 3px; font-size: 21px; }
+.student-progress-overview-head p { margin: 0; color: #8793a4; font-size: 13px; }
+.student-progress-overview-head > strong { min-width: 62px; color: #245f9f; font-size: 28px; text-align: right; }
+.student-progress-overview-head > strong small { display: block; margin-top: 2px; color: #94a0ae; font-size: 10px; font-weight: 650; }
+.student-progress-current { margin: 0 24px 18px; padding: 17px 18px; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(340px, .9fr); gap: 18px; border: 1px solid #dce8f6; border-radius: 15px; background: linear-gradient(120deg, #f2f7ff, #f9fbfe); }
+.student-progress-current-main { min-width: 0; display: flex; align-items: center; gap: 14px; }
+.student-progress-current-main > i { width: 46px; height: 46px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 14px; color: #fff; background: linear-gradient(135deg, #245f9f, #418bd2); box-shadow: 0 8px 18px rgba(42, 100, 161, .22); font-size: 15px; font-style: normal; font-weight: 850; }
+.student-progress-current-main span, .student-progress-current-main strong, .student-progress-current-main small { display: block; }
+.student-progress-current-main span { color: #51769d; font-size: 10px; font-weight: 800; }
+.student-progress-current-main strong { margin: 5px 0 3px; font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
+.student-progress-current-main small { color: #8290a2; font-size: 11px; line-height: 1.5; }
+.student-progress-current dl { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.student-progress-current dl > div { min-width: 0; padding-left: 13px; border-left: 1px solid #d7e2ef; }
+.student-progress-current dt { color: #8290a2; font-size: 10px; font-weight: 750; }
+.student-progress-current dd { margin: 4px 0 2px; color: #2e4968; font-size: 13px; font-weight: 850; }
+.student-progress-current dl small { display: block; color: #96a1af; font-size: 9px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.student-progress-filters { padding: 0 24px 15px; display: flex; gap: 8px; overflow-x: auto; border-bottom: 1px solid #e9eef4; }
+.student-progress-filters button { min-height: 38px; padding: 0 12px; display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; border: 1px solid #dce4ed; border-radius: 10px; color: #66768a; background: #fff; font-size: 12px; font-weight: 750; }
+.student-progress-filters button b { min-width: 20px; height: 20px; padding: 0 5px; display: grid; place-items: center; border-radius: 99px; color: #7e8c9e; background: #f0f3f7; font-size: 10px; }
+.student-progress-filters button.active { border-color: #3575bd; color: #235f9f; background: #edf5ff; }
+.student-progress-filters button.active b { color: #fff; background: #3575bd; }
+.student-progress-entry { border-bottom: 1px solid #e9eef4; }
+.student-progress-entry:last-child { border-bottom: 0; }
+.student-progress-entry > summary { min-height: 78px; padding: 13px 24px; display: grid; grid-template-columns: 42px 78px minmax(0, 1fr) auto auto; align-items: center; gap: 13px; cursor: pointer; list-style: none; }
+.student-progress-entry > summary::-webkit-details-marker { display: none; }
+.student-progress-entry-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; color: #2b67a9; background: #eaf3ff; font-size: 13px; font-weight: 850; }
+.student-progress-entry.kind-project .student-progress-entry-icon { color: #21745b; background: #e8f6ef; }
+.student-progress-entry.kind-meeting .student-progress-entry-icon { color: #815c19; background: #fff3d8; }
+.student-progress-entry.kind-other .student-progress-entry-icon { color: #725a8a; background: #f3edfa; }
+.student-progress-entry-date time, .student-progress-entry-date small, .student-progress-entry-title strong, .student-progress-entry-title small { display: block; }
+.student-progress-entry-date time { color: #60758c; font-size: 12px; font-weight: 750; }
+.student-progress-entry-date small { margin-top: 4px; color: #9aa4b1; font-size: 10px; }
+.student-progress-entry-title { min-width: 0; }
+.student-progress-entry-title strong { font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+.student-progress-entry-title small { max-width: 680px; margin-top: 4px; color: #8492a4; font-size: 11px; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.student-progress-entry > summary > em { font-style: normal; white-space: nowrap; }
+.student-progress-entry > summary > i { color: #326db3; font-size: 11px; font-style: normal; font-weight: 800; white-space: nowrap; }
+.student-progress-entry[open] > summary { background: #f7faff; }
+.student-progress-entry[open] > summary > i { font-size: 0; }
+.student-progress-entry[open] > summary > i::after { content: "收起"; font-size: 11px; }
+.student-progress-entry > article { padding: 3px 24px 22px 170px; }
+.student-progress-entry > article > p { margin: 0; color: #42566f; font-size: 13px; line-height: 1.8; white-space: pre-wrap; }
+.student-progress-entry-paper { margin: 13px 0 0; padding: 12px 13px; display: grid; grid-template-columns: .7fr 1.5fr .8fr; gap: 12px; border-radius: 10px; background: #f3f7fb; }
+.student-progress-entry-paper dt { color: #8492a3; font-size: 10px; font-weight: 800; }
+.student-progress-entry-paper dd { margin: 4px 0 0; color: #40546c; font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.student-progress-entry blockquote { display: grid; gap: 5px; margin: 13px 0 0; padding: 12px 14px; border: 0; border-left: 3px solid #e1a636; border-radius: 0 9px 9px 0; color: #66553a; background: #fff9eb; font-size: 12px; line-height: 1.6; }
 .student-portal-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr); gap: 18px; align-items: start; }
 .student-portal-side { display: grid; gap: 18px; }
 .student-portal-panel { overflow: hidden; border: 1px solid #e1e8f0; border-radius: 19px; background: #fff; box-shadow: 0 10px 28px rgba(56, 78, 108, .07); }
@@ -1239,13 +1266,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-quick-progress footer { align-items: stretch; flex-wrap: wrap; }
   .student-quick-progress footer span { width: 100%; margin: 0 0 3px; }
   .student-quick-progress footer button { flex: 1; min-height: 44px; }
-  .student-ai-meetings > header { padding-inline: 18px; }
-  .student-ai-meetings summary { grid-template-columns: minmax(0, 1fr) auto; padding-inline: 18px; }
-  .student-ai-meetings summary time { grid-column: 1; }
-  .student-ai-meetings summary > span { grid-column: 1; }
-  .student-ai-meetings summary > em { grid-column: 2; grid-row: 1; }
-  .student-ai-meetings summary > i { grid-column: 2; grid-row: 2; }
-  .student-ai-meetings details > article { padding: 2px 18px 18px; }
+  .student-progress-overview-head, .student-progress-filters { padding-inline: 18px; }
+  .student-progress-current { margin-inline: 18px; grid-template-columns: 1fr; }
+  .student-progress-entry > summary { grid-template-columns: 40px minmax(0, 1fr) auto; padding-inline: 18px; }
+  .student-progress-entry-icon { grid-column: 1; grid-row: 1 / 3; }
+  .student-progress-entry-date { grid-column: 2; grid-row: 1; }
+  .student-progress-entry-title { grid-column: 2; grid-row: 2; }
+  .student-progress-entry > summary > em { grid-column: 3; grid-row: 1; }
+  .student-progress-entry > summary > i { grid-column: 3; grid-row: 2; justify-self: end; }
+  .student-progress-entry > article { padding: 3px 18px 20px 71px; }
+  .student-progress-entry-paper { grid-template-columns: 1fr; }
   .student-paper-register { grid-template-columns: 1fr; padding-inline: 18px; }
   .student-portal-panel-head { padding-inline: 18px; }
   .student-progress-feed-list, .student-meeting-history { padding-inline: 18px; }
@@ -1276,6 +1306,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .modal-layer { padding: 10px; }
   .student-primary-actions { grid-template-columns: 1fr; }
   .student-portal-summary { grid-template-columns: 1fr; }
+  .student-progress-current dl { grid-template-columns: 1fr; }
+  .student-progress-current dl > div { padding: 9px 0 0; border-top: 1px solid #d7e2ef; border-left: 0; }
+  .student-progress-overview-head > strong { font-size: 24px; }
+  .student-progress-entry > article { padding-left: 18px; }
   .student-meeting-form > div { grid-template-columns: 1fr; }
   .selected-paper-summary { grid-template-columns: 1fr; }
 }

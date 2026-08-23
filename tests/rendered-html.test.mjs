@@ -63,7 +63,10 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /StudentQuickProgressComposer/);
   assert.match(dashboard, /不用另开窗口，提交后本页会自动更新/);
   assert.doesNotMatch(dashboard, /studentSubmitKind/);
-  assert.match(dashboard, /每次 AI 会议纪要/);
+  assert.match(dashboard, /我的进展/);
+  assert.match(dashboard, /论文、课题和组会，按时间放在一起/);
+  assert.match(dashboard, /StudentProgressOverview/);
+  assert.match(dashboard, /AI 组会/);
   assert.match(dashboard, /entry\.kind === "组会"/);
   assert.match(dashboard, /课题进展/);
   assert.match(dashboard, /最近写了什么、导师怎么回复/);

@@ -635,9 +635,8 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
   if (!student) return <main className="student-portal-shell"><div className="error-state"><strong>学生档案尚未绑定</strong><span>请联系管理员核对飞书账号与学生记录。</span></div></main>;
   const papers = data.papers.filter((paper) => paper.student_id === student.id);
   const paperEntries = student.progress.filter((entry) => entry.kind === "论文");
-  const aiMeetingEntries = student.progress.filter((entry) => entry.kind === "组会");
-  const pendingCount = paperEntries.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
-  const latest = [...paperEntries].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime())[0];
+  const pendingCount = student.progress.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
+  const latestPaperEntry = [...paperEntries].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime())[0];
   const trackingPapers = papers.filter((paper) => paper.status === "active" || paper.status === "on_hold");
   const leadPaper = trackingPapers.find((paper) => paper.status === "active") ?? trackingPapers[0] ?? papers[0];
   const planned = trackingPapers
@@ -667,13 +666,13 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
     {composer ? <StudentQuickProgressComposer key={composer} kind={composer} student={student} papers={papers} onCancel={() => setComposer(null)} onSaved={async () => { setComposer(null); onToast(`${composer === "论文" ? "论文" : "课题"}进展已提交，下方记录已更新`); await onRefresh(); }} /> : null}
 
     <section className="student-portal-summary" aria-label="我的提交概况">
-      <article><span>AI 组会记录</span><strong>{aiMeetingEntries.length}</strong><small>每次纪要都留在这里</small></article>
-      <article><span>我的论文</span><strong>{papers.length}</strong><small>{latest ? `已经记了 ${paperEntries.length} 次进展` : "还没有论文记录"}</small></article>
+      <article><span>全部进展</span><strong>{student.progress.length}</strong><small>论文、课题和组会都算在内</small></article>
+      <article><span>我的论文</span><strong>{papers.length}</strong><small>{latestPaperEntry ? `已经记了 ${paperEntries.length} 次进展` : "还没有论文记录"}</small></article>
       <article><span>等导师回复</span><strong>{pendingCount}</strong><small>导师看完后会留下意见</small></article>
       <article className={deadline.overdue ? "overdue" : ""}><span>最近投稿计划</span><strong>{deadline.label}</strong><small>{planned || leadPaper?.title || "还没设置日期"}</small></article>
     </section>
 
-    <StudentAiMeetingPanel entries={aiMeetingEntries} />
+    <StudentProgressOverview student={student} leadPaper={leadPaper} />
 
     <div className="student-portal-grid">
       <StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} />
@@ -756,14 +755,64 @@ function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved
   </section>;
 }
 
-function StudentAiMeetingPanel({ entries }: { entries: StudentProgress[] }) {
-  const meetings = [...entries].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
-  return <section className="student-ai-meetings">
-    <header><div><span>组会记录</span><h2>每次 AI 会议纪要</h2><p>飞书纪要整理好后会放到这里，点开就能看。</p></div><strong>{meetings.length}</strong></header>
-    <div>{meetings.map((entry, index) => <details key={entry.id} open={index === 0}>
-      <summary><time>{shortDate(entry.submitted_at)}</time><span><strong>{entry.title}</strong><small>{entry.evidence_sources[0]?.label || "飞书会议纪要"}</small></span><em className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</em><i>查看</i></summary>
-      <article><p>{entry.summary}</p>{entry.reviewer_note ? <blockquote><b>导师回复</b><span>{entry.reviewer_note}</span></blockquote> : null}</article>
-    </details>)}{!meetings.length ? <div className="student-portal-empty">还没有 AI 会议纪要。下一次组会整理完成后会自动出现在这里。</div> : null}</div>
+type StudentProgressFilter = "all" | "论文" | "项目" | "组会";
+
+const studentProgressFilters: Array<{ value: StudentProgressFilter; label: string }> = [
+  { value: "all", label: "全部" },
+  { value: "论文", label: "论文" },
+  { value: "项目", label: "课题" },
+  { value: "组会", label: "AI 组会" },
+];
+
+function studentProgressKindMeta(kind: string) {
+  if (kind === "论文") return { label: "论文", icon: "文", className: "paper" };
+  if (kind === "项目") return { label: "课题", icon: "题", className: "project" };
+  if (kind === "组会") return { label: "AI 组会", icon: "会", className: "meeting" };
+  return { label: kind || "进展", icon: "记", className: "other" };
+}
+
+function StudentProgressOverview({ student, leadPaper }: { student: Student; leadPaper?: StudentPaper }) {
+  const [filter, setFilter] = useState<StudentProgressFilter>("all");
+  const entries = useMemo(() => [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime()), [student.progress]);
+  const visibleEntries = filter === "all" ? entries : entries.filter((entry) => entry.kind === filter);
+  const latestEntry = entries[0];
+  const repliedCount = entries.filter((entry) => Boolean(entry.reviewer_note?.trim())).length;
+
+  return <section className="student-progress-overview" aria-labelledby="student-progress-overview-title">
+    <header className="student-progress-overview-head">
+      <div><span>一页看清</span><h2 id="student-progress-overview-title">我的进展</h2><p>论文、课题和组会，按时间放在一起。</p></div>
+      <strong>{entries.length}<small>条记录</small></strong>
+    </header>
+
+    <div className="student-progress-current">
+      <div className="student-progress-current-main"><i>今</i><div><span>现在在做</span><strong>{student.currentFocus || latestEntry?.title || "先记下这周完成的事"}</strong><small>{leadPaper ? `${paperStageMeta[leadPaper.current_stage].label} · ${leadPaper.title}` : "每次更新都会留在下面"}</small></div></div>
+      <dl>
+        <div><dt>最近更新</dt><dd>{latestEntry ? shortDate(latestEntry.submitted_at) : "还没有"}</dd><small>{latestEntry?.title || "提交第一条进展后会显示在这里"}</small></div>
+        <div><dt>导师已回复</dt><dd>{repliedCount} 条</dd><small>{repliedCount ? "回复已放回对应记录" : "有回复后会在记录中标出来"}</small></div>
+      </dl>
+    </div>
+
+    <nav className="student-progress-filters" aria-label="筛选我的进展">
+      {studentProgressFilters.map((option) => { const count = option.value === "all" ? entries.length : entries.filter((entry) => entry.kind === option.value).length; return <button key={option.value} type="button" className={filter === option.value ? "active" : ""} aria-pressed={filter === option.value} onClick={() => setFilter(option.value)}><span>{option.label}</span><b>{count}</b></button>; })}
+    </nav>
+
+    <div className="student-progress-overview-list">
+      {visibleEntries.map((entry, index) => { const kind = studentProgressKindMeta(entry.kind); const context = entry.reviewer_note ? `导师已回复：${entry.reviewer_note}` : entry.kind === "组会" ? entry.evidence_sources[0]?.label || "飞书会议纪要" : entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : "点开查看完整内容"; return <details key={`${filter}-${entry.id}`} className={`student-progress-entry kind-${kind.className}`} open={index === 0}>
+        <summary>
+          <span className="student-progress-entry-icon" aria-hidden="true">{kind.icon}</span>
+          <span className="student-progress-entry-date"><time>{shortDate(entry.submitted_at)}</time><small>{kind.label}</small></span>
+          <span className="student-progress-entry-title"><strong>{entry.paper?.title || entry.title}</strong><small>{context}</small></span>
+          <em className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</em><i>查看</i>
+        </summary>
+        <article>
+          <p>{entry.summary || entry.evidence}</p>
+          {entry.paper ? <dl className="student-progress-entry-paper"><div><dt>论文阶段</dt><dd>{paperStageMeta[entry.paper.stage].label}</dd></div><div><dt>下一步</dt><dd>{entry.paper.next_action}</dd></div><div><dt>准备完成</dt><dd>{entry.paper.next_action_due_date}</dd></div></dl> : null}
+          {entry.attachments?.length ? <div className="student-attachment-list" aria-label="提交附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
+          {entry.reviewer_note ? <blockquote><b>{entry.reviewer_name ? `${entry.reviewer_name}的回复` : "导师回复"}</b><span>{entry.reviewer_note}</span></blockquote> : null}
+        </article>
+      </details>; })}
+      {!visibleEntries.length ? <div className="student-portal-empty">这个分类还没有记录。提交后会直接出现在这里。</div> : null}
+    </div>
   </section>;
 }
 
