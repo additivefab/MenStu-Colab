@@ -684,9 +684,9 @@ export default function Dashboard() {
   }).format(new Date());
 
   if (!loading && authGate) {
-    return <FeishuAccessGate key={authGate.kind} gate={authGate} onAuthenticated={() => {
-      if (mentorViewFromUrl() === "overview") void loadOverviewShell();
-      else void loadDashboard();
+    return <FeishuAccessGate key={authGate.kind} gate={authGate} onAuthenticated={async () => {
+      if (mentorViewFromUrl() === "overview") await loadOverviewShell();
+      else await loadDashboard();
     }} />;
   }
 
