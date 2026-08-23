@@ -389,10 +389,10 @@ const navItems = [
 type MentorView = (typeof navItems)[number]["id"];
 
 function mentorViewFromUrl(): MentorView {
-  if (typeof window === "undefined") return "inbox";
+  if (typeof window === "undefined") return "overview";
   const params = new URL(window.location.href).searchParams;
   const requested = params.get("mentorView") ?? (params.get("view") === "overview" ? "overview" : null);
-  return navItems.some((item) => item.id === requested) ? requested as MentorView : "inbox";
+  return navItems.some((item) => item.id === requested) ? requested as MentorView : "overview";
 }
 
 function dashboardQueryFromUrl() {
@@ -452,7 +452,7 @@ export default function Dashboard() {
   const [viewer, setViewer] = useState<DashboardData["viewer"] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [view, setView] = useState<MentorView>("inbox");
+  const [view, setView] = useState<MentorView>("overview");
   const [query, setQuery] = useState("");
   const [riskFilter, setRiskFilter] = useState<"全部" | RiskLevel>("全部");
   const [degreeFilter, setDegreeFilter] = useState<"全部" | Student["degree"]>("全部");
@@ -595,7 +595,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (viewer?.role !== "superadmin" && view === "settings") {
       const url = new URL(window.location.href);
-      url.searchParams.set("mentorView", "inbox");
+      url.searchParams.set("mentorView", "overview");
       window.history.replaceState({}, "", url);
     }
   }, [view, viewer?.role]);
@@ -721,7 +721,7 @@ export default function Dashboard() {
   const visibleNavItems = currentViewer.role === "superadmin"
     ? navItems
     : navItems.filter((item) => item.id !== "settings");
-  const activeView: MentorView = currentViewer.role !== "superadmin" && view === "settings" ? "inbox" : view;
+  const activeView: MentorView = currentViewer.role !== "superadmin" && view === "settings" ? "overview" : view;
 
   const viewerRoleLabel = currentViewer.role === "superadmin"
     ? "超级管理员"

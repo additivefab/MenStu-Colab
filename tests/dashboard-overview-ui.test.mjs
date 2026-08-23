@@ -90,6 +90,9 @@ test("overview UI keeps old views, accessible drawer, responsive cards, and read
   assert.match(dashboard, /id: "overview", label: "全组进度"/);
   assert.match(dashboard, /id: "inbox", label: "待我处理"/);
   assert.match(dashboard, /id: "cohort", label: "课题组"/);
+  assert.match(dashboard, /typeof window === "undefined"\) return "overview"/);
+  assert.match(dashboard, /useState<MentorView>\("overview"\)/);
+  assert.match(dashboard, /view === "settings" \? "overview" : view/);
   assert.match(overview, /fetch\("\/api\/dashboard\/overview", \{ cache: "no-store" \}\)/);
   assert.match(dashboard, /mentorViewFromUrl\(\) === "overview"\) void loadOverviewShell\(\)/);
   assert.match(dashboard, /onAuthenticated=\{async \(\) => \{[\s\S]*mentorViewFromUrl\(\) === "overview"[\s\S]*loadOverviewShell\(\)/);
