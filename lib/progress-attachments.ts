@@ -1,6 +1,6 @@
 export const MAX_PROGRESS_FILES = 5;
-export const MAX_PROGRESS_FILE_BYTES = 20 * 1024 * 1024;
-export const MAX_PROGRESS_TOTAL_BYTES = 50 * 1024 * 1024;
+export const MAX_PROGRESS_FILE_BYTES = 50 * 1024 * 1024;
+export const MAX_PROGRESS_TOTAL_BYTES = 80 * 1024 * 1024;
 
 const allowedExtensions = new Set([
   "pdf", "doc", "docx", "xls", "xlsx", "csv", "ppt", "pptx",
@@ -32,11 +32,11 @@ export function validateProgressFiles(files: File[]) {
     const fileName = cleanAttachmentName(file.name);
     if (!file.size) throw new AttachmentInputError(`${fileName} 是空文件`);
     if (file.size > MAX_PROGRESS_FILE_BYTES) {
-      throw new AttachmentInputError(`${fileName} 不能超过 20 MB`);
+      throw new AttachmentInputError(`${fileName} 不能超过 50 MB`);
     }
     totalBytes += file.size;
     if (totalBytes > MAX_PROGRESS_TOTAL_BYTES) {
-      throw new AttachmentInputError("本次附件总大小不能超过 50 MB");
+      throw new AttachmentInputError("本次附件总大小不能超过 80 MB");
     }
     return { file, fileName, contentType: file.type || "application/octet-stream" };
   });

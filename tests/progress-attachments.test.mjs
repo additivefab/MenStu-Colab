@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   MAX_PROGRESS_FILE_BYTES,
+  MAX_PROGRESS_TOTAL_BYTES,
   attachmentDisposition,
   cleanAttachmentName,
   validateProgressFiles,
@@ -19,7 +20,12 @@ test("progress attachments reject executable, empty, oversized, and excessive fi
   assert.throws(() => cleanAttachmentName("payload.exe"), /仅支持/);
   assert.throws(() => validateProgressFiles([new File([], "empty.pdf")]), /空文件/);
   const oversized = { name: "too-large.zip", size: MAX_PROGRESS_FILE_BYTES + 1, type: "application/zip" };
-  assert.throws(() => validateProgressFiles([oversized]), /20 MB/);
+  assert.throws(() => validateProgressFiles([oversized]), /50 MB/);
+  const excessiveTotal = [
+    { name: "part-1.zip", size: MAX_PROGRESS_FILE_BYTES, type: "application/zip" },
+    { name: "part-2.zip", size: MAX_PROGRESS_TOTAL_BYTES - MAX_PROGRESS_FILE_BYTES + 1, type: "application/zip" },
+  ];
+  assert.throws(() => validateProgressFiles(excessiveTotal), /80 MB/);
   const tooMany = Array.from({ length: 6 }, (_, index) => new File(["x"], `${index}.txt`));
   assert.throws(() => validateProgressFiles(tooMany), /最多上传 5 个/);
 });
