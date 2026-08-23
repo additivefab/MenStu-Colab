@@ -62,6 +62,7 @@ type AuditRow = {
 };
 
 type MilestoneInput = {
+  id: number | null;
   title: string;
   targetDate: string;
   evidenceTarget: string;
@@ -101,13 +102,16 @@ function milestoneInput(value: unknown): MilestoneInput[] {
   if (value.length > 12) throw new InputError("培养节点最多设置 12 项");
   return value.map((item, index) => {
     const row = (item ?? {}) as Record<string, unknown>;
+    const rawId = String(row.id ?? "").trim();
+    const id = rawId ? Number(rawId) : null;
+    if (rawId && (!Number.isInteger(id) || Number(id) < 1)) throw new InputError(`第 ${index + 1} 个节点参数无效`);
     const title = cleanText(row.title, `第 ${index + 1} 个节点`, 160);
     const targetDate = cleanText(row.targetDate, `第 ${index + 1} 个节点日期`, 10);
     const evidenceTarget = cleanText(row.evidenceTarget, `第 ${index + 1} 个节点证据`, 800);
     const status = String(row.status ?? "pending") as MilestoneStatus;
     if (targetDate && !/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) throw new InputError(`第 ${index + 1} 个节点日期格式无效`);
     if (!milestoneStatuses.has(status)) throw new InputError(`第 ${index + 1} 个节点状态无效`);
-    return { title, targetDate, evidenceTarget, status, sortOrder: index };
+    return { id: id as number | null, title, targetDate, evidenceTarget, status, sortOrder: index };
   }).filter((item) => item.title || item.targetDate || item.evidenceTarget);
 }
 
@@ -147,7 +151,7 @@ async function readProposals(user: AppUser) {
   const placeholders = proposalIds.map(() => "?").join(",");
   const [milestoneResult, versionResult, auditResult] = await Promise.all([
     d1.prepare(`SELECT id, proposal_id, title, target_date, evidence_target, status, sort_order, updated_at
-      FROM research_milestones WHERE proposal_id IN (${placeholders})
+      FROM research_milestones WHERE proposal_id IN (${placeholders}) AND archived_at IS NULL
       ORDER BY proposal_id, sort_order, target_date`).bind(...proposalIds).all<MilestoneRow>(),
     d1.prepare(`SELECT v.id, v.proposal_id, v.version_number, v.created_at,
       u.display_name AS submitted_by_name
@@ -200,8 +204,11 @@ export async function POST(request: Request) {
     if (!studentId) return Response.json({ error: "请选择学生" }, { status: 400 });
 
     const fields = proposalInput(body);
-    const milestones = milestoneInput(body.milestones);
+    let milestones = milestoneInput(body.milestones);
     if (mode === "submit") validateSubmission(fields, milestones);
+    if (milestones.some((milestone) => !milestone.id && milestone.status === "completed")) {
+      return Response.json({ error: "新建培养节点不能直接标记为已完成；请先保存节点，并通过关联进展的“实质进展”审核完成节点" }, { status: 409 });
+    }
     const d1 = getD1();
     if (!(await canViewStudent(auth.user, studentId))) {
       return Response.json({ error: "当前账号无权为该学生维护研究方案" }, { status: 403 });
@@ -216,6 +223,14 @@ export async function POST(request: Request) {
     if (proposal?.status === "submitted") return Response.json({ error: "方案正在审核，暂时不能修改" }, { status: 409 });
     if (proposal?.status === "approved") return Response.json({ error: "已确认方案已冻结；重大调整需由管理员退回后形成新版本" }, { status: 409 });
 
+    const milestoneIds = milestones.flatMap((milestone) => milestone.id ? [milestone.id] : []);
+    if (milestoneIds.length !== new Set(milestoneIds).size) {
+      return Response.json({ error: "培养节点重复，请刷新方案后重试" }, { status: 409 });
+    }
+    if (!proposal && milestoneIds.length) {
+      return Response.json({ error: "新方案不能引用既有培养节点，请刷新后重新保存" }, { status: 409 });
+    }
+
     if (!proposal) {
       proposal = await d1.prepare(`INSERT INTO research_proposals
         (student_id, title, created_by_user_id) VALUES (?, ?, ?)
@@ -224,6 +239,28 @@ export async function POST(request: Request) {
         .first<{ id: number; status: ProposalStatus; current_version: number; reviewer_note: string }>();
     }
     if (!proposal) throw new Error("无法建立研究方案记录");
+
+    const existingMilestoneStatuses = new Map<number, MilestoneStatus>();
+    if (milestoneIds.length) {
+      const placeholders = milestoneIds.map(() => "?").join(",");
+      const owned = await d1.prepare(`SELECT id, status FROM research_milestones
+        WHERE proposal_id = ? AND id IN (${placeholders})`)
+        .bind(proposal.id, ...milestoneIds).all<{ id: number; status: MilestoneStatus }>();
+      if (owned.results.length !== new Set(milestoneIds).size) {
+        return Response.json({ error: "培养节点已变化或不属于当前方案，请刷新后重试" }, { status: 409 });
+      }
+      owned.results.forEach((milestone) => existingMilestoneStatuses.set(milestone.id, milestone.status));
+      const escalated = milestones.find((milestone) => milestone.id
+        && milestone.status === "completed"
+        && existingMilestoneStatuses.get(milestone.id) !== "completed");
+      if (escalated) {
+        return Response.json({ error: `培养节点“${escalated.title || escalated.id}”尚未完成；方案编辑器不能直接完成节点，请提交关联进展并通过“实质进展”审核` }, { status: 409 });
+      }
+      milestones = milestones.map((milestone) => milestone.id
+        && existingMilestoneStatuses.get(milestone.id) === "completed"
+        ? { ...milestone, status: "completed" }
+        : milestone);
+    }
 
     const nextVersion = mode === "submit" ? proposal.current_version + 1 : proposal.current_version;
     const nextStatus: ProposalStatus = mode === "submit"
@@ -245,13 +282,33 @@ export async function POST(request: Request) {
           nextStatus, nextVersion, mode === "submit" ? "" : proposal.reviewer_note,
           nextStatus, proposal.id,
         ),
-      d1.prepare("DELETE FROM research_milestones WHERE proposal_id = ?").bind(proposal.id),
-      ...milestones.map((milestone) =>
-        d1.prepare(`INSERT INTO research_milestones
-          (proposal_id, title, target_date, evidence_target, status, sort_order)
-          VALUES (?, ?, ?, ?, ?, ?)`)
-          .bind(proposal!.id, milestone.title, milestone.targetDate, milestone.evidenceTarget, milestone.status, milestone.sortOrder),
-      ),
+      d1.prepare(`UPDATE research_milestones SET archived_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+        WHERE proposal_id = ? AND archived_at IS NULL AND status <> 'completed'`).bind(proposal.id),
+      ...milestones.map((milestone) => milestone.id
+        ? existingMilestoneStatuses.get(milestone.id) === "completed"
+          ? d1.prepare(`UPDATE research_milestones SET title = ?, target_date = ?, evidence_target = ?,
+              sort_order = ?, archived_at = NULL, updated_at = CURRENT_TIMESTAMP
+              WHERE id = ? AND proposal_id = ?`)
+            .bind(
+              milestone.title, milestone.targetDate, milestone.evidenceTarget,
+              milestone.sortOrder, milestone.id, proposal!.id,
+            )
+          : d1.prepare(`UPDATE research_milestones SET title = ?, target_date = ?, evidence_target = ?,
+              status = CASE WHEN status = 'completed' THEN status ELSE ? END,
+              sort_order = ?, archived_at = NULL, updated_at = CURRENT_TIMESTAMP
+              WHERE id = ? AND proposal_id = ?`)
+            .bind(
+              milestone.title, milestone.targetDate, milestone.evidenceTarget,
+              milestone.status, milestone.sortOrder, milestone.id, proposal!.id,
+            )
+        : d1.prepare(`INSERT INTO research_milestones
+            (proposal_id, title, target_date, evidence_target, status, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?)`)
+          .bind(
+            proposal!.id, milestone.title, milestone.targetDate,
+            milestone.evidenceTarget, milestone.status, milestone.sortOrder,
+          )),
       d1.prepare(`INSERT INTO proposal_audit_events (proposal_id, actor_user_id, action, detail)
         VALUES (?, ?, ?, ?)`)
         .bind(proposal.id, auth.user.id, mode === "submit" ? "submit" : "save_draft", mode === "submit" ? `提交第 ${nextVersion} 版` : "保存草稿"),
@@ -297,11 +354,14 @@ export async function PATCH(request: Request) {
       }
       const milestone = await d1.prepare(`SELECT m.id, m.proposal_id, m.title, p.student_id, p.status AS proposal_status
         FROM research_milestones m JOIN research_proposals p ON p.id = m.proposal_id
-        WHERE m.id = ?`).bind(milestoneId)
+        WHERE m.id = ? AND m.archived_at IS NULL`).bind(milestoneId)
         .first<{ id: number; proposal_id: number; title: string; student_id: string; proposal_status: ProposalStatus }>();
       if (!milestone) return Response.json({ error: "培养节点不存在" }, { status: 404 });
-      if (!(await canViewStudent(auth.user, milestone.student_id))) {
-        return Response.json({ error: "无权更新该学生的培养节点" }, { status: 403 });
+      if (!(await canReviewStudent(auth.user, milestone.student_id))) {
+        return Response.json({ error: "当前账号没有该学生的审核权限，不能变更正式培养节点状态" }, { status: 403 });
+      }
+      if (status === "completed") {
+        return Response.json({ error: "培养节点只能在关联进展通过“实质进展”审核后完成，不能直接修改为已完成" }, { status: 409 });
       }
       if (milestone.proposal_status !== "approved") {
         return Response.json({ error: "方案确认后才能更新培养节点执行状态" }, { status: 409 });

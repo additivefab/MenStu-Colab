@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-export const CURRENT_SCHEMA_VERSION = 16;
+export const CURRENT_SCHEMA_VERSION = 17;
 
 const REQUIRED_TABLES = [
   "students",
@@ -17,10 +17,12 @@ const REQUIRED_TABLES = [
   "meeting_requests",
   "progress_audit_events",
   "progress_attachments",
+  "progress_revisions",
   "student_papers",
   "paper_progress_details",
   "research_proposals",
   "research_milestones",
+  "project_progress_details",
   "research_outputs",
   "feishu_meeting_summary_imports",
   "feishu_meeting_summary_links",
@@ -43,7 +45,7 @@ export function getD1() {
 }
 
 async function ensureColumn(
-  table: "app_user_role_events" | "progress_entries" | "student_guidance_notes",
+  table: "app_user_role_events" | "progress_entries" | "progress_attachments" | "progress_evidence_sources" | "research_milestones" | "student_guidance_notes",
   column: string,
   definition: string,
 ) {
@@ -142,6 +144,7 @@ async function migrateDatabase() {
       reviewed_by_user_id INTEGER,
       reviewer_note TEXT NOT NULL DEFAULT '',
       reviewed_at TEXT,
+      current_revision INTEGER NOT NULL DEFAULT 1,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS app_users (
@@ -267,7 +270,21 @@ async function migrateDatabase() {
       content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
       size_bytes INTEGER NOT NULL,
       content_sha256 TEXT NOT NULL,
+      revision_number INTEGER NOT NULL DEFAULT 1,
       uploaded_by_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS progress_revisions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      progress_entry_id INTEGER NOT NULL REFERENCES progress_entries(id),
+      revision_number INTEGER NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      submitted_by_user_id INTEGER REFERENCES app_users(id),
+      review_status TEXT NOT NULL DEFAULT 'submitted',
+      assessment TEXT,
+      reviewer_note TEXT NOT NULL DEFAULT '',
+      reviewed_by_user_id INTEGER REFERENCES app_users(id),
+      reviewed_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS student_papers (
@@ -334,8 +351,22 @@ async function migrateDatabase() {
       evidence_target TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'pending',
       sort_order INTEGER NOT NULL DEFAULT 0,
+      archived_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS project_progress_details (
+      progress_entry_id INTEGER PRIMARY KEY REFERENCES progress_entries(id),
+      milestone_id INTEGER REFERENCES research_milestones(id),
+      milestone_title TEXT NOT NULL DEFAULT '',
+      milestone_target_date TEXT,
+      evidence_target TEXT NOT NULL DEFAULT '',
+      proposal_version INTEGER,
+      next_action TEXT NOT NULL,
+      next_action_due_date TEXT NOT NULL,
+      blocker TEXT NOT NULL DEFAULT '',
+      completion_requested INTEGER NOT NULL DEFAULT 0 CHECK (completion_requested IN (0, 1)),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS research_outputs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -401,6 +432,7 @@ async function migrateDatabase() {
       source_ref TEXT NOT NULL DEFAULT '',
       source_import_id INTEGER REFERENCES feishu_meeting_summary_imports(id),
       content_sha256 TEXT NOT NULL DEFAULT '',
+      revision_number INTEGER NOT NULL DEFAULT 1,
       occurred_at TEXT,
       created_by_user_id INTEGER REFERENCES app_users(id),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -429,6 +461,8 @@ async function migrateDatabase() {
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_audit_entry_created ON progress_audit_events(progress_entry_id, created_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_attachments_storage_key ON progress_attachments(storage_key)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_attachments_entry_created ON progress_attachments(progress_entry_id, created_at DESC)"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_revisions_entry_number ON progress_revisions(progress_entry_id, revision_number)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_revisions_entry_created ON progress_revisions(progress_entry_id, created_at)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_papers_student_status ON student_papers(student_id, status, updated_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_papers_stage_due ON student_papers(current_stage, planned_submission_date)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_paper_progress_paper_created ON paper_progress_details(paper_id, created_at DESC)"),
@@ -438,6 +472,8 @@ async function migrateDatabase() {
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_proposal_versions_proposal_number ON research_proposal_versions(proposal_id, version_number)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_proposal_versions_created ON research_proposal_versions(proposal_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_milestones_proposal_order ON research_milestones(proposal_id, sort_order)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_project_progress_milestone_created ON project_progress_details(milestone_id, created_at)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_project_progress_due ON project_progress_details(next_action_due_date)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_outputs_student_updated ON research_outputs(student_id, updated_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_outputs_status ON research_outputs(lifecycle_status, updated_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_output_events_output ON research_output_events(output_id, created_at DESC)"),
@@ -464,7 +500,11 @@ async function migrateDatabase() {
   await ensureColumn("progress_entries", "assessment", "TEXT");
   await ensureColumn("progress_entries", "submitted_by_user_id", "INTEGER REFERENCES app_users(id)");
   await ensureColumn("progress_entries", "reviewed_by_user_id", "INTEGER REFERENCES app_users(id)");
+  await ensureColumn("progress_entries", "current_revision", "INTEGER NOT NULL DEFAULT 1");
   await ensureColumn("progress_entries", "updated_at", "TEXT");
+  await ensureColumn("progress_attachments", "revision_number", "INTEGER NOT NULL DEFAULT 1");
+  await ensureColumn("progress_evidence_sources", "revision_number", "INTEGER NOT NULL DEFAULT 1");
+  await ensureColumn("research_milestones", "archived_at", "TEXT");
   await ensureColumn("student_guidance_notes", "title", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn("student_guidance_notes", "acknowledged_at", "TEXT");
   await ensureColumn("student_guidance_notes", "completed_at", "TEXT");
@@ -472,6 +512,8 @@ async function migrateDatabase() {
   await ensureColumn("student_guidance_notes", "completion_note", "TEXT NOT NULL DEFAULT ''");
 
   await d1.batch([
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_attachments_entry_revision ON progress_attachments(progress_entry_id, revision_number)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_evidence_entry_revision ON progress_evidence_sources(progress_entry_id, revision_number)"),
     d1.prepare(`UPDATE progress_entries SET
       review_status = CASE status
         WHEN 'substantive' THEN 'accepted'
@@ -522,6 +564,33 @@ async function migrateDatabase() {
         p.submitted_at, p.submitted_by_user_id
       FROM progress_entries p
       WHERE NOT EXISTS (SELECT 1 FROM progress_evidence_sources e WHERE e.progress_entry_id = p.id)`),
+    d1.prepare(`INSERT INTO progress_revisions
+      (progress_entry_id, revision_number, snapshot_json, submitted_by_user_id,
+       review_status, assessment, reviewer_note, reviewed_by_user_id, reviewed_at, created_at)
+      SELECT p.id, 1,
+        json_object(
+          'kind', p.kind,
+          'title', p.title,
+          'summary', p.summary,
+          'evidence', p.evidence,
+          'literatureRef', p.literature_ref,
+          'gitUrl', p.git_url,
+          'attachments', json_array(),
+          'paper', NULL,
+          'project', NULL
+        ),
+        CASE WHEN EXISTS (
+          SELECT 1 FROM app_users submitter WHERE submitter.id = p.submitted_by_user_id
+        ) THEN p.submitted_by_user_id ELSE NULL END,
+        p.review_status, p.assessment, p.reviewer_note,
+        CASE WHEN EXISTS (
+          SELECT 1 FROM app_users reviewer WHERE reviewer.id = p.reviewed_by_user_id
+        ) THEN p.reviewed_by_user_id ELSE NULL END,
+        p.reviewed_at, p.submitted_at
+      FROM progress_entries p
+      WHERE NOT EXISTS (
+        SELECT 1 FROM progress_revisions r WHERE r.progress_entry_id = p.id
+      )`),
     d1.prepare("UPDATE app_users SET email = '' WHERE email != ''"),
     d1.prepare(`INSERT INTO app_schema_meta (id, version, updated_at)
       VALUES (1, ?, CURRENT_TIMESTAMP)

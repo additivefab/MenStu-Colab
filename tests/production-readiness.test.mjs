@@ -2,20 +2,32 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("database initialization is version-gated and never seeds demonstration students", async () => {
-  const [database, migration, health] = await Promise.all([
+test("database initialization is version-gated through the immutable progress schema and never seeds demonstration students", async () => {
+  const [database, productionMigration, revisionMigration, health] = await Promise.all([
     readFile(new URL("../lib/database.ts", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0016_dashing_union_jack.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0017_loud_iron_lad.sql", import.meta.url), "utf8"),
     readFile(new URL("../app/api/health/ready/route.ts", import.meta.url), "utf8"),
   ]);
 
-  assert.match(database, /CURRENT_SCHEMA_VERSION = 16/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = 17/);
   assert.match(database, /databaseReadyPromise \?\?=/);
   assert.match(database, /数据库结构不完整/);
   assert.match(database, /app_schema_meta/);
+  assert.match(database, /project_progress_details/);
+  assert.match(database, /progress_revisions/);
+  assert.match(database, /SELECT 1 FROM app_users submitter WHERE submitter\.id = p\.submitted_by_user_id/);
+  assert.match(database, /SELECT 1 FROM app_users reviewer WHERE reviewer\.id = p\.reviewed_by_user_id/);
   assert.doesNotMatch(database, /demoStudents|demoProgress|博士生 01|master-03/);
-  assert.match(migration, /INSERT INTO `app_schema_meta`/);
-  assert.match(migration, /UPDATE `app_users` SET `email` = ''/);
+  assert.match(productionMigration, /INSERT INTO `app_schema_meta`/);
+  assert.match(productionMigration, /UPDATE `app_users` SET `email` = ''/);
+  assert.match(revisionMigration, /CREATE TABLE `progress_revisions`/);
+  assert.match(revisionMigration, /CREATE TABLE `project_progress_details`/);
+  assert.match(revisionMigration, /ALTER TABLE `progress_entries` ADD `current_revision`/);
+  assert.match(revisionMigration, /ALTER TABLE `research_milestones` ADD `archived_at`/);
+  assert.match(revisionMigration, /SELECT 1 FROM `app_users` submitter WHERE submitter\.`id` = p\.`submitted_by_user_id`/);
+  assert.match(revisionMigration, /SELECT 1 FROM `app_users` reviewer WHERE reviewer\.`id` = p\.`reviewed_by_user_id`/);
+  assert.match(revisionMigration, /VALUES \(1, 17, CURRENT_TIMESTAMP\)/);
   assert.match(health, /confirmedRoster/);
   assert.match(health, /student_feishu_identity_bindings/);
   assert.match(health, /mainland_networks/);

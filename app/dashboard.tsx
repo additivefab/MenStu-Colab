@@ -21,6 +21,30 @@ declare global {
 }
 
 type RiskLevel = "正常" | "黄色" | "橙色" | "红色";
+type StudentProjectProgress = {
+  milestone_id: number | null;
+  milestone_title: string;
+  milestone_target_date: string | null;
+  evidence_target: string;
+  proposal_version: number | null;
+  next_action: string;
+  next_action_due_date: string;
+  blocker: string;
+  completion_requested: boolean;
+};
+
+type ProgressRevision = {
+  id: number;
+  revision_number: number;
+  snapshot: Record<string, unknown>;
+  review_status: "submitted" | "in_review" | "accepted" | "changes_requested" | "rejected";
+  assessment: "substantive" | "supporting" | null;
+  reviewer_note: string;
+  reviewer_name: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+};
+
 type StudentProgress = {
   id: number;
   kind: string;
@@ -36,6 +60,7 @@ type StudentProgress = {
   reviewer_name: string | null;
   submitted_at: string;
   reviewed_at: string | null;
+  current_revision: number;
   paper: {
     id: number;
     title: string;
@@ -49,6 +74,7 @@ type StudentProgress = {
     next_action_due_date: string;
     blocker: string;
   } | null;
+  project: StudentProjectProgress | null;
   attachments: Array<{
     id: number;
     file_name: string;
@@ -56,6 +82,7 @@ type StudentProgress = {
     size_bytes: number;
     content_sha256: string;
     download_url: string;
+    revision_number: number;
   }>;
   evidence_sources: Array<{
     id: number;
@@ -63,6 +90,7 @@ type StudentProgress = {
     label: string;
     source_ref: string;
     content_sha256: string;
+    revision_number: number;
   }>;
   audit: Array<{
     id: number;
@@ -75,6 +103,7 @@ type StudentProgress = {
     actor_name: string | null;
     actor_type: string;
   }>;
+  revisions: ProgressRevision[];
 };
 
 type StudentPaper = {
@@ -105,11 +134,14 @@ type Student = {
   latestTitle: string;
   latestKind: string;
   proposalStatus: ProposalStatus | null;
+  proposalTitle: string | null;
+  proposalVersion: number | null;
   nextMilestone: string | null;
   nextMilestoneDate: string | null;
   outputCount: number;
   risk: { level: RiskLevel; days: number };
   progress: StudentProgress[];
+  milestones: StudentMilestone[];
 };
 
 type PendingEntry = {
@@ -125,6 +157,9 @@ type PendingEntry = {
   review_status: "submitted" | "in_review";
   reviewer_name: string | null;
   paper: StudentProgress["paper"];
+  project: StudentProgress["project"];
+  current_revision: number;
+  revisions: ProgressRevision[];
   can_finalize: boolean;
   evidence_sources: StudentProgress["evidence_sources"];
   attachments: StudentProgress["attachments"];
@@ -137,6 +172,21 @@ type MilestoneStatus = "pending" | "in_progress" | "completed" | "blocked";
 type ProposalMilestone = {
   id: number;
   proposal_id: number;
+  title: string;
+  target_date: string;
+  evidence_target: string;
+  status: MilestoneStatus;
+  sort_order: number;
+  updated_at: string;
+};
+
+type StudentMilestone = {
+  id: number;
+  proposal_id: number;
+  student_id: string;
+  proposal_title: string;
+  proposal_status: ProposalStatus;
+  proposal_version: number;
   title: string;
   target_date: string;
   evidence_target: string;
@@ -615,21 +665,28 @@ export default function Dashboard() {
               <article className="review-card" key={entry.id}>
                 <div className="review-card-head">
                   <span className={`decision-icon kind-${entry.kind}`}>{entry.kind.slice(0, 1)}</span>
-                  <div><h2>{entry.paper?.title || entry.title}</h2><p>{entry.display_name} · {entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.kind} · {shortDate(entry.submitted_at)}提交</p></div>
+                  <div><h2>{entry.paper?.title || entry.title}</h2><p>{entry.display_name} · {entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.project ? `${entry.project.milestone_title || "未关联节点"} · V${entry.current_revision}` : entry.kind} · {shortDate(entry.submitted_at)}提交</p></div>
                   <a className="review-student-link" href={`/students/${encodeURIComponent(entry.student_id)}#evidence`}>查看学生全部进展 ↗</a>
                   <span className={`status-pill ${entry.review_status === "in_review" ? "reviewing" : "pending"}`}>
                     {entry.review_status === "in_review" ? `${entry.reviewer_name || "导师"}审核中` : "等待接手"}
                   </span>
                 </div>
                 <div className="review-evidence">
-                  <div><span>新增结论</span><p>{entry.summary}</p></div>
-                  <div><span>证据</span><p>{entry.evidence}</p></div>
+                  <div><span>新增结论 · 当前 V{entry.current_revision}</span><p>{entry.summary}</p></div>
+                  <div><span>证据 · 当前 V{entry.current_revision}</span><p>{entry.evidence}</p></div>
                   {entry.literature_ref ? <div><span>论文 / DOI</span><p>{entry.literature_ref}</p></div> : null}
                 </div>
                 {entry.paper ? <div className="review-paper-plan"><div><span>下一行动</span><b>{entry.paper.next_action}</b></div><div><span>行动期限</span><b>{entry.paper.next_action_due_date}</b></div>{entry.paper.submission_identifier ? <div><span>稿件编号 / DOI</span><b>{entry.paper.submission_identifier}</b></div> : null}{entry.paper.blocker ? <div className="blocker"><span>当前阻塞</span><b>{entry.paper.blocker}</b></div> : null}</div> : null}
+                {entry.project ? <div className="review-project-plan">
+                  <div><span>关联节点</span><b>{entry.project.milestone_title || "未关联培养节点"}</b><small>{entry.project.milestone_target_date ? `目标 ${entry.project.milestone_target_date}` : "未设置节点日期"}</small></div>
+                  <div><span>下一行动</span><b>{entry.project.next_action}</b><small>{entry.project.next_action_due_date ? `计划 ${entry.project.next_action_due_date}` : "未设置期限"}</small></div>
+                  {entry.project.evidence_target ? <div><span>节点验收目标</span><b>{entry.project.evidence_target}</b></div> : null}
+                  {entry.project.blocker ? <div className="blocker"><span>当前阻塞</span><b>{entry.project.blocker}</b></div> : null}
+                  {entry.project.completion_requested ? <strong>学生申请完成该节点；只有“实质性进展”确认后才会回写完成。</strong> : null}
+                </div> : null}
                 <div className="evidence-source-list" aria-label="证据来源">
                   {entry.evidence_sources.filter((source) => source.source_type !== "attachment").map((source) => <span key={source.id}>
-                    <b>{source.label}</b>
+                    <b>{source.label} · V{source.revision_number}</b>
                     {source.source_ref ? source.source_type === "git" || source.source_type === "url" || source.source_type === "attachment"
                       ? <a href={source.source_ref} target={source.source_type === "attachment" ? undefined : "_blank"} rel={source.source_type === "attachment" ? undefined : "noreferrer"}>{source.source_type === "attachment" ? "下载附件" : "打开外部证据"}</a>
                       : <small>{source.source_ref}</small> : null}
@@ -637,7 +694,7 @@ export default function Dashboard() {
                   </span>)}
                   {!entry.evidence_sources.some((source) => source.source_type !== "attachment") ? <span><b>历史文本证据</b><small>来源结构化将在下次补证时建立</small></span> : null}
                 </div>
-                {entry.attachments.length ? <div className="review-attachment-list" aria-label="进展附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>附件</span><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)} · 指纹 {attachment.content_sha256}</small></a>)}</div> : null}
+                {entry.attachments.length ? <div className="review-attachment-list" aria-label="当前修订附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>V{attachment.revision_number} 附件</span><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)} · 指纹 {attachment.content_sha256}</small></a>)}</div> : null}
                 <label className="review-note-field">审核意见
                   <textarea
                     rows={3}
@@ -1004,6 +1061,13 @@ function StudentNextAction({ student, papers, onPaper, onProject, onMeeting, onS
   </section>;
 }
 
+function formDataHasVerifiableEvidence(formData: FormData) {
+  const evidence = String(formData.get("evidence") ?? "").trim();
+  const gitUrl = String(formData.get("gitUrl") ?? "").trim();
+  const hasAttachment = formData.getAll("attachments").some((item) => item instanceof File && item.size > 0);
+  return Boolean(evidence || gitUrl || hasAttachment);
+}
+
 function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved }: {
   kind: "论文" | "项目";
   student: Student;
@@ -1012,9 +1076,13 @@ function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved
   onSaved: () => Promise<void>;
 }) {
   const activePapers = papers.filter((paper) => paper.status === "active" || paper.status === "on_hold");
+  const activeMilestones = [...student.milestones]
+    .filter((milestone) => milestone.status !== "completed")
+    .sort((a, b) => a.sort_order - b.sort_order);
   const [paperSelection, setPaperSelection] = useState(activePapers[0] ? String(activePapers[0].id) : "new");
   const selectedPaper = activePapers.find((paper) => String(paper.id) === paperSelection);
   const [paperStage, setPaperStage] = useState<PaperStage>(selectedPaper?.current_stage ?? "planning");
+  const [projectMilestoneSelection, setProjectMilestoneSelection] = useState(activeMilestones[0] ? String(activeMilestones[0].id) : "");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
   const [{ minimumDate, nextWeek }] = useState(() => {
@@ -1030,18 +1098,14 @@ function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved
     const formData = new FormData(event.currentTarget);
     const summary = String(formData.get("summary") ?? "").trim();
     if (!summary) return setFormError("写一句这次做完了什么");
+    if (!formDataHasVerifiableEvidence(formData)) return setFormError("请填写可核验证据、提供 GitHub 链接，或上传至少一个附件");
     const firstLine = summary.split(/\n/u)[0].slice(0, 70);
     formData.set("studentId", student.id);
     formData.set("kind", kind);
     formData.set("title", (kind === "论文" ? `${selectedPaper?.title || String(formData.get("paperTitle") || "论文")} · ${firstLine}` : firstLine).slice(0, 160));
-    formData.set("evidence", summary);
     formData.set("literatureRef", "");
-    formData.set("gitUrl", "");
     if (kind === "论文") {
       formData.set("paperStage", paperStage);
-      formData.set("manuscriptVersion", `更新 ${minimumDate}`);
-      formData.set("blocker", "");
-      formData.set("submissionIdentifier", "");
       if (selectedPaper) {
         formData.set("paperId", String(selectedPaper.id));
         formData.set("targetVenue", "");
@@ -1062,14 +1126,28 @@ function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved
   }
 
   return <section className="student-quick-progress" id="student-quick-progress" tabIndex={-1} aria-labelledby="student-quick-progress-title">
-    <header><div><span>{kind === "论文" ? "论文进展" : "课题进展"}</span><h2 id="student-quick-progress-title">{kind === "论文" ? "这次论文做了什么？" : "这次课题做了什么？"}</h2><p>写清做完的内容，提交后会直接出现在下面。</p></div><button type="button" onClick={onCancel}>收起</button></header>
+    <header><div><span>{kind === "论文" ? "论文进展" : "课题进展"}</span><h2 id="student-quick-progress-title">{kind === "论文" ? "这次论文做了什么？" : "这次课题做了什么？"}</h2><p>完成内容、可核验证据和下一行动会分开保存。</p></div><button type="button" onClick={onCancel}>收起</button></header>
     <form onSubmit={submit}>
       {kind === "论文" ? <>
         <div className="student-quick-row"><label>哪篇论文<select value={paperSelection} onChange={(event) => { const value = event.target.value; setPaperSelection(value); setPaperStage(activePapers.find((paper) => String(paper.id) === value)?.current_stage ?? "planning"); }}>{activePapers.map((paper) => <option key={paper.id} value={paper.id}>{paper.title}</option>)}<option value="new">新建一篇论文</option></select></label><label>现在写到哪一步<select value={paperStage} onChange={(event) => setPaperStage(event.target.value as PaperStage)}>{paperStages.map((stage) => <option key={stage} value={stage}>{paperStageMeta[stage].label}</option>)}</select></label></div>
         {!selectedPaper ? <div className="student-quick-row new-paper"><label>论文题目<input name="paperTitle" required placeholder="暂定题目也可以" /></label><label>类型<select name="paperType" defaultValue="期刊论文">{paperTypes.map((type) => <option key={type}>{type}</option>)}</select></label><label>计划投稿<input name="plannedSubmissionDate" type="date" min={minimumDate} required /></label></div> : null}
         <label className="wide">这次做完了什么<textarea name="summary" rows={4} required placeholder="例如：补完了实验部分，图 3 和图 4 已经换成新结果。" /></label>
+        <div className="student-quick-row"><label>稿件版本<input name="manuscriptVersion" required placeholder="例如：v0.4、R1、commit 8f3a2c" /></label><label>稿件编号 / DOI（可选）<input name="submissionIdentifier" placeholder="投稿后填写稿件号或 DOI" /></label></div>
         <div className="student-quick-row"><label>下一步<input name="nextAction" required placeholder="例如：把讨论部分改完" /></label><label>准备什么时候完成<input name="nextActionDueDate" type="date" min={minimumDate} defaultValue={nextWeek} required /></label></div>
-      </> : <label className="wide">这次做完了什么<textarea name="summary" rows={4} required placeholder="例如：完成了第一轮测试，结果表已经整理好。" /></label>}
+        <label className="wide">当前阻塞（可选）<textarea name="blocker" rows={2} placeholder="如果需要导师决策、数据或资源，请写在这里。" /></label>
+      </> : <>
+        <div className="student-quick-project-plan">
+          <div><span>当前研究方案</span><strong>{student.proposalTitle || "尚无已确认研究方案"}</strong><small>{student.proposalVersion ? `方案 V${student.proposalVersion}` : "可先记录进展，方案确认后再关联节点"}</small></div>
+          <label>关联培养节点<select name="linkedMilestoneId" value={projectMilestoneSelection} onChange={(event) => setProjectMilestoneSelection(event.target.value)} required={activeMilestones.length > 0} disabled={!activeMilestones.length}><option value="">{activeMilestones.length ? "请选择" : "暂无可关联节点"}</option>{activeMilestones.map((milestone) => <option key={milestone.id} value={milestone.id}>{milestone.title} · {milestoneStatusLabels[milestone.status]}</option>)}</select></label>
+          {!activeMilestones.length ? <input type="hidden" name="linkedMilestoneId" value="" /> : null}
+        </div>
+        <label className="wide">这次做完了什么<textarea name="summary" rows={4} required placeholder="例如：完成第一轮测试，结果表和异常样本已整理。" /></label>
+        <div className="student-quick-row"><label>下一行动<input name="nextAction" required placeholder="例如：补做低温组对照实验" /></label><label>计划完成日期<input name="nextActionDueDate" type="date" min={minimumDate} defaultValue={nextWeek} required /></label></div>
+        <label className="wide">当前阻塞（可选）<textarea name="blocker" rows={2} placeholder="写清卡在数据、设备、方法还是决策。" /></label>
+        <label htmlFor="student-project-completion-request" className={`student-completion-request ${projectMilestoneSelection ? "" : "disabled"}`}><input id="student-project-completion-request" name="completionRequested" type="checkbox" value="1" disabled={!projectMilestoneSelection} /><span>申请完成所选节点<small>申请不会直接改状态；导师确认为实质性进展后才完成。</small></span></label>
+      </>}
+      <label className="wide student-evidence-field">可核验证据<textarea name="evidence" rows={3} placeholder={kind === "论文" ? "例如：稿件第 4–6 页、图 3/4，或评审记录位置。如果上传了附件可不填。" : "例如：实验批次 EXP-024、结果表 Sheet-2、验收记录位置。如果上传了附件可不填。"} /><small>这里不再复制“做完了什么”，请提供可查的位置、编号或材料。</small></label>
+      <label className="wide">私有 GitHub 链接（可选）<input name="gitUrl" type="url" placeholder="https://github.com/…" /></label>
       <label className="student-quick-file">有文件就一起放上来（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件，单个不超过 50 MB，总计不超过 80 MB</small></label>
       {formError ? <p className="form-error" role="alert">{formError}</p> : null}
       <footer><span>不用另开窗口，提交后本页会自动更新。</span><button type="button" onClick={onCancel}>取消</button><button className="primary" disabled={busy}>{busy ? "正在提交…" : "提交"}</button></footer>
@@ -1090,6 +1168,10 @@ function StudentResearchTracks({ scope, student, papers, onOpenComposer }: {
   const projectEntries = entries.filter((entry) => entry.kind === "项目");
   const latestPaperEntry = paperEntries.find((entry) => !leadPaper || entry.paper?.id === leadPaper.id) ?? paperEntries[0];
   const latestProjectEntry = projectEntries[0];
+  const planMilestones = [...student.milestones].sort((a, b) => a.sort_order - b.sort_order);
+  const currentProjectMilestoneId = latestProjectEntry?.project?.milestone_id
+    ?? planMilestones.find((milestone) => milestone.status === "in_progress")?.id
+    ?? planMilestones.find((milestone) => milestone.status === "pending" || milestone.status === "blocked")?.id;
   const scopedEntries = scope === "paper" ? paperEntries : projectEntries;
   const latestEntry = scopedEntries[0];
   const pendingCount = scopedEntries.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
@@ -1123,9 +1205,17 @@ function StudentResearchTracks({ scope, student, papers, onOpenComposer }: {
       </article> : null}
 
       {scope === "project" ? <article className="student-research-track project-track">
-        <div className="student-research-track-head"><span className="student-research-track-icon">题</span><div><small>课题这条线</small><strong>{latestProjectEntry ? "最近一次课题记录" : "还没有课题记录"}</strong></div><em>{projectEntries.length} 次更新</em></div>
-        {latestProjectEntry ? <div className="student-project-latest"><time>{shortDate(latestProjectEntry.submitted_at)}</time><h3>{latestProjectEntry.title}</h3><p>{latestProjectEntry.summary || latestProjectEntry.evidence}</p>{latestProjectEntry.attachments.length ? <small>{latestProjectEntry.attachments.length} 个附件已保存</small> : <small>这次没有附件</small>}</div> : <div className="student-track-empty"><strong>先记下最近做完的事</strong><span>实验、测试、数据整理和阶段结果都可以写。</span></div>}
-        {student.nextMilestone ? <div className="student-project-next"><span>下一培养节点</span><strong>{student.nextMilestone}</strong><small>{student.nextMilestoneDate ? `目标 ${student.nextMilestoneDate}` : "围绕节点形成一项可核验成果"}</small></div> : null}
+        <div className="student-research-track-head"><span className="student-research-track-icon">题</span><div><small>课题这条线</small><strong>{student.proposalTitle || "尚无已确认研究方案"}</strong></div><em>{student.proposalVersion ? `方案 V${student.proposalVersion}` : "待确认"}</em></div>
+        {planMilestones.length ? <section className="student-project-plan" aria-label="已确认研究方案与培养节点">
+          <header><div><span>执行路线</span><strong>{planMilestones.filter((milestone) => milestone.status === "completed").length}/{planMilestones.length} 个节点已完成</strong></div><small>节点由导师确认，进展记录只能发起完成申请。</small></header>
+          <ol>{planMilestones.map((milestone, index) => <li key={milestone.id} className={`${milestone.status} ${milestone.id === currentProjectMilestoneId ? "current" : ""}`}>
+            <i>{milestone.status === "completed" ? "✓" : index + 1}</i>
+            <div><strong>{milestone.title}</strong><small>{milestone.target_date ? `目标日期 ${milestone.target_date}` : "未设置目标日期"}</small><p>{milestone.evidence_target || "尚未填写验收证据"}</p></div>
+            <em>{milestoneStatusLabels[milestone.status]}</em>
+          </li>)}</ol>
+        </section> : <div className="student-project-plan-empty"><strong>研究方案还没有形成可执行节点</strong><span>方案确认后，这里会显示每个节点的日期、验收证据和执行状态。</span></div>}
+        {latestProjectEntry ? <div className="student-project-latest"><time>{shortDate(latestProjectEntry.submitted_at)} · V{latestProjectEntry.current_revision}</time><h3>{latestProjectEntry.title}</h3><p>{latestProjectEntry.summary || latestProjectEntry.evidence}</p>{latestProjectEntry.project ? <div><span>下一行动</span><strong>{latestProjectEntry.project.next_action}</strong><small>{latestProjectEntry.project.next_action_due_date ? `计划 ${latestProjectEntry.project.next_action_due_date}` : "未设置期限"}</small></div> : null}{latestProjectEntry.attachments.length ? <small>{latestProjectEntry.attachments.length} 个附件已保存</small> : <small>这次没有附件</small>}</div> : <div className="student-track-empty"><strong>先记下最近做完的事</strong><span>实验、测试、数据整理和阶段结果都可以写。</span></div>}
+        {latestProjectEntry?.project ? <div className="student-project-next"><span>关联节点</span><strong>{latestProjectEntry.project.milestone_title || "未关联节点"}</strong><small>{latestProjectEntry.project.completion_requested ? "已申请完成，等待导师实质性进展确认" : latestProjectEntry.project.evidence_target || "继续围绕节点积累证据"}</small></div> : student.nextMilestone ? <div className="student-project-next"><span>下一培养节点</span><strong>{student.nextMilestone}</strong><small>{student.nextMilestoneDate ? `目标 ${student.nextMilestoneDate}` : "围绕节点形成一项可核验成果"}</small></div> : null}
         <div className={`student-project-rhythm ${rhythmOverdue ? "overdue" : ""}`}><span>记录节奏</span><strong>{rhythmLabel}</strong><small>建议每 {student.cadenceDays} 天至少更新一次</small></div>
         <div className="student-project-review"><span>最近状态</span><strong>{latestProjectEntry ? studentReviewLabels[latestProjectEntry.review_status] : "等待第一条记录"}</strong></div>
         <button type="button" onClick={() => onOpenComposer("项目")}>记录课题进展</button>
@@ -1250,6 +1340,47 @@ function studentProgressKindMeta(kind: string) {
   return { label: kind || "进展", icon: "记", className: "other" };
 }
 
+function revisionSnapshotText(snapshot: Record<string, unknown>, key: string) {
+  const containers = [snapshot, snapshot.entry, snapshot.progress, snapshot.values]
+    .filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value));
+  for (const container of containers) {
+    const value = container[key];
+    if (typeof value === "string") return value;
+  }
+  return "";
+}
+
+function StudentProjectDetail({ project }: { project: StudentProjectProgress }) {
+  return <dl className="student-progress-entry-project">
+    <div><dt>关联节点</dt><dd>{project.milestone_title || "未关联节点"}</dd><small>{project.milestone_target_date ? `目标 ${project.milestone_target_date}` : "未设置节点日期"}</small></div>
+    <div><dt>下一行动</dt><dd>{project.next_action}</dd><small>{project.next_action_due_date ? `计划 ${project.next_action_due_date}` : "未设置期限"}</small></div>
+    {project.evidence_target ? <div className="wide"><dt>节点验收证据</dt><dd>{project.evidence_target}</dd></div> : null}
+    {project.blocker ? <div className="wide blocker"><dt>当前阻塞</dt><dd>{project.blocker}</dd></div> : null}
+    {project.completion_requested ? <div className="wide completion"><dt>节点完成申请</dt><dd>已申请；只有导师确认为实质性进展后才回写完成。</dd></div> : null}
+  </dl>;
+}
+
+function StudentRevisionHistory({ entry }: { entry: StudentProgress }) {
+  const revisions = [...entry.revisions].sort((a, b) => b.revision_number - a.revision_number);
+  if (!revisions.length) return null;
+  return <details className="student-revision-history">
+    <summary><span>版本历史</span><b>{revisions.length} 个不可变更版本</b><small>当前 V{entry.current_revision}</small></summary>
+    <ol>{revisions.map((revision) => {
+      const summary = revisionSnapshotText(revision.snapshot, "summary") || (revision.revision_number === entry.current_revision ? entry.summary : "");
+      const evidence = revisionSnapshotText(revision.snapshot, "evidence") || (revision.revision_number === entry.current_revision ? entry.evidence : "");
+      const attachments = entry.attachments.filter((attachment) => (attachment.revision_number || 1) === revision.revision_number);
+      const sources = entry.evidence_sources.filter((source) => (source.revision_number || 1) === revision.revision_number);
+      return <li key={revision.id} className={revision.revision_number === entry.current_revision ? "current" : ""}>
+        <header><span>V{revision.revision_number}</span><time>{shortDate(revision.created_at)}</time><em className={`student-state ${revision.review_status}`}>{studentReviewLabels[revision.review_status]}</em></header>
+        {summary ? <p>{summary}</p> : <p className="muted">该历史版本已封存。</p>}
+        {evidence ? <small>证据：{evidence}</small> : null}
+        {attachments.length || sources.length ? <footer><span>{attachments.length} 个附件</span><span>{sources.length} 条证据来源</span></footer> : null}
+        {revision.reviewer_note ? <blockquote><b>{revision.reviewer_name || "导师"}的当版意见</b><span>{revision.reviewer_note}</span></blockquote> : null}
+      </li>;
+    })}</ol>
+  </details>;
+}
+
 function StudentProgressOverview({ student, fixedFilter }: { student: Student; fixedFilter?: Exclude<StudentProgressFilter, "all"> }) {
   const [filter, setFilter] = useState<StudentProgressFilter>("all");
   const entries = useMemo(() => [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime()), [student.progress]);
@@ -1267,7 +1398,7 @@ function StudentProgressOverview({ student, fixedFilter }: { student: Student; f
     </nav> : null}
 
     <div className="student-progress-overview-list">
-      {visibleEntries.map((entry, index) => { const kind = studentProgressKindMeta(entry.kind); const context = entry.reviewer_note ? `导师已回复：${entry.reviewer_note}` : entry.kind === "组会" ? entry.evidence_sources[0]?.label || "飞书会议纪要" : entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : "点开查看完整内容"; return <details id={`student-progress-${entry.id}`} key={`${activeFilter}-${entry.id}`} className={`student-progress-entry kind-${kind.className}`} open={index === 0}>
+      {visibleEntries.map((entry, index) => { const kind = studentProgressKindMeta(entry.kind); const context = entry.reviewer_note ? `导师已回复：${entry.reviewer_note}` : entry.kind === "组会" ? entry.evidence_sources[0]?.label || "飞书会议纪要" : entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.project ? `${entry.project.milestone_title || "未关联节点"} · V${entry.current_revision}` : "点开查看完整内容"; return <details id={`student-progress-${entry.id}`} key={`${activeFilter}-${entry.id}`} className={`student-progress-entry kind-${kind.className}`} open={index === 0}>
         <summary>
           <span className="student-progress-entry-icon" aria-hidden="true">{kind.icon}</span>
           <span className="student-progress-entry-date"><time>{shortDate(entry.submitted_at)}</time><small>{kind.label}</small></span>
@@ -1277,8 +1408,11 @@ function StudentProgressOverview({ student, fixedFilter }: { student: Student; f
         <article>
           <p>{entry.summary || entry.evidence}</p>
           {entry.paper ? <dl className="student-progress-entry-paper"><div><dt>论文阶段</dt><dd>{paperStageMeta[entry.paper.stage].label}</dd></div><div><dt>下一步</dt><dd>{entry.paper.next_action}</dd></div><div><dt>准备完成</dt><dd>{entry.paper.next_action_due_date}</dd></div></dl> : null}
-          {entry.attachments?.length ? <div className="student-attachment-list" aria-label="提交附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
+          {entry.project ? <StudentProjectDetail project={entry.project} /> : null}
+          {entry.evidence ? <div className="student-progress-evidence"><span>可核验证据</span><p>{entry.evidence}</p></div> : null}
+          {entry.attachments?.length ? <div className="student-attachment-list" aria-label="提交附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>V{attachment.revision_number || 1} · {fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
           {entry.reviewer_note ? <blockquote><b>{entry.reviewer_name ? `${entry.reviewer_name}的回复` : "导师回复"}</b><span>{entry.reviewer_note}</span></blockquote> : null}
+          <StudentRevisionHistory entry={entry} />
         </article>
       </details>; })}
       {!visibleEntries.length ? <div className="student-portal-empty">这个分类还没有记录。提交后会直接出现在这里。</div> : null}
@@ -1300,8 +1434,11 @@ function StudentProgressPanel({ student, papers, onRefresh, onToast }: {
   async function resubmit(event: FormEvent<HTMLFormElement>, entry: StudentProgress) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
+    if (!formDataHasVerifiableEvidence(formData)) {
+      onToast("请填写可核验证据、提供 GitHub 链接，或上传至少一个附件");
+      return;
+    }
     formData.set("id", String(entry.id));
-    formData.set("kind", entry.kind);
     formData.set("title", entry.title);
     setBusy(entry.id);
     try {
@@ -1327,16 +1464,18 @@ function StudentProgressPanel({ student, papers, onRefresh, onToast }: {
     </article>; })}{!papers.length ? <div className="student-portal-empty">还没有论文。点上方“记论文进展”，可以直接新建。</div> : null}</div>
     <div className="student-progress-feed-list">{entries.map((entry) => <article id={`student-action-entry-${entry.id}`} tabIndex={-1} key={entry.id}>
       <div><span className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</span><time>{shortDate(entry.submitted_at)}</time></div>
-      <h3>{entry.paper?.title || entry.title}</h3><small>{entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : "历史论文进展"}</small><p>{entry.summary}</p>
+      <h3>{entry.paper?.title || entry.title}</h3><small>{entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version} · V${entry.current_revision}` : `历史论文进展 · V${entry.current_revision}`}</small><p>{entry.summary}</p>
       {entry.paper ? <dl className="student-paper-update-detail"><div><dt>接下来做</dt><dd>{entry.paper.next_action}</dd></div><div><dt>准备完成</dt><dd>{entry.paper.next_action_due_date}</dd></div>{entry.paper.submission_identifier ? <div><dt>稿件编号 / DOI</dt><dd>{entry.paper.submission_identifier}</dd></div> : null}{entry.paper.blocker ? <div className="blocker"><dt>卡在哪里</dt><dd>{entry.paper.blocker}</dd></div> : null}</dl> : null}
-      {entry.attachments?.length ? <div className="student-attachment-list" aria-label="提交附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
+      {entry.evidence ? <div className="student-progress-evidence"><span>可核验证据</span><p>{entry.evidence}</p></div> : null}
+      {entry.attachments?.length ? <div className="student-attachment-list" aria-label="提交附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>V{attachment.revision_number || 1} · {fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
       {entry.reviewer_note ? <blockquote><b>导师回复</b><span>{entry.reviewer_note}</span></blockquote> : null}
+      <StudentRevisionHistory entry={entry} />
       {entry.review_status === "changes_requested" ? <details><summary>按导师意见补一下</summary><form onSubmit={(event) => void resubmit(event, entry)}>
         <label>改完后的内容<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label>
-        <label>补充说明<textarea name="evidence" rows={3} required defaultValue={entry.evidence} /></label>
+        <label>可核验证据<textarea name="evidence" rows={3} defaultValue={entry.evidence} placeholder="也可改为提供 GitHub 链接或附件" /></label>
         {entry.kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required defaultValue={entry.literature_ref} /></label> : <input type="hidden" name="literatureRef" value={entry.literature_ref || ""} />}
         {entry.paper ? <><input type="hidden" name="paperId" value={entry.paper.id} /><label>论文阶段<select name="paperStage" defaultValue={entry.paper.stage}>{paperStages.map((stage) => <option key={stage} value={stage}>{paperStageMeta[stage].label}</option>)}</select></label><label>稿件版本<input name="manuscriptVersion" required defaultValue={entry.paper.manuscript_version} /></label><label>下一行动<textarea name="nextAction" rows={2} required defaultValue={entry.paper.next_action} /></label><label>行动期限<input name="nextActionDueDate" type="date" required defaultValue={entry.paper.next_action_due_date} /></label><label>阻塞问题（可选）<textarea name="blocker" rows={2} defaultValue={entry.paper.blocker} /></label><label>稿件编号 / DOI（可选）<input name="submissionIdentifier" defaultValue={entry.paper.submission_identifier} /></label></> : null}
-        <input name="gitUrl" type="hidden" value={entry.git_url || ""} />
+        <label>私有 GitHub 链接（可选）<input name="gitUrl" type="url" defaultValue={entry.git_url || ""} placeholder="https://github.com/…" /></label>
         <label>补充附件（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件，单个不超过 50 MB，总计不超过 80 MB</small></label>
         <button className="primary" disabled={busy === entry.id}>{busy === entry.id ? "提交中…" : "重新提交"}</button>
       </form></details> : null}
@@ -1357,8 +1496,11 @@ function StudentProjectProgressPanel({ student, onRefresh, onToast }: {
   async function resubmit(event: FormEvent<HTMLFormElement>, entry: StudentProgress) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
+    if (!formDataHasVerifiableEvidence(formData)) {
+      onToast("请填写可核验证据、提供 GitHub 链接，或上传至少一个附件");
+      return;
+    }
     formData.set("id", String(entry.id));
-    formData.set("kind", "项目");
     formData.set("title", entry.title);
     setBusy(entry.id);
     try {
@@ -1376,12 +1518,21 @@ function StudentProjectProgressPanel({ student, onRefresh, onToast }: {
     <div className="student-portal-panel-head"><div><span>我的课题</span><h2>课题进展</h2><p>平时做完的实验、数据和阶段结果都记在这里。</p></div><b>{entries.length}</b></div>
     <div className="student-progress-feed-list">{entries.map((entry) => <article id={`student-action-entry-${entry.id}`} tabIndex={-1} key={entry.id}>
       <div><span className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</span><time>{shortDate(entry.submitted_at)}</time></div>
-      <h3>{entry.title}</h3><small>课题进展</small><p>{entry.summary}</p>
-      {entry.attachments?.length ? <div className="student-attachment-list" aria-label="课题附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
+      <h3>{entry.title}</h3><small>{entry.project?.milestone_title ? `${entry.project.milestone_title} · V${entry.current_revision}` : `课题进展 · V${entry.current_revision}`}</small><p>{entry.summary}</p>
+      {entry.project ? <StudentProjectDetail project={entry.project} /> : null}
+      {entry.evidence ? <div className="student-progress-evidence"><span>可核验证据</span><p>{entry.evidence}</p></div> : null}
+      {entry.attachments?.length ? <div className="student-attachment-list" aria-label="课题附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>V{attachment.revision_number || 1} · {fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
       {entry.reviewer_note ? <blockquote><b>导师回复</b><span>{entry.reviewer_note}</span></blockquote> : null}
+      <StudentRevisionHistory entry={entry} />
       {entry.review_status === "changes_requested" ? <details><summary>按导师意见补一下</summary><form onSubmit={(event) => void resubmit(event, entry)}>
         <label>改完后的内容<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label>
-        <label>补充说明<textarea name="evidence" rows={3} required defaultValue={entry.evidence} /></label>
+        <label>可核验证据<textarea name="evidence" rows={3} defaultValue={entry.evidence} placeholder="也可改为提供 GitHub 链接或附件" /></label>
+        <label>关联培养节点<select name="linkedMilestoneId" defaultValue={entry.project?.milestone_id && student.milestones.some((milestone) => milestone.id === entry.project?.milestone_id && milestone.status !== "completed") ? String(entry.project.milestone_id) : ""}><option value="">暂不关联节点</option>{student.milestones.filter((milestone) => milestone.status !== "completed").sort((a, b) => a.sort_order - b.sort_order).map((milestone) => <option key={milestone.id} value={milestone.id}>{milestone.title} · {milestoneStatusLabels[milestone.status]}</option>)}</select></label>
+        <label>下一行动<textarea name="nextAction" rows={2} required defaultValue={entry.project?.next_action || ""} /></label>
+        <label>计划完成日期<input name="nextActionDueDate" type="date" required defaultValue={entry.project?.next_action_due_date || ""} /></label>
+        <label>当前阻塞（可选）<textarea name="blocker" rows={2} defaultValue={entry.project?.blocker || ""} /></label>
+        <input type="hidden" name="completionRequested" value="0" />
+        <label htmlFor={`student-project-completion-${entry.id}`} className="student-completion-request"><input id={`student-project-completion-${entry.id}`} name="completionRequested" type="checkbox" value="1" defaultChecked={entry.project?.completion_requested} /><span>申请完成所选节点<small>导师确认实质性进展后才会回写完成。</small></span></label>
         <input type="hidden" name="literatureRef" value="" /><label>私有 GitHub 链接（可选）<input name="gitUrl" type="url" defaultValue={entry.git_url} placeholder="仅支持 https://" /></label>
         <label>补充附件（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件，单个不超过 50 MB，总计不超过 80 MB</small></label>
         <button className="primary" disabled={busy === entry.id}>{busy === entry.id ? "提交中…" : "重新提交"}</button>
@@ -1890,9 +2041,9 @@ function ProposalEditor({ student, proposal, onCancel, onSaved }: {
   onCancel: () => void;
   onSaved: (message: string) => Promise<void>;
 }) {
-  const [milestones, setMilestones] = useState<Array<{ title: string; targetDate: string; evidenceTarget: string; status: MilestoneStatus }>>(
-    proposal?.milestones.map((item) => ({ title: item.title, targetDate: item.target_date, evidenceTarget: item.evidence_target, status: item.status }))
-      ?? [{ title: "", targetDate: "", evidenceTarget: "", status: "pending" }],
+  const [milestones, setMilestones] = useState<Array<{ id: number | null; title: string; targetDate: string; evidenceTarget: string; status: MilestoneStatus }>>(
+    proposal?.milestones.map((item) => ({ id: item.id, title: item.title, targetDate: item.target_date, evidenceTarget: item.evidence_target, status: item.status }))
+      ?? [{ id: null, title: "", targetDate: "", evidenceTarget: "", status: "pending" }],
   );
   const [busy, setBusy] = useState<"draft" | "submit" | null>(null);
   const [formError, setFormError] = useState("");
@@ -1940,7 +2091,7 @@ function ProposalEditor({ student, proposal, onCancel, onSaved }: {
       </div>
 
       <div className="milestone-editor">
-        <div className="milestone-editor-head"><div><strong>培养节点与验收证据</strong><small>节点采用通过/未通过管理，不混入普通进展分。</small></div><button type="button" onClick={() => setMilestones((current) => [...current, { title: "", targetDate: "", evidenceTarget: "", status: "pending" }])}>＋ 添加节点</button></div>
+        <div className="milestone-editor-head"><div><strong>培养节点与验收证据</strong><small>节点采用通过/未通过管理，不混入普通进展分。</small></div><button type="button" onClick={() => setMilestones((current) => [...current, { id: null, title: "", targetDate: "", evidenceTarget: "", status: "pending" }])}>＋ 添加节点</button></div>
         {milestones.map((milestone, index) => <div className="milestone-edit-row" key={index}>
           <b>{index + 1}</b>
           <input aria-label={`第${index + 1}个节点名称`} value={milestone.title} onChange={(event) => updateMilestone(index, "title", event.target.value)} placeholder="如：完成开题论证" />
@@ -2017,7 +2168,7 @@ function ProposalDetail({ proposal, canReview, onToast, onRefresh }: {
     <div className="proposal-detail-grid">{details.map(([label, value]) => <section key={label}><span>{label}</span><p>{value}</p></section>)}</div>
 
     <section className="proposal-milestones"><div className="section-title"><div><h3>培养节点</h3><p>方案确认后，授权管理员或超级管理员可以更新执行状态；完成必须另有证据记录。</p></div><b>{proposal.milestones.filter((item) => item.status === "completed").length}/{proposal.milestones.length}</b></div>
-      <div className="milestone-timeline">{proposal.milestones.map((milestone, index) => <div className={`milestone-item ${milestone.status}`} key={milestone.id}><i>{index + 1}</i><div><strong>{milestone.title}</strong><small>目标日期：{milestone.target_date || "待补充"}</small><p>{milestone.evidence_target || "尚未填写验收证据"}</p></div>{proposal.status === "approved" ? <select aria-label={`${milestone.title}状态`} value={milestone.status} disabled={busy === `milestone-${milestone.id}`} onChange={(event) => void updateMilestone(milestone.id, event.target.value as MilestoneStatus)}>{Object.entries(milestoneStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : <span>{milestoneStatusLabels[milestone.status]}</span>}</div>)}</div>
+      <div className="milestone-timeline">{proposal.milestones.map((milestone, index) => <div className={`milestone-item ${milestone.status}`} key={milestone.id}><i>{index + 1}</i><div><strong>{milestone.title}</strong><small>目标日期：{milestone.target_date || "待补充"}</small><p>{milestone.evidence_target || "尚未填写验收证据"}</p></div>{proposal.status === "approved" ? <select aria-label={`${milestone.title}状态；完成必须通过实质性进展审核`} value={milestone.status} disabled={busy === `milestone-${milestone.id}`} onChange={(event) => void updateMilestone(milestone.id, event.target.value as MilestoneStatus)}>{Object.entries(milestoneStatusLabels).filter(([value]) => value !== "completed" || milestone.status === "completed").map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : <span>{milestoneStatusLabels[milestone.status]}</span>}</div>)}</div>
     </section>
 
     {canReview && (proposal.status === "submitted" || proposal.status === "approved") ? <section className="proposal-review-box"><label>{proposal.status === "submitted" ? "导师审核意见" : "重大调整说明"}<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder={proposal.status === "submitted" ? "退回修改时必须说明具体问题；确认时可记录验收意见" : "说明为什么需要重开方案并形成新版本"} /></label><div>{proposal.status === "submitted" ? <><button disabled={Boolean(busy)} onClick={() => void review("request_changes")}>退回修改</button><button className="primary" disabled={Boolean(busy)} onClick={() => void review("approve")}>确认并冻结</button></> : <button disabled={Boolean(busy)} onClick={() => void review("reopen")}>重开修订</button>}</div></section> : null}

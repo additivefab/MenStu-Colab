@@ -3,7 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-test("0010-0016 preserve existing data while adding identity, attachment, paper, guidance, and production schema gates", async () => {
+test("0010-0017 preserve existing data while adding identity, attachment, paper, guidance, production, and revision gates", async () => {
   const migrationDirectory = new URL("../drizzle/", import.meta.url);
   const names = (await readdir(migrationDirectory))
     .filter((name) => /^\d{4}_.*\.sql$/.test(name))
@@ -11,7 +11,7 @@ test("0010-0016 preserve existing data while adding identity, attachment, paper,
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
 
-  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_", "0014_", "0015_", "0016_"].some((prefix) => item.startsWith(prefix)))) {
+  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_", "0014_", "0015_", "0016_", "0017_"].some((prefix) => item.startsWith(prefix)))) {
     database.exec(await readFile(new URL(name, migrationDirectory), "utf8"));
   }
   database.exec(`
@@ -38,6 +38,7 @@ test("0010-0016 preserve existing data while adding identity, attachment, paper,
   const guidanceMigration = await readFile(new URL(names.find((item) => item.startsWith("0014_")), migrationDirectory), "utf8");
   const freeGuidanceMigration = await readFile(new URL(names.find((item) => item.startsWith("0015_")), migrationDirectory), "utf8");
   const productionMigration = await readFile(new URL(names.find((item) => item.startsWith("0016_")), migrationDirectory), "utf8");
+  const revisionMigration = await readFile(new URL(names.find((item) => item.startsWith("0017_")), migrationDirectory), "utf8");
   database.exec(businessMigration);
   database.exec(roleMigration);
   database.exec(roleIndexMigration);
@@ -223,6 +224,126 @@ test("0010-0016 preserve existing data while adding identity, attachment, paper,
   assert.throws(
     () => database.exec("INSERT INTO app_schema_meta (id, version) VALUES (2, 16)"),
     /CHECK constraint failed: app_schema_meta_singleton/,
+  );
+
+  database.exec(`
+    UPDATE progress_entries
+      SET submitted_by_user_id = 9002, reviewed_by_user_id = 9003
+      WHERE id = 1;
+    INSERT INTO progress_entries
+      (student_id, kind, title, summary, evidence, status, review_status, assessment,
+       submitted_by_user_id, reviewed_by_user_id)
+      VALUES ('student-upgrade', '实验', '遗留孤儿账号进展', '旧账号已被删除', '历史证据',
+       'supporting', 'accepted', 'supporting', 991001, 991002);
+  `);
+  database.exec(revisionMigration);
+  assert.equal(database.prepare("SELECT version FROM app_schema_meta WHERE id = 1").get().version, 17);
+  assert.deepEqual(
+    database.prepare(`SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name IN ('progress_revisions', 'project_progress_details')
+      ORDER BY name`).all().map((row) => row.name),
+    ["progress_revisions", "project_progress_details"],
+  );
+  assert.equal(database.prepare("SELECT current_revision FROM progress_entries WHERE id = 1").get().current_revision, 1);
+  const historicalRevision = database.prepare(`SELECT revision_number, snapshot_json, review_status, assessment,
+    submitted_by_user_id, reviewed_by_user_id
+    FROM progress_revisions WHERE progress_entry_id = 1`).get();
+  assert.equal(historicalRevision.revision_number, 1);
+  assert.equal(historicalRevision.review_status, "accepted");
+  assert.equal(historicalRevision.assessment, "substantive");
+  assert.equal(historicalRevision.submitted_by_user_id, 9002);
+  assert.equal(historicalRevision.reviewed_by_user_id, 9003);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(JSON.parse(historicalRevision.snapshot_json)).filter(([key]) => ["kind", "title", "summary", "evidence"].includes(key))),
+    {
+      kind: "实验",
+      title: "历史实质性进展",
+      summary: "历史结论",
+      evidence: "历史证据",
+    },
+  );
+  assert.equal(
+    database.prepare("SELECT revision_number FROM progress_attachments WHERE progress_entry_id = 1").get().revision_number,
+    1,
+  );
+  assert.equal(
+    database.prepare("SELECT MIN(revision_number) AS revision_number FROM progress_evidence_sources WHERE progress_entry_id = 1").get().revision_number,
+    1,
+  );
+  assert.deepEqual(
+    { ...database.prepare(`SELECT submitted_by_user_id, reviewed_by_user_id
+      FROM progress_revisions WHERE progress_entry_id = 2`).get() },
+    { submitted_by_user_id: null, reviewed_by_user_id: null },
+  );
+
+  database.exec(`
+    INSERT INTO research_proposals
+      (student_id, title, status, current_version, created_by_user_id)
+      VALUES ('student-upgrade', '稳定节点方案', 'approved', 3, 9002);
+    INSERT INTO research_milestones
+      (proposal_id, title, target_date, evidence_target, status, sort_order)
+      VALUES (1, '完成可复现实验', '2026-10-01', '实验日志与代码提交', 'in_progress', 0);
+    INSERT INTO progress_entries
+      (student_id, kind, title, summary, evidence, status, review_status, submitted_by_user_id, current_revision)
+      VALUES ('student-upgrade', '项目', '课题节点进展', '完成第一轮复现', '日志哈希', 'pending', 'submitted', 9002, 1);
+    INSERT INTO project_progress_details
+      (progress_entry_id, milestone_id, milestone_title, milestone_target_date, evidence_target,
+       proposal_version, next_action, next_action_due_date, blocker, completion_requested)
+      VALUES (3, 1, '完成可复现实验', '2026-10-01', '实验日志与代码提交',
+       3, '运行第二个随机种子', '2026-09-10', '', 1);
+    INSERT INTO progress_revisions
+      (progress_entry_id, revision_number, snapshot_json, submitted_by_user_id)
+      VALUES (3, 1, '{"kind":"项目","project":{"milestoneId":1}}', 9002);
+    UPDATE research_milestones SET archived_at = CURRENT_TIMESTAMP WHERE id = 1;
+  `);
+  assert.deepEqual(
+    { ...database.prepare(`SELECT d.milestone_id, d.milestone_title, d.proposal_version,
+      m.archived_at IS NOT NULL AS milestone_archived
+      FROM project_progress_details d JOIN research_milestones m ON m.id = d.milestone_id
+      WHERE d.progress_entry_id = 3`).get() },
+    {
+      milestone_id: 1,
+      milestone_title: "完成可复现实验",
+      proposal_version: 3,
+      milestone_archived: 1,
+    },
+  );
+  database.exec(`
+    UPDATE progress_entries SET current_revision = 2 WHERE id = 3;
+    INSERT INTO progress_revisions
+      (progress_entry_id, revision_number, snapshot_json, submitted_by_user_id)
+      VALUES (3, 2, '{"kind":"项目","project":{"milestoneId":1,"completionRequested":true}}', 9002);
+    INSERT INTO progress_attachments
+      (progress_entry_id, storage_key, file_name, content_type, size_bytes, content_sha256,
+       revision_number, uploaded_by_user_id)
+      VALUES (3, 'progress/revision-2/log.csv', '复现实验.csv', 'text/csv', 256, 'def456', 2, 9002);
+    INSERT INTO progress_evidence_sources
+      (progress_entry_id, source_type, label, source_ref, content_sha256, revision_number, created_by_user_id)
+      VALUES (3, 'attachment', '复现实验.csv', 'progress/revision-2/log.csv', 'def456', 2, 9002);
+  `);
+  assert.deepEqual(
+    database.prepare("SELECT revision_number FROM progress_revisions WHERE progress_entry_id = 3 ORDER BY revision_number").all().map((row) => row.revision_number),
+    [1, 2],
+  );
+  assert.equal(
+    database.prepare("SELECT revision_number FROM progress_attachments WHERE progress_entry_id = 3").get().revision_number,
+    2,
+  );
+  assert.equal(
+    database.prepare("SELECT revision_number FROM progress_evidence_sources WHERE progress_entry_id = 3").get().revision_number,
+    2,
+  );
+  assert.throws(
+    () => database.exec(`INSERT INTO progress_revisions
+      (progress_entry_id, revision_number, snapshot_json, submitted_by_user_id)
+      VALUES (3, 2, '{}', 9002)`),
+    /UNIQUE constraint failed: progress_revisions\.progress_entry_id, progress_revisions\.revision_number/,
+  );
+  assert.throws(
+    () => database.exec(`INSERT INTO project_progress_details
+      (progress_entry_id, next_action, next_action_due_date, completion_requested)
+      VALUES (1, '非法完成值', '2026-09-11', 2)`),
+    /CHECK constraint failed: project_progress_completion_requested/,
   );
   assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
   database.close();

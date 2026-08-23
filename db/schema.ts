@@ -54,6 +54,7 @@ export const progressEntries = sqliteTable(
     reviewedByUserId: integer("reviewed_by_user_id"),
     reviewerNote: text("reviewer_note").notNull().default(""),
     reviewedAt: text("reviewed_at"),
+    currentRevision: integer("current_revision").notNull().default(1),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
@@ -332,6 +333,7 @@ export const progressAttachments = sqliteTable(
     contentType: text("content_type").notNull().default("application/octet-stream"),
     sizeBytes: integer("size_bytes").notNull(),
     contentSha256: text("content_sha256").notNull(),
+    revisionNumber: integer("revision_number").notNull().default(1),
     uploadedByUserId: integer("uploaded_by_user_id")
       .notNull()
       .references(() => appUsers.id),
@@ -340,6 +342,30 @@ export const progressAttachments = sqliteTable(
   (table) => [
     uniqueIndex("idx_progress_attachments_storage_key").on(table.storageKey),
     index("idx_progress_attachments_entry_created").on(table.progressEntryId, table.createdAt),
+    index("idx_progress_attachments_entry_revision").on(table.progressEntryId, table.revisionNumber),
+  ],
+);
+
+export const progressRevisions = sqliteTable(
+  "progress_revisions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    progressEntryId: integer("progress_entry_id").notNull().references(() => progressEntries.id),
+    revisionNumber: integer("revision_number").notNull(),
+    snapshotJson: text("snapshot_json").notNull(),
+    submittedByUserId: integer("submitted_by_user_id").references(() => appUsers.id),
+    reviewStatus: text("review_status", {
+      enum: ["submitted", "in_review", "accepted", "changes_requested", "rejected"],
+    }).notNull().default("submitted"),
+    assessment: text("assessment", { enum: ["substantive", "supporting"] }),
+    reviewerNote: text("reviewer_note").notNull().default(""),
+    reviewedByUserId: integer("reviewed_by_user_id").references(() => appUsers.id),
+    reviewedAt: text("reviewed_at"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_progress_revisions_entry_number").on(table.progressEntryId, table.revisionNumber),
+    index("idx_progress_revisions_entry_created").on(table.progressEntryId, table.createdAt),
   ],
 );
 
@@ -477,10 +503,35 @@ export const researchMilestones = sqliteTable(
       .notNull()
       .default("pending"),
     sortOrder: integer("sort_order").notNull().default(0),
+    archivedAt: text("archived_at"),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [index("idx_research_milestones_proposal_order").on(table.proposalId, table.sortOrder)],
+);
+
+export const projectProgressDetails = sqliteTable(
+  "project_progress_details",
+  {
+    progressEntryId: integer("progress_entry_id")
+      .primaryKey()
+      .references(() => progressEntries.id),
+    milestoneId: integer("milestone_id").references(() => researchMilestones.id),
+    milestoneTitle: text("milestone_title").notNull().default(""),
+    milestoneTargetDate: text("milestone_target_date"),
+    evidenceTarget: text("evidence_target").notNull().default(""),
+    proposalVersion: integer("proposal_version"),
+    nextAction: text("next_action").notNull(),
+    nextActionDueDate: text("next_action_due_date").notNull(),
+    blocker: text("blocker").notNull().default(""),
+    completionRequested: integer("completion_requested", { mode: "boolean" }).notNull().default(false),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_project_progress_milestone_created").on(table.milestoneId, table.createdAt),
+    index("idx_project_progress_due").on(table.nextActionDueDate),
+    check("project_progress_completion_requested", sql`${table.completionRequested} IN (0, 1)`),
+  ],
 );
 
 export const researchOutputs = sqliteTable(
@@ -614,12 +665,14 @@ export const progressEvidenceSources = sqliteTable(
     sourceRef: text("source_ref").notNull().default(""),
     sourceImportId: integer("source_import_id").references(() => feishuMeetingSummaryImports.id),
     contentSha256: text("content_sha256").notNull().default(""),
+    revisionNumber: integer("revision_number").notNull().default(1),
     occurredAt: text("occurred_at"),
     createdByUserId: integer("created_by_user_id").references(() => appUsers.id),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     index("idx_progress_evidence_entry").on(table.progressEntryId, table.createdAt),
+    index("idx_progress_evidence_entry_revision").on(table.progressEntryId, table.revisionNumber),
     index("idx_progress_evidence_import").on(table.sourceImportId),
   ],
 );
