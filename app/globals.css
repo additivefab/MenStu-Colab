@@ -690,14 +690,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-primary-actions { max-width: 520px; display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; flex: 0 0 auto; }
 .student-primary-actions button { min-height: 46px; padding: 0 19px; border: 1px solid rgba(255,255,255,.45); border-radius: 12px; color: #fff; background: rgba(255,255,255,.08); font-weight: 750; }
 .student-primary-actions button.primary { color: #20538f; background: #fff; }
-.student-portal-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 18px 0; }
-.student-portal-summary article { padding: 19px 21px; border: 1px solid #e4eaf1; border-radius: 16px; background: rgba(255,255,255,.92); }
-.student-portal-summary span, .student-portal-summary strong, .student-portal-summary small { display: block; }
-.student-portal-summary span { color: #7e8b9e; font-size: 12px; font-weight: 750; }
-.student-portal-summary strong { margin: 6px 0 4px; font-size: 24px; }
-.student-portal-summary small { color: #8c98a8; font-size: 12px; }
-.student-portal-summary article.overdue { border-color: #edc9c4; background: #fff8f7; }
-.student-portal-summary article.overdue strong { color: #ad4c44; }
 .student-quick-progress { margin-top: 18px; scroll-margin-top: 18px; overflow: hidden; border: 1px solid #cbdcf0; border-radius: 18px; background: #fff; box-shadow: 0 12px 32px rgba(42, 83, 132, .1); }
 .student-quick-progress > header { padding: 20px 24px; display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; color: #fff; background: linear-gradient(125deg, #1c4778, #2f72b8); }
 .student-quick-progress > header span, .student-quick-progress > header h2, .student-quick-progress > header p { display: block; }
@@ -716,6 +708,69 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-quick-progress footer span { margin-right: auto; color: #7d8999; font-size: 11px; }
 .student-quick-progress footer button { min-height: 40px; padding: 0 15px; border: 1px solid #d7e0ea; border-radius: 9px; color: #53677f; background: white; font-weight: 750; }
 .student-quick-progress footer button.primary { border-color: #2f6fbb; color: white; background: #2f6fbb; }
+.student-research-tracks { margin: 18px 0; overflow: hidden; border: 1px solid #dce5ef; border-radius: 21px; background: #fff; box-shadow: 0 12px 32px rgba(43, 77, 119, .08); }
+.student-research-tracks > header { padding: 23px 25px 18px; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; border-bottom: 1px solid #e9eef4; }
+.student-research-tracks > header span { color: #3971ba; font-size: 11px; font-weight: 800; letter-spacing: .11em; }
+.student-research-tracks > header h2 { margin: 5px 0 3px; font-size: 21px; }
+.student-research-tracks > header p { margin: 0; color: #8793a4; font-size: 13px; }
+.student-research-tracks > header > strong { min-width: 130px; color: #2d527d; font-size: 15px; text-align: right; }
+.student-research-tracks > header > strong small { display: block; margin-top: 4px; color: #97a2b0; font-size: 10px; font-weight: 600; }
+.student-research-track-grid { padding: 18px 24px; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr); gap: 14px; background: #f8fafd; }
+.student-research-track { min-width: 0; padding: 19px; display: flex; flex-direction: column; border: 1px solid #dfe7f0; border-radius: 16px; background: #fff; }
+.student-research-track.paper-track { box-shadow: inset 0 3px #3979bd; }
+.student-research-track.project-track { box-shadow: inset 0 3px #31906b; }
+.student-research-track-head { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 11px; }
+.student-research-track-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; color: #2c68aa; background: #e9f3ff; font-size: 13px; font-weight: 850; }
+.project-track .student-research-track-icon { color: #26765b; background: #e8f6ef; }
+.student-research-track-head small, .student-research-track-head strong { display: block; }
+.student-research-track-head small { color: #8391a2; font-size: 10px; }
+.student-research-track-head strong { margin-top: 4px; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+.student-research-track-head > em { align-self: start; padding: 5px 8px; border-radius: 99px; color: #54708f; background: #edf2f7; font-size: 10px; font-style: normal; font-weight: 750; white-space: nowrap; }
+.student-paper-stage-summary { margin-top: 20px; display: flex; align-items: baseline; gap: 9px; }
+.student-paper-stage-summary span { color: #8290a1; font-size: 10px; font-weight: 750; }
+.student-paper-stage-summary strong { font-size: 15px; }
+.student-paper-stage-summary em { margin-left: auto; color: #3973b7; font-size: 10px; font-style: normal; font-weight: 800; }
+.student-paper-stage-bar { height: 8px; margin-top: 10px; overflow: hidden; border-radius: 99px; background: #e7edf4; }
+.student-paper-stage-bar > i { height: 100%; display: block; border-radius: inherit; background: linear-gradient(90deg, #2f6caf, #4c90d3); transition: width .3s ease; }
+.student-paper-stage-steps { margin: 9px 0 0; padding: 0; display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 4px; list-style: none; }
+.student-paper-stage-steps li { min-width: 0; }
+.student-paper-stage-steps li > i { height: 5px; display: block; border-radius: 99px; background: #e3e8ee; }
+.student-paper-stage-steps li.done > i { background: #3d7fbd; }
+.student-paper-stage-steps li.current > i { background: #e2a33d; box-shadow: 0 0 0 2px #fff0cf; }
+.student-paper-stage-steps small { display: block; margin-top: 6px; color: #9aa4b1; font-size: 8px; line-height: 1.35; text-align: center; }
+.student-paper-stage-steps li.done small { color: #66819e; }
+.student-paper-stage-steps li.current small { color: #8b5c0c; font-weight: 850; }
+.student-paper-stage-gate { margin: 12px 0 0; padding: 10px 12px; border-radius: 9px; color: #5d6e82; background: #f3f6fa; font-size: 11px; line-height: 1.6; }
+.student-track-next-action { margin-top: 12px; padding: 13px 14px; border: 1px solid #d7e5f4; border-radius: 11px; background: #f2f7fe; }
+.student-track-next-action span, .student-track-next-action strong, .student-track-next-action small { display: block; }
+.student-track-next-action span { color: #3b70a9; font-size: 10px; font-weight: 800; }
+.student-track-next-action strong { margin: 5px 0 3px; font-size: 13px; line-height: 1.55; }
+.student-track-next-action small { color: #8391a2; font-size: 10px; }
+.student-track-next-action.overdue { border-color: #ebc6c0; background: #fff5f3; }
+.student-track-next-action.overdue span, .student-track-next-action.overdue small { color: #a75a50; }
+.student-track-empty { min-height: 164px; margin-top: 18px; display: grid; place-content: center; gap: 6px; border: 1px dashed #d7e1ec; border-radius: 12px; color: #8491a2; background: #fafcfe; text-align: center; }
+.student-track-empty strong { color: #4e6178; font-size: 13px; }
+.student-track-empty span { font-size: 11px; }
+.student-research-track > button { min-height: 42px; margin-top: 14px; border: 0; border-radius: 10px; color: #fff; background: #3474b8; font-size: 12px; font-weight: 800; }
+.student-research-track.project-track > button { background: #318165; }
+.student-project-latest { margin-top: 18px; padding: 14px; border-radius: 12px; background: #f3f8f6; }
+.student-project-latest time { color: #6e8a7d; font-size: 10px; font-weight: 750; }
+.student-project-latest h3 { margin: 7px 0 5px; font-size: 14px; line-height: 1.5; }
+.student-project-latest p { max-height: 88px; margin: 0; overflow: hidden; color: #607267; font-size: 11px; line-height: 1.65; }
+.student-project-latest small { display: block; margin-top: 8px; color: #8b9b92; font-size: 9px; }
+.student-project-rhythm { margin-top: 12px; padding: 12px 13px; border: 1px solid #dce8e2; border-radius: 11px; }
+.student-project-rhythm span, .student-project-rhythm strong, .student-project-rhythm small { display: block; }
+.student-project-rhythm span { color: #6f8479; font-size: 10px; }
+.student-project-rhythm strong { margin: 4px 0 2px; color: #316b56; font-size: 13px; }
+.student-project-rhythm small { color: #96a29b; font-size: 9px; }
+.student-project-rhythm.overdue { border-color: #ebc6c0; background: #fff7f5; }
+.student-project-rhythm.overdue strong { color: #a34f46; }
+.student-project-review { margin-top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #819086; font-size: 10px; }
+.student-project-review strong { color: #52685d; font-size: 11px; }
+.student-research-track-facts { padding: 13px 24px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; border-top: 1px solid #e9eef4; color: #8190a2; background: #fff; font-size: 10px; }
+.student-research-track-facts span { min-width: 0; padding: 4px 11px; border-left: 1px solid #e2e8ef; }
+.student-research-track-facts span:first-child { border-left: 0; }
+.student-research-track-facts b { margin-right: 4px; color: #345f8e; font-size: 13px; }
 .student-progress-overview { margin-bottom: 18px; overflow: hidden; border: 1px solid #dce5ef; border-radius: 21px; background: #fff; box-shadow: 0 12px 32px rgba(43, 77, 119, .08); }
 .student-progress-overview-head { padding: 23px 25px 18px; display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .student-progress-overview-head span { color: #3971ba; font-size: 11px; font-weight: 800; letter-spacing: .12em; }
@@ -723,18 +778,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-progress-overview-head p { margin: 0; color: #8793a4; font-size: 13px; }
 .student-progress-overview-head > strong { min-width: 62px; color: #245f9f; font-size: 28px; text-align: right; }
 .student-progress-overview-head > strong small { display: block; margin-top: 2px; color: #94a0ae; font-size: 10px; font-weight: 650; }
-.student-progress-current { margin: 0 24px 18px; padding: 17px 18px; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(340px, .9fr); gap: 18px; border: 1px solid #dce8f6; border-radius: 15px; background: linear-gradient(120deg, #f2f7ff, #f9fbfe); }
-.student-progress-current-main { min-width: 0; display: flex; align-items: center; gap: 14px; }
-.student-progress-current-main > i { width: 46px; height: 46px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 14px; color: #fff; background: linear-gradient(135deg, #245f9f, #418bd2); box-shadow: 0 8px 18px rgba(42, 100, 161, .22); font-size: 15px; font-style: normal; font-weight: 850; }
-.student-progress-current-main span, .student-progress-current-main strong, .student-progress-current-main small { display: block; }
-.student-progress-current-main span { color: #51769d; font-size: 10px; font-weight: 800; }
-.student-progress-current-main strong { margin: 5px 0 3px; font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
-.student-progress-current-main small { color: #8290a2; font-size: 11px; line-height: 1.5; }
-.student-progress-current dl { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.student-progress-current dl > div { min-width: 0; padding-left: 13px; border-left: 1px solid #d7e2ef; }
-.student-progress-current dt { color: #8290a2; font-size: 10px; font-weight: 750; }
-.student-progress-current dd { margin: 4px 0 2px; color: #2e4968; font-size: 13px; font-weight: 850; }
-.student-progress-current dl small { display: block; color: #96a1af; font-size: 9px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .student-progress-filters { padding: 0 24px 15px; display: flex; gap: 8px; overflow-x: auto; border-bottom: 1px solid #e9eef4; }
 .student-progress-filters button { min-height: 38px; padding: 0 12px; display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; border: 1px solid #dce4ed; border-radius: 10px; color: #66768a; background: #fff; font-size: 12px; font-weight: 750; }
 .student-progress-filters button b { min-width: 20px; height: 20px; padding: 0 5px; display: grid; place-items: center; border-radius: 99px; color: #7e8c9e; background: #f0f3f7; font-size: 10px; }
@@ -1260,14 +1303,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-portal-hero { align-items: stretch; flex-direction: column; margin-top: 18px; padding: 28px 22px; }
   .student-primary-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .student-primary-actions button { min-height: 46px; }
-  .student-portal-summary { grid-template-columns: 1fr 1fr; }
   .student-quick-progress > header, .student-quick-progress form { padding-inline: 18px; }
   .student-quick-row, .student-quick-row.new-paper { grid-template-columns: 1fr; }
   .student-quick-progress footer { align-items: stretch; flex-wrap: wrap; }
   .student-quick-progress footer span { width: 100%; margin: 0 0 3px; }
   .student-quick-progress footer button { flex: 1; min-height: 44px; }
+  .student-research-tracks > header { padding-inline: 18px; }
+  .student-research-track-grid { padding-inline: 18px; grid-template-columns: 1fr; }
+  .student-paper-stage-steps { grid-template-columns: repeat(9, 76px); overflow-x: auto; padding-bottom: 7px; }
+  .student-research-track-facts { grid-template-columns: 1fr 1fr; padding-inline: 18px; }
+  .student-research-track-facts span:nth-child(3) { border-left: 0; }
   .student-progress-overview-head, .student-progress-filters { padding-inline: 18px; }
-  .student-progress-current { margin-inline: 18px; grid-template-columns: 1fr; }
   .student-progress-entry > summary { grid-template-columns: 40px minmax(0, 1fr) auto; padding-inline: 18px; }
   .student-progress-entry-icon { grid-column: 1; grid-row: 1 / 3; }
   .student-progress-entry-date { grid-column: 2; grid-row: 1; }
@@ -1305,9 +1351,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .modal { padding: 23px 18px; }
   .modal-layer { padding: 10px; }
   .student-primary-actions { grid-template-columns: 1fr; }
-  .student-portal-summary { grid-template-columns: 1fr; }
-  .student-progress-current dl { grid-template-columns: 1fr; }
-  .student-progress-current dl > div { padding: 9px 0 0; border-top: 1px solid #d7e2ef; border-left: 0; }
+  .student-research-tracks > header { flex-direction: column; }
+  .student-research-tracks > header > strong { text-align: left; }
+  .student-research-track-grid { padding: 14px; }
+  .student-research-track { padding: 17px; }
+  .student-research-track-head { grid-template-columns: 42px minmax(0, 1fr); }
+  .student-research-track-head > em { grid-column: 2; justify-self: start; }
+  .student-paper-stage-summary { flex-wrap: wrap; }
+  .student-paper-stage-summary em { width: 100%; margin: 0; }
+  .student-research-track-facts { grid-template-columns: 1fr; }
+  .student-research-track-facts span, .student-research-track-facts span:nth-child(3) { border-top: 1px solid #e5eaf0; border-left: 0; }
+  .student-research-track-facts span:first-child { border-top: 0; }
   .student-progress-overview-head > strong { font-size: 24px; }
   .student-progress-entry > article { padding-left: 18px; }
   .student-meeting-form > div { grid-template-columns: 1fr; }

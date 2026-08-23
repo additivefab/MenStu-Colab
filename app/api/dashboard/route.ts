@@ -299,6 +299,13 @@ export async function GET(request: Request) {
           stage: student.stage,
           cadenceDays: student.cadenceDays,
           currentFocus: student.currentFocus,
+          latestTitle: student.latestTitle,
+          latestKind: student.latestKind,
+          proposalStatus: student.proposalStatus,
+          nextMilestone: student.nextMilestone,
+          nextMilestoneDate: student.nextMilestoneDate,
+          outputCount: student.outputCount,
+          risk: student.risk,
           progress: student.progress.map((entry) => ({
             id: entry.id,
             kind: entry.kind,

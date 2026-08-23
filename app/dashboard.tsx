@@ -634,16 +634,6 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
   const student = data.students.find((item) => item.id === data.viewer.studentId);
   if (!student) return <main className="student-portal-shell"><div className="error-state"><strong>学生档案尚未绑定</strong><span>请联系管理员核对飞书账号与学生记录。</span></div></main>;
   const papers = data.papers.filter((paper) => paper.student_id === student.id);
-  const paperEntries = student.progress.filter((entry) => entry.kind === "论文");
-  const pendingCount = student.progress.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
-  const latestPaperEntry = [...paperEntries].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime())[0];
-  const trackingPapers = papers.filter((paper) => paper.status === "active" || paper.status === "on_hold");
-  const leadPaper = trackingPapers.find((paper) => paper.status === "active") ?? trackingPapers[0] ?? papers[0];
-  const planned = trackingPapers
-    .map((paper) => paper.planned_submission_date)
-    .filter((value): value is string => Boolean(value))
-    .sort()[0] ?? null;
-  const deadline = paperDeadlineState(planned);
   function openComposer(kind: "论文" | "项目") {
     setComposer(kind);
     window.requestAnimationFrame(() => document.getElementById("student-quick-progress")?.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -665,14 +655,9 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
 
     {composer ? <StudentQuickProgressComposer key={composer} kind={composer} student={student} papers={papers} onCancel={() => setComposer(null)} onSaved={async () => { setComposer(null); onToast(`${composer === "论文" ? "论文" : "课题"}进展已提交，下方记录已更新`); await onRefresh(); }} /> : null}
 
-    <section className="student-portal-summary" aria-label="我的提交概况">
-      <article><span>全部进展</span><strong>{student.progress.length}</strong><small>论文、课题和组会都算在内</small></article>
-      <article><span>我的论文</span><strong>{papers.length}</strong><small>{latestPaperEntry ? `已经记了 ${paperEntries.length} 次进展` : "还没有论文记录"}</small></article>
-      <article><span>等导师回复</span><strong>{pendingCount}</strong><small>导师看完后会留下意见</small></article>
-      <article className={deadline.overdue ? "overdue" : ""}><span>最近投稿计划</span><strong>{deadline.label}</strong><small>{planned || leadPaper?.title || "还没设置日期"}</small></article>
-    </section>
+    <StudentResearchTracks student={student} papers={papers} onOpenComposer={openComposer} />
 
-    <StudentProgressOverview student={student} leadPaper={leadPaper} />
+    <StudentProgressOverview student={student} />
 
     <div className="student-portal-grid">
       <StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} />
@@ -755,6 +740,63 @@ function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved
   </section>;
 }
 
+function StudentResearchTracks({ student, papers, onOpenComposer }: {
+  student: Student;
+  papers: StudentPaper[];
+  onOpenComposer: (kind: "论文" | "项目") => void;
+}) {
+  const entries = [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
+  const trackingPapers = papers.filter((paper) => paper.status === "active" || paper.status === "on_hold");
+  const leadPaper = trackingPapers.find((paper) => paper.status === "active") ?? trackingPapers[0] ?? papers[0];
+  const paperEntries = entries.filter((entry) => entry.kind === "论文");
+  const projectEntries = entries.filter((entry) => entry.kind === "项目");
+  const latestPaperEntry = paperEntries.find((entry) => !leadPaper || entry.paper?.id === leadPaper.id) ?? paperEntries[0];
+  const latestProjectEntry = projectEntries[0];
+  const latestEntry = entries[0];
+  const pendingCount = entries.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
+  const repliedCount = entries.filter((entry) => Boolean(entry.reviewer_note?.trim())).length;
+  const meetingCount = entries.filter((entry) => entry.kind === "组会").length;
+  const stageIndex = leadPaper ? paperStages.indexOf(leadPaper.current_stage) : -1;
+  const stagePercent = stageIndex < 0 ? 0 : Math.round((stageIndex / (paperStages.length - 1)) * 100);
+  const nextAction = latestPaperEntry?.paper?.next_action || student.nextMilestone || student.currentFocus || "把下一件要完成的事写清楚";
+  const nextActionDate = latestPaperEntry?.paper?.next_action_due_date || student.nextMilestoneDate;
+  const actionDeadline = paperDeadlineState(nextActionDate || null);
+  const updateDays = daysSinceLatestSubmission(student);
+  const rhythmOverdue = Boolean(entries.length) && updateDays > student.cadenceDays;
+  const rhythmLabel = !entries.length ? "还没有记录" : updateDays === 0 ? "今天已更新" : rhythmOverdue ? `超过计划 ${updateDays - student.cadenceDays} 天` : `${updateDays} 天前更新`;
+
+  return <section className="student-research-tracks" aria-labelledby="student-research-tracks-title">
+    <header>
+      <div><span>先看现在，再看下一步</span><h2 id="student-research-tracks-title">论文和课题进展</h2><p>两条线分开记录，完成到哪、接下来做什么，一眼就能找到。</p></div>
+      <strong>{student.stage}<small>{student.gradeYear} 级 · {student.degree}</small></strong>
+    </header>
+
+    <div className="student-research-track-grid">
+      <article className="student-research-track paper-track">
+        <div className="student-research-track-head"><span className="student-research-track-icon">文</span><div><small>论文这条线</small><strong>{leadPaper?.title || "还没有建立论文"}</strong></div><em>{paperEntries.length} 次更新</em></div>
+        {leadPaper ? <>
+          <div className="student-paper-stage-summary"><span>当前阶段</span><strong>{paperStageMeta[leadPaper.current_stage].label}</strong><em>第 {stageIndex + 1} / {paperStages.length} 阶段</em></div>
+          <div className="student-paper-stage-bar" role="progressbar" aria-label={`${leadPaper.title} 论文阶段位置`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={stagePercent}><i style={{ width: `${stagePercent}%` }} /></div>
+          <ol className="student-paper-stage-steps">{paperStages.map((stage, index) => <li key={stage} className={index < stageIndex ? "done" : index === stageIndex ? "current" : ""}><i /><small>{paperStageMeta[stage].label}</small></li>)}</ol>
+          <p className="student-paper-stage-gate">这一阶段要做到：{paperStageMeta[leadPaper.current_stage].gate}</p>
+          <div className={`student-track-next-action ${actionDeadline.overdue ? "overdue" : ""}`}><span>先做这一件事</span><strong>{nextAction}</strong><small>{nextActionDate ? `准备完成：${nextActionDate} · ${actionDeadline.label}` : "完成后记一条论文进展"}</small></div>
+        </> : <div className="student-track-empty"><strong>先把论文建起来</strong><span>题目可以先写暂定名，后面随时继续更新。</span></div>}
+        <button type="button" onClick={() => onOpenComposer("论文")}>{leadPaper ? "记录论文进展" : "新建论文并记录"}</button>
+      </article>
+
+      <article className="student-research-track project-track">
+        <div className="student-research-track-head"><span className="student-research-track-icon">题</span><div><small>课题这条线</small><strong>{latestProjectEntry ? "最近一次课题记录" : "还没有课题记录"}</strong></div><em>{projectEntries.length} 次更新</em></div>
+        {latestProjectEntry ? <div className="student-project-latest"><time>{shortDate(latestProjectEntry.submitted_at)}</time><h3>{latestProjectEntry.title}</h3><p>{latestProjectEntry.summary || latestProjectEntry.evidence}</p>{latestProjectEntry.attachments.length ? <small>{latestProjectEntry.attachments.length} 个附件已保存</small> : <small>这次没有附件</small>}</div> : <div className="student-track-empty"><strong>先记下最近做完的事</strong><span>实验、测试、数据整理和阶段结果都可以写。</span></div>}
+        <div className={`student-project-rhythm ${rhythmOverdue ? "overdue" : ""}`}><span>记录节奏</span><strong>{rhythmLabel}</strong><small>建议每 {student.cadenceDays} 天至少更新一次</small></div>
+        <div className="student-project-review"><span>最近状态</span><strong>{latestProjectEntry ? studentReviewLabels[latestProjectEntry.review_status] : "等待第一条记录"}</strong></div>
+        <button type="button" onClick={() => onOpenComposer("项目")}>记录课题进展</button>
+      </article>
+    </div>
+
+    <footer className="student-research-track-facts"><span><b>{meetingCount}</b> 次 AI 组会</span><span><b>{pendingCount}</b> 条等导师回复</span><span><b>{repliedCount}</b> 条已有导师意见</span><span><b>{latestEntry ? shortDate(latestEntry.submitted_at) : "—"}</b> 最近记录</span></footer>
+  </section>;
+}
+
 type StudentProgressFilter = "all" | "论文" | "项目" | "组会";
 
 const studentProgressFilters: Array<{ value: StudentProgressFilter; label: string }> = [
@@ -771,26 +813,16 @@ function studentProgressKindMeta(kind: string) {
   return { label: kind || "进展", icon: "记", className: "other" };
 }
 
-function StudentProgressOverview({ student, leadPaper }: { student: Student; leadPaper?: StudentPaper }) {
+function StudentProgressOverview({ student }: { student: Student }) {
   const [filter, setFilter] = useState<StudentProgressFilter>("all");
   const entries = useMemo(() => [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime()), [student.progress]);
   const visibleEntries = filter === "all" ? entries : entries.filter((entry) => entry.kind === filter);
-  const latestEntry = entries[0];
-  const repliedCount = entries.filter((entry) => Boolean(entry.reviewer_note?.trim())).length;
 
   return <section className="student-progress-overview" aria-labelledby="student-progress-overview-title">
     <header className="student-progress-overview-head">
       <div><span>一页看清</span><h2 id="student-progress-overview-title">我的进展</h2><p>论文、课题和组会，按时间放在一起。</p></div>
       <strong>{entries.length}<small>条记录</small></strong>
     </header>
-
-    <div className="student-progress-current">
-      <div className="student-progress-current-main"><i>今</i><div><span>现在在做</span><strong>{student.currentFocus || latestEntry?.title || "先记下这周完成的事"}</strong><small>{leadPaper ? `${paperStageMeta[leadPaper.current_stage].label} · ${leadPaper.title}` : "每次更新都会留在下面"}</small></div></div>
-      <dl>
-        <div><dt>最近更新</dt><dd>{latestEntry ? shortDate(latestEntry.submitted_at) : "还没有"}</dd><small>{latestEntry?.title || "提交第一条进展后会显示在这里"}</small></div>
-        <div><dt>导师已回复</dt><dd>{repliedCount} 条</dd><small>{repliedCount ? "回复已放回对应记录" : "有回复后会在记录中标出来"}</small></div>
-      </dl>
-    </div>
 
     <nav className="student-progress-filters" aria-label="筛选我的进展">
       {studentProgressFilters.map((option) => { const count = option.value === "all" ? entries.length : entries.filter((entry) => entry.kind === option.value).length; return <button key={option.value} type="button" className={filter === option.value ? "active" : ""} aria-pressed={filter === option.value} onClick={() => setFilter(option.value)}><span>{option.label}</span><b>{count}</b></button>; })}
