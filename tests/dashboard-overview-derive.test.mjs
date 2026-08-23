@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { deriveStudentOverview } from "../lib/dashboard-overview/derive.ts";
+import { countOverviewStates, deriveStudentOverview } from "../lib/dashboard-overview/derive.ts";
 import {
   calendarDayDiff,
   isInCurrentShanghaiWeek,
@@ -152,4 +152,14 @@ test("the current Shanghai week starts on Monday and counts each instant consist
   assert.equal(shanghaiWeekStart("2026-08-24T08:00:00+08:00"), "2026-08-24");
   assert.equal(isInCurrentShanghaiWeek("2026-08-24T00:01:00+08:00", "2026-08-30T23:59:00+08:00"), true);
   assert.equal(isInCurrentShanghaiWeek("2026-08-23T23:59:00+08:00", "2026-08-24T08:00:00+08:00"), false);
+});
+
+test("0, 1, 26, and 100 students always produce mutually exclusive counts", () => {
+  for (const size of [0, 1, 26, 100]) {
+    const students = Array.from({ length: size }, (_, index) => ({
+      primaryState: ["intervene", "mentor", "student", "on_track", "insufficient"][index % 5],
+    }));
+    const counts = countOverviewStates(students);
+    assert.equal(Object.values(counts).reduce((sum, count) => sum + count, 0), size);
+  }
 });

@@ -1,4 +1,5 @@
 import {
+  overviewStates,
   overviewStateMeta,
   type DerivedStudentOverview,
   type OverviewIssue,
@@ -237,4 +238,12 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
       overdue: sorted.filter((issue) => issue.code === "MILESTONE_OVERDUE" || issue.code === "NEXT_ACTION_OVERDUE").length,
     },
   };
+}
+
+export function countOverviewStates<T extends { primaryState: keyof typeof overviewStateMeta }>(students: T[]) {
+  const counts = Object.fromEntries(overviewStates.map((state) => [state, 0])) as Record<keyof typeof overviewStateMeta, number>;
+  students.forEach((student) => { counts[student.primaryState] += 1; });
+  const total = overviewStates.reduce((sum, state) => sum + counts[state], 0);
+  if (total !== students.length) throw new Error("导师总览互斥计数不一致");
+  return counts;
 }
