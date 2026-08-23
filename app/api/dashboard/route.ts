@@ -38,6 +38,7 @@ type ProgressRow = {
   reviewer_note: string;
   reviewer_name: string | null;
   reviewed_by_user_id: number | null;
+  review_claimed_at: string | null;
   submitted_by_user_id: number | null;
   submitted_at: string;
   reviewed_at: string | null;
@@ -146,12 +147,15 @@ type ProgressAuditRow = {
 
 type WorkflowTask = {
   id: number;
-  type: "proposal_review" | "blocked_milestone" | "overdue_milestone";
+  type: "proposal_review" | "blocked_milestone" | "overdue_milestone" | "guidance_verification";
   studentId: string;
   studentName: string;
   title: string;
   detail: string;
   targetDate: string | null;
+  context?: string;
+  nextAction?: string;
+  acceptanceCriteria?: string;
 };
 
 function revisionSnapshot(value: string): Record<string, unknown> {
@@ -171,6 +175,12 @@ function paperSnapshotValue(snapshot: Record<string, unknown>, key: string) {
   if (!Object.prototype.hasOwnProperty.call(paper, key)) return undefined;
   const value = (paper as Record<string, unknown>)[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function reviewClaimIsStale(value: string | null) {
+  if (!value) return true;
+  const timestamp = new Date(value.endsWith("Z") ? value : `${value.replace(" ", "T")}Z`).getTime();
+  return !Number.isFinite(timestamp) || Date.now() - timestamp >= 30 * 60 * 1000;
 }
 
 export async function GET(request: Request) {
@@ -227,7 +237,7 @@ export async function GET(request: Request) {
       const [progress, papers, milestones] = await Promise.all([
         d1.prepare(`SELECT p.id, p.student_id, p.kind, p.title, p.summary, p.evidence,
         p.literature_ref, p.git_url, p.status, p.review_status, p.assessment,
-        p.reviewer_note, p.reviewed_by_user_id, p.submitted_by_user_id,
+        p.reviewer_note, p.reviewed_by_user_id, p.review_claimed_at, p.submitted_by_user_id,
         reviewer.display_name AS reviewer_name, p.submitted_at, p.reviewed_at, p.current_revision,
         pd.paper_id, paper.title AS paper_title, paper.paper_type, pd.stage AS paper_stage,
         paper.target_venue, paper.planned_submission_date, paper.submission_identifier,
@@ -376,16 +386,26 @@ export async function GET(request: Request) {
     }));
     const pending = mappedProgress
       .filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review")
-      .map((entry) => ({
-        ...entry,
-        display_name: nameById.get(entry.student_id) ?? entry.student_id,
-        evidence_sources: entry.evidence_sources.filter((source) => source.revision_number === entry.current_revision),
-        attachments: entry.attachments.filter((attachment) => attachment.revision_number === entry.current_revision),
-        can_finalize: entry.submitted_by_user_id !== viewer.id
-          && reviewableStudentIds.has(entry.student_id) && (
-          entry.review_status === "submitted" || entry.reviewed_by_user_id === viewer.id
-        ),
-      }));
+      .map((entry) => {
+        const claimStale = entry.review_status === "in_review"
+          && entry.reviewed_by_user_id !== viewer.id
+          && reviewClaimIsStale(entry.review_claimed_at);
+        return {
+          ...entry,
+          display_name: nameById.get(entry.student_id) ?? entry.student_id,
+          evidence_sources: entry.evidence_sources.filter((source) => source.revision_number === entry.current_revision),
+          attachments: entry.attachments.filter((attachment) => attachment.revision_number === entry.current_revision),
+          claim_stale: claimStale,
+          can_release: entry.review_status === "in_review" && entry.reviewed_by_user_id === viewer.id,
+          can_decide: entry.submitted_by_user_id !== viewer.id
+            && reviewableStudentIds.has(entry.student_id)
+            && (entry.review_status === "submitted" || entry.reviewed_by_user_id === viewer.id),
+          can_finalize: entry.submitted_by_user_id !== viewer.id
+            && reviewableStudentIds.has(entry.student_id) && (
+            entry.review_status === "submitted" || entry.reviewed_by_user_id === viewer.id || claimStale
+          ),
+        };
+      });
 
     const students = studentResult.results.map((row) => ({
       id: row.id,
@@ -468,7 +488,9 @@ export async function GET(request: Request) {
           doctors: 0,
           masters: 0,
           pending: 0,
+          waiting: 0,
           proposalPending: 0,
+          guidancePending: 0,
           blocked: 0,
           outputs: 0,
           attention: 0,
@@ -480,7 +502,7 @@ export async function GET(request: Request) {
     const workflowTasks: WorkflowTask[] = [];
     if (studentIds.length) {
       const placeholders = studentIds.map(() => "?").join(",");
-      const [proposalTasks, milestoneTasks] = await Promise.all([
+      const [proposalTasks, milestoneTasks, guidanceTasks] = await Promise.all([
         d1.prepare(`SELECT rp.id, rp.student_id, s.display_name, rp.title, rp.updated_at
           FROM research_proposals rp JOIN students s ON s.id = rp.student_id
           WHERE rp.status = 'submitted' AND rp.student_id IN (${placeholders})
@@ -496,6 +518,17 @@ export async function GET(request: Request) {
             AND (m.status = 'blocked' OR (m.status != 'completed' AND date(m.target_date) < date('now')))
           ORDER BY CASE m.status WHEN 'blocked' THEN 0 ELSE 1 END, m.target_date`).bind(...studentIds).all<{
             id: number; student_id: string; display_name: string; title: string; status: string; target_date: string;
+          }>(),
+        d1.prepare(`SELECT n.id, n.student_id, n.mentor_user_id, s.display_name,
+            COALESCE(NULLIF(n.title, ''), NULLIF(n.next_action, ''), '导师指导') AS title,
+            n.content, n.next_action, n.acceptance_criteria, n.completion_note, n.due_date
+          FROM student_guidance_notes n JOIN students s ON s.id = n.student_id
+          WHERE n.student_id IN (${placeholders}) AND n.status = 'open'
+            AND n.verification_mode = 'mentor_verify' AND n.student_reported_at IS NOT NULL
+          ORDER BY n.student_reported_at, n.updated_at`).bind(...studentIds).all<{
+            id: number; student_id: string; mentor_user_id: number; display_name: string;
+            title: string; content: string; next_action: string; acceptance_criteria: string;
+            completion_note: string; due_date: string | null;
           }>(),
       ]);
       workflowTasks.push(
@@ -517,6 +550,20 @@ export async function GET(request: Request) {
           detail: item.status === "blocked" ? "培养节点受阻，需要导师决策" : "培养节点已逾期",
           targetDate: item.target_date,
         })),
+        ...guidanceTasks.results
+          .filter((item) => viewer.role === "superadmin" || item.mentor_user_id === viewer.id || reviewableStudentIds.has(item.student_id))
+          .map((item) => ({
+            id: item.id,
+            type: "guidance_verification" as const,
+            studentId: item.student_id,
+            studentName: item.display_name,
+            title: item.title,
+            detail: item.completion_note ? `学生完成说明：${item.completion_note}` : "学生已提交完成说明",
+            targetDate: item.due_date,
+            context: item.content,
+            nextAction: item.next_action,
+            acceptanceCriteria: item.acceptance_criteria,
+          })),
       );
     }
 
@@ -525,6 +572,7 @@ export async function GET(request: Request) {
       return acc;
     }, {});
 
+    const actionablePendingCount = pending.filter((entry) => entry.can_finalize).length;
     return Response.json({
       viewer: {
         id: viewer.id,
@@ -541,9 +589,11 @@ export async function GET(request: Request) {
         total: students.length,
         doctors: students.filter((student) => student.degree === "博士").length,
         masters: students.filter((student) => student.degree === "硕士").length,
-        pending: pending.length,
+        pending: actionablePendingCount,
+        waiting: pending.length - actionablePendingCount,
         proposalPending: workflowTasks.filter((task) => task.type === "proposal_review").length,
-        blocked: workflowTasks.filter((task) => task.type !== "proposal_review").length,
+        guidancePending: workflowTasks.filter((task) => task.type === "guidance_verification").length,
+        blocked: workflowTasks.filter((task) => task.type === "blocked_milestone" || task.type === "overdue_milestone").length,
         outputs: students.reduce((sum, student) => sum + student.outputCount, 0),
         attention: students.filter((student) => student.risk.level !== "正常").length,
         riskCounts,

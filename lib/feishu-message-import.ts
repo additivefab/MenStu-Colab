@@ -2,6 +2,7 @@ import { ensureDatabase, getD1 } from "./database";
 import { detectMeetingSummary, extractFeishuMessageText } from "./feishu-events";
 import { splitMeetingProgressByStudent } from "./feishu-progress-extraction";
 import { sha256Text } from "./progress-evidence";
+import { importedProgressSnapshot, removeImportedProgress } from "./progress-import";
 
 export type FeishuMessageEvent = {
   sender?: {
@@ -70,9 +71,17 @@ async function autoCreateStudentProgress(importId: number, extractedText: string
         d1.prepare(`INSERT INTO feishu_meeting_summary_links
           (import_id, student_id, progress_entry_id) VALUES (?, ?, ?)`)
           .bind(importId, draft.studentId, progressId),
+        d1.prepare(`INSERT INTO progress_revisions
+          (progress_entry_id, revision_number, snapshot_json, review_status)
+          VALUES (?, 1, ?, 'submitted')`)
+          .bind(progressId, importedProgressSnapshot({
+            title: draft.title,
+            summary: draft.summary,
+            evidence,
+          })),
         d1.prepare(`INSERT INTO progress_evidence_sources
-          (progress_entry_id, source_type, label, source_ref, source_import_id, content_sha256, occurred_at)
-          VALUES (?, ?, ?, '', ?, ?, CURRENT_TIMESTAMP)`)
+          (progress_entry_id, source_type, label, source_ref, source_import_id, content_sha256, revision_number, occurred_at)
+          VALUES (?, ?, ?, '', ?, ?, 1, CURRENT_TIMESTAMP)`)
           .bind(progressId, sourceType(sourceText), sourceLabel(sourceText), importId, await sha256Text(draft.summary)),
         d1.prepare(`INSERT INTO progress_audit_events
           (progress_entry_id, actor_type, action, from_status, to_status, note)
@@ -83,7 +92,7 @@ async function autoCreateStudentProgress(importId: number, extractedText: string
       progressId = null;
     } catch (error) {
       if (progressId) {
-        await d1.prepare("DELETE FROM progress_entries WHERE id = ? AND status = 'pending'").bind(progressId).run();
+        await removeImportedProgress(progressId);
       }
       throw error;
     }

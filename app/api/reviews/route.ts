@@ -5,6 +5,7 @@ import { isPaperStage } from "../../../lib/paper-progress";
 import { legacyProgressStatus, type ProgressAssessment, type ReviewStatus } from "../../../lib/progress-evidence";
 
 const finalActions = new Set(["substantive", "supporting", "supplement", "rejected"]);
+const REVIEW_LEASE_MINUTES = 30;
 
 type EntryRow = {
   id: number;
@@ -12,6 +13,7 @@ type EntryRow = {
   kind: string;
   review_status: ReviewStatus;
   reviewed_by_user_id: number | null;
+  review_claimed_at: string | null;
   submitted_by_user_id: number | null;
   current_revision: number;
   revision_review_status: ReviewStatus | null;
@@ -36,6 +38,12 @@ function paperAuthorityStatus(stage: string | null) {
   if (stage === "published") return "published";
   if (stage === "accepted") return "accepted";
   return "active";
+}
+
+function reviewClaimIsStale(value: string | null) {
+  if (!value) return true;
+  const timestamp = new Date(value.endsWith("Z") ? value : `${value.replace(" ", "T")}Z`).getTime();
+  return !Number.isFinite(timestamp) || Date.now() - timestamp >= REVIEW_LEASE_MINUTES * 60 * 1000;
 }
 
 function paperSnapshot(snapshotJson: string | null) {
@@ -63,7 +71,7 @@ export async function POST(request: Request) {
     const id = Number(body.id);
     const action = String(body.action ?? "");
     const note = String(body.note ?? "").trim();
-    if (!Number.isInteger(id) || (action !== "start_review" && !finalActions.has(action))) {
+    if (!Number.isInteger(id) || (!["start_review", "release_review"].includes(action) && !finalActions.has(action))) {
       return Response.json({ error: "审核参数无效" }, { status: 400 });
     }
     if (note.length > 3000) return Response.json({ error: "审核意见不能超过 3000 个字符" }, { status: 400 });
@@ -73,7 +81,7 @@ export async function POST(request: Request) {
 
     const d1 = getD1();
     const entry = await d1.prepare(`SELECT p.id, p.student_id, p.kind, p.review_status,
-      p.reviewed_by_user_id, p.submitted_by_user_id, p.current_revision,
+      p.reviewed_by_user_id, p.review_claimed_at, p.submitted_by_user_id, p.current_revision,
       pr.review_status AS revision_review_status,
       pr.reviewed_by_user_id AS revision_reviewed_by_user_id,
       pr.snapshot_json AS revision_snapshot_json,
@@ -94,6 +102,16 @@ export async function POST(request: Request) {
       LEFT JOIN research_proposals rp ON rp.id = m.proposal_id
       WHERE p.id = ?`).bind(id).first<EntryRow>();
     if (!entry) return Response.json({ error: "记录不存在" }, { status: 404 });
+    const synchronizeCurrentRevision = async () => {
+      await d1.prepare(`UPDATE progress_revisions SET
+        review_status = (SELECT review_status FROM progress_entries WHERE id = ?),
+        assessment = (SELECT assessment FROM progress_entries WHERE id = ?),
+        reviewer_note = (SELECT reviewer_note FROM progress_entries WHERE id = ?),
+        reviewed_by_user_id = (SELECT reviewed_by_user_id FROM progress_entries WHERE id = ?),
+        reviewed_at = (SELECT reviewed_at FROM progress_entries WHERE id = ?)
+        WHERE progress_entry_id = ? AND revision_number = ?`)
+        .bind(id, id, id, id, id, id, entry.current_revision).run();
+    };
     if (!entry.revision_review_status) {
       return Response.json({ error: "当前修订记录缺失，请先修复数据后再审核" }, { status: 409 });
     }
@@ -102,6 +120,38 @@ export async function POST(request: Request) {
     }
     if (entry.submitted_by_user_id === auth.user.id) {
       return Response.json({ error: "不能审核由自己提交或代录的进展" }, { status: 403 });
+    }
+
+    if (action === "release_review") {
+      if (
+        entry.review_status !== "in_review"
+        || entry.reviewed_by_user_id !== auth.user.id
+        || entry.revision_review_status !== "in_review"
+        || entry.revision_reviewed_by_user_id !== auth.user.id
+      ) {
+        return Response.json({ error: "只有当前接手导师可以释放审核" }, { status: 409 });
+      }
+      const [revisionResult, parentResult] = await d1.batch([
+        d1.prepare(`UPDATE progress_revisions SET review_status = 'submitted', reviewed_by_user_id = NULL
+          WHERE progress_entry_id = ? AND revision_number = ?
+            AND review_status = 'in_review' AND reviewed_by_user_id = ?`)
+          .bind(id, entry.current_revision, auth.user.id),
+        d1.prepare(`UPDATE progress_entries SET review_status = 'submitted', reviewed_by_user_id = NULL,
+          review_claimed_at = NULL, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND current_revision = ? AND review_status = 'in_review'
+            AND reviewed_by_user_id = ? AND EXISTS (SELECT 1 FROM progress_revisions
+              WHERE progress_entry_id = ? AND revision_number = ? AND review_status = 'submitted')`)
+          .bind(id, entry.current_revision, auth.user.id, id, entry.current_revision),
+        d1.prepare(`INSERT INTO progress_audit_events
+          (progress_entry_id, actor_user_id, actor_type, action, from_status, to_status, note)
+          SELECT ?, ?, 'user', 'release_review', 'in_review', 'submitted', ? WHERE changes() > 0`)
+          .bind(id, auth.user.id, note),
+      ]);
+      if (!revisionResult.meta.changes || !parentResult.meta.changes) {
+        await synchronizeCurrentRevision();
+        return Response.json({ error: "审核状态已变化，请刷新后重试" }, { status: 409 });
+      }
+      return Response.json({ message: "已释放审核，其他导师可以接手", reviewStatus: "submitted" });
     }
 
     if (action === "start_review") {
@@ -114,6 +164,36 @@ export async function POST(request: Request) {
         }
         return Response.json({ message: "该证据已由您接手审核", reviewStatus: "in_review" });
       }
+      if (entry.review_status === "in_review" && entry.reviewed_by_user_id !== auth.user.id) {
+        if (!reviewClaimIsStale(entry.review_claimed_at)) {
+          return Response.json({ error: `该证据正在由另一位导师审核；接手 ${REVIEW_LEASE_MINUTES} 分钟后可重新领取` }, { status: 409 });
+        }
+        if (entry.revision_review_status !== "in_review") {
+          return Response.json({ error: "进展与当前修订的审核状态不一致，请刷新后重试" }, { status: 409 });
+        }
+        const previousReviewerId = entry.reviewed_by_user_id;
+        const [revisionResult, parentResult] = await d1.batch([
+          d1.prepare(`UPDATE progress_revisions SET reviewed_by_user_id = ?
+            WHERE progress_entry_id = ? AND revision_number = ? AND review_status = 'in_review'
+              AND reviewed_by_user_id = ?`)
+            .bind(auth.user.id, id, entry.current_revision, previousReviewerId),
+          d1.prepare(`UPDATE progress_entries SET reviewed_by_user_id = ?,
+            review_claimed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND current_revision = ? AND review_status = 'in_review'
+              AND reviewed_by_user_id = ?
+              AND (review_claimed_at IS NULL OR datetime(review_claimed_at) <= datetime('now', '-${REVIEW_LEASE_MINUTES} minutes'))`)
+            .bind(auth.user.id, id, entry.current_revision, previousReviewerId),
+          d1.prepare(`INSERT INTO progress_audit_events
+            (progress_entry_id, actor_user_id, actor_type, action, from_status, to_status, note)
+            SELECT ?, ?, 'user', 'reclaim_review', 'in_review', 'in_review', ? WHERE changes() > 0`)
+            .bind(id, auth.user.id, note || "审核接手超时，重新领取"),
+        ]);
+        if (!revisionResult.meta.changes || !parentResult.meta.changes) {
+          await synchronizeCurrentRevision();
+          return Response.json({ error: "该证据的接手状态刚刚发生变化" }, { status: 409 });
+        }
+        return Response.json({ message: "原接手已超时，您已重新领取审核", reviewStatus: "in_review" });
+      }
       if (entry.review_status !== "submitted" || entry.revision_review_status !== "submitted") {
         return Response.json({ error: "该证据已被接手或审核完成" }, { status: 409 });
       }
@@ -125,7 +205,8 @@ export async function POST(request: Request) {
               WHERE id = ? AND review_status = 'submitted' AND current_revision = ?)`)
           .bind(auth.user.id, id, entry.current_revision, id, entry.current_revision),
         d1.prepare(`UPDATE progress_entries SET
-          review_status = 'in_review', reviewed_by_user_id = ?, updated_at = CURRENT_TIMESTAMP
+          review_status = 'in_review', reviewed_by_user_id = ?, review_claimed_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
           WHERE id = ? AND review_status = 'submitted' AND current_revision = ?
             AND EXISTS (SELECT 1 FROM progress_revisions
               WHERE progress_entry_id = ? AND revision_number = ?
@@ -137,6 +218,7 @@ export async function POST(request: Request) {
           .bind(id, auth.user.id, note),
       ]);
       if (!revisionResult.meta.changes || !parentResult.meta.changes) {
+        await synchronizeCurrentRevision();
         return Response.json({ error: "该证据已被其他导师接手" }, { status: 409 });
       }
       return Response.json({ message: "已接手审核，其他导师将看到审核中状态", reviewStatus: "in_review" });
@@ -236,7 +318,8 @@ export async function POST(request: Request) {
         ),
       d1.prepare(`UPDATE progress_entries SET
         status = ?, review_status = ?, assessment = ?, reviewer_note = ?,
-        reviewed_by_user_id = ?, reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        reviewed_by_user_id = ?, review_claimed_at = NULL,
+        reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
         WHERE id = ? AND current_revision = ? AND review_status = ?
           AND (review_status <> 'in_review' OR reviewed_by_user_id = ?)
           AND EXISTS (SELECT 1 FROM progress_revisions
@@ -330,6 +413,7 @@ export async function POST(request: Request) {
     const results = await d1.batch(statements);
     const parentResult = results[1];
     if (!parentResult.meta.changes) {
+      await synchronizeCurrentRevision();
       return Response.json({ error: "记录、修订或关联节点已被其他操作更新" }, { status: 409 });
     }
     if (milestoneResultIndex !== null && !results[milestoneResultIndex]?.meta.changes) {

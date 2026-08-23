@@ -87,7 +87,7 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /提交与查看全部进展/);
   assert.match(dashboard, /组会与导师协作/);
   assert.match(dashboard, /if \(intent\.composerKind\) setComposer\(intent\.composerKind\)/);
-  assert.match(dashboard, /className="student-persistent-composer" hidden=\{view !== "progress"\}/);
+  assert.match(dashboard, /className="student-persistent-composer" hidden=\{view !== "progress" \|\| !composerVisible\}/);
   assert.match(dashboard, /id="student-meeting-form" tabIndex=\{-1\}/);
   assert.match(styles, /\.student-workbench-shell ~ \.toast/);
   assert.match(styles, /pointer-events: none/);
@@ -107,8 +107,8 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /最近写了什么、导师怎么回复/);
   assert.match(dashboard, /稿件版本/);
   assert.match(dashboard, /下一项可交付行动/);
-  assert.match(dashboard, /查看学生全部进展/);
-  assert.match(dashboard, /查看进展 ›/);
+  assert.match(dashboard, /完整档案 ↗/);
+  assert.match(dashboard, /进入学生档案/);
   assert.match(dashboard, /href=\{`\/students\/\$\{encodeURIComponent\(entry\.student_id\)\}#evidence`\}/);
   assert.match(dashboard, /打开 \$\{student\.name\} 的专属档案与全部进展/);
   assert.match(dashboard, /点击查看专属档案/);
@@ -143,14 +143,14 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(proposalMigration, /CREATE UNIQUE INDEX `idx_proposal_versions_proposal_number`/);
   assert.match(dashboard, /飞书 AI 会议总结自动归档/);
   assert.match(dashboard, /\/students\/\$\{encodeURIComponent\(student\.id\)\}/);
-  assert.match(dashboard, /管理员（导师）行动台/);
+  assert.match(dashboard, /NEXT ACTION/);
   assert.match(dashboard, /if \(pending\) return/);
   assert.match(dashboard, /无需反复点击飞书授权/);
   assert.match(dashboard, /重新检查权限/);
   assert.match(dashboard, /切换飞书账号/);
   assert.match(dashboard, /key=\{authGate\.kind\}/);
   assert.doesNotMatch(dashboard, /value="mentor"/);
-  assert.match(dashboard, /未来 7 天更新/);
+  assert.match(dashboard, /只呈现下一步动作；正式判断不会自动批量执行/);
   assert.match(studentOverview, /科研培养流程图/);
   assert.match(studentOverview, /导师决策视图/);
   assert.match(studentOverview, /导师自由指导区/);

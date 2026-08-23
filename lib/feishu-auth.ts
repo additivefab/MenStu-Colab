@@ -81,7 +81,7 @@ export function isFeishuConfigured() {
 }
 
 async function requestJson<T>(url: string, init: RequestInit) {
-  const response = await fetch(url, init);
+  const response = await fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(20_000) });
   const payload = (await response.json()) as T & { code?: number; msg?: string };
   if (!response.ok || (payload.code !== undefined && payload.code !== 0)) {
     throw new Error(payload.msg || `飞书接口请求失败（${response.status}）`);
@@ -140,7 +140,7 @@ export async function getFeishuTenantToken() {
   return result.tenant_access_token;
 }
 
-export async function sendFeishuCard(openId: string, card: Record<string, unknown>) {
+export async function sendFeishuCard(openId: string, card: Record<string, unknown>, messageUuid?: string) {
   const token = await getFeishuTenantToken();
   return requestJson<{ data?: { message_id?: string } }>(
     "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id",
@@ -154,6 +154,7 @@ export async function sendFeishuCard(openId: string, card: Record<string, unknow
         receive_id: openId,
         msg_type: "interactive",
         content: JSON.stringify(card),
+        ...(messageUuid ? { uuid: messageUuid } : {}),
       }),
     },
   );

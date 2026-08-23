@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-export const CURRENT_SCHEMA_VERSION = 17;
+export const CURRENT_SCHEMA_VERSION = 18;
 
 const REQUIRED_TABLES = [
   "students",
@@ -15,6 +15,9 @@ const REQUIRED_TABLES = [
   "student_identity_binding_batches",
   "student_feishu_identity_bindings",
   "meeting_requests",
+  "meeting_agendas",
+  "meeting_agenda_items",
+  "notification_deliveries",
   "progress_audit_events",
   "progress_attachments",
   "progress_revisions",
@@ -45,7 +48,7 @@ export function getD1() {
 }
 
 async function ensureColumn(
-  table: "app_user_role_events" | "progress_entries" | "progress_attachments" | "progress_evidence_sources" | "research_milestones" | "student_guidance_notes",
+  table: "app_user_role_events" | "progress_entries" | "progress_attachments" | "progress_evidence_sources" | "research_milestones" | "student_guidance_notes" | "notification_deliveries",
   column: string,
   definition: string,
 ) {
@@ -91,7 +94,7 @@ async function prepareDatabase() {
   if (before.version !== null && before.version > CURRENT_SCHEMA_VERSION) {
     throw new Error(`数据库版本 ${before.version} 高于应用支持版本 ${CURRENT_SCHEMA_VERSION}`);
   }
-  await migrateDatabase();
+  await migrateDatabase(before.version);
   const after = await getDatabaseSchemaStatus();
   if (after.version !== CURRENT_SCHEMA_VERSION || after.missingTables.length) {
     throw new Error("数据库升级未完成，系统已停止继续读写");
@@ -106,7 +109,7 @@ export async function ensureDatabase() {
   return databaseReadyPromise;
 }
 
-async function migrateDatabase() {
+async function migrateDatabase(previousVersion: number | null) {
   const d1 = getD1();
   await d1.batch([
     d1.prepare(`CREATE TABLE IF NOT EXISTS app_schema_meta (
@@ -142,6 +145,7 @@ async function migrateDatabase() {
       assessment TEXT,
       submitted_by_user_id INTEGER,
       reviewed_by_user_id INTEGER,
+      review_claimed_at TEXT,
       reviewer_note TEXT NOT NULL DEFAULT '',
       reviewed_at TEXT,
       current_revision INTEGER NOT NULL DEFAULT 1,
@@ -187,8 +191,13 @@ async function migrateDatabase() {
       content TEXT NOT NULL,
       next_action TEXT NOT NULL DEFAULT '',
       due_date TEXT,
+      acceptance_criteria TEXT NOT NULL DEFAULT '',
+      verification_mode TEXT NOT NULL DEFAULT 'mentor_verify'
+        CHECK (verification_mode IN ('self_report', 'mentor_verify')),
       status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'completed')),
       acknowledged_at TEXT,
+      student_reported_at TEXT,
+      mentor_verified_at TEXT,
       completed_at TEXT,
       completed_by_user_id INTEGER REFERENCES app_users(id),
       completion_note TEXT NOT NULL DEFAULT '',
@@ -247,6 +256,45 @@ async function migrateDatabase() {
       response_note TEXT NOT NULL DEFAULT '',
       handled_at TEXT,
       version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS meeting_agendas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      mentor_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      title TEXT NOT NULL,
+      meeting_date TEXT,
+      status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft', 'scheduled', 'completed', 'cancelled')),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS meeting_agenda_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agenda_id INTEGER NOT NULL REFERENCES meeting_agendas(id),
+      student_id TEXT NOT NULL REFERENCES students(id),
+      topic TEXT NOT NULL,
+      reason TEXT NOT NULL DEFAULT '',
+      duration_minutes INTEGER NOT NULL DEFAULT 10
+        CHECK (duration_minutes IN (5, 10, 15, 20, 30)),
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS notification_deliveries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id TEXT NOT NULL REFERENCES students(id),
+      triggered_by_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      notification_type TEXT NOT NULL DEFAULT 'progress_reminder'
+        CHECK (notification_type IN ('progress_reminder')),
+      reason TEXT NOT NULL DEFAULT '',
+      idempotency_key TEXT NOT NULL UNIQUE,
+      attempt_token TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'sending' CHECK (status IN ('sending', 'sent', 'failed')),
+      error_message TEXT NOT NULL DEFAULT '',
+      provider_message_id TEXT NOT NULL DEFAULT '',
+      sent_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
@@ -458,6 +506,13 @@ async function migrateDatabase() {
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_requests_student_created ON meeting_requests(student_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_requests_requester_created ON meeting_requests(requested_by_user_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_requests_status_schedule ON meeting_requests(status, preferred_date, preferred_time)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_agendas_mentor_updated ON meeting_agendas(mentor_user_id, updated_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_agendas_status_date ON meeting_agendas(status, meeting_date)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_agenda_items_agenda_order ON meeting_agenda_items(agenda_id, sort_order)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_meeting_agenda_items_student_status ON meeting_agenda_items(student_id, status)"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_deliveries_idempotency ON notification_deliveries(idempotency_key)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_notification_deliveries_student_created ON notification_deliveries(student_id, created_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_notification_deliveries_status_created ON notification_deliveries(status, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_audit_entry_created ON progress_audit_events(progress_entry_id, created_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_attachments_storage_key ON progress_attachments(storage_key)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_attachments_entry_created ON progress_attachments(progress_entry_id, created_at DESC)"),
@@ -500,16 +555,27 @@ async function migrateDatabase() {
   await ensureColumn("progress_entries", "assessment", "TEXT");
   await ensureColumn("progress_entries", "submitted_by_user_id", "INTEGER REFERENCES app_users(id)");
   await ensureColumn("progress_entries", "reviewed_by_user_id", "INTEGER REFERENCES app_users(id)");
+  await ensureColumn("progress_entries", "review_claimed_at", "TEXT");
   await ensureColumn("progress_entries", "current_revision", "INTEGER NOT NULL DEFAULT 1");
   await ensureColumn("progress_entries", "updated_at", "TEXT");
   await ensureColumn("progress_attachments", "revision_number", "INTEGER NOT NULL DEFAULT 1");
   await ensureColumn("progress_evidence_sources", "revision_number", "INTEGER NOT NULL DEFAULT 1");
   await ensureColumn("research_milestones", "archived_at", "TEXT");
   await ensureColumn("student_guidance_notes", "title", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("student_guidance_notes", "acceptance_criteria", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("student_guidance_notes", "verification_mode", "TEXT NOT NULL DEFAULT 'mentor_verify' CHECK (verification_mode IN ('self_report', 'mentor_verify'))");
+  if (previousVersion === null || previousVersion < 18) {
+    // V17 及更早版本的指导由学生自行确认完成；升级时不能静默改成导师验收。
+    await d1.prepare("UPDATE student_guidance_notes SET verification_mode = 'self_report'").run();
+  }
   await ensureColumn("student_guidance_notes", "acknowledged_at", "TEXT");
+  await ensureColumn("student_guidance_notes", "student_reported_at", "TEXT");
+  await ensureColumn("student_guidance_notes", "mentor_verified_at", "TEXT");
   await ensureColumn("student_guidance_notes", "completed_at", "TEXT");
   await ensureColumn("student_guidance_notes", "completed_by_user_id", "INTEGER REFERENCES app_users(id)");
   await ensureColumn("student_guidance_notes", "completion_note", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("notification_deliveries", "attempt_token", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("notification_deliveries", "provider_message_id", "TEXT NOT NULL DEFAULT ''");
 
   await d1.batch([
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_attachments_entry_revision ON progress_attachments(progress_entry_id, revision_number)"),

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { paperDeadlineState, paperStageMeta, paperStages, paperTypes, type PaperStage } from "../lib/paper-progress";
 
 declare global {
@@ -156,11 +156,17 @@ type PendingEntry = {
   git_url: string;
   review_status: "submitted" | "in_review";
   reviewer_name: string | null;
+  reviewed_by_user_id: number | null;
+  submitted_by_user_id: number | null;
+  review_claimed_at: string | null;
   paper: StudentProgress["paper"];
   project: StudentProgress["project"];
   current_revision: number;
   revisions: ProgressRevision[];
   can_finalize: boolean;
+  can_decide: boolean;
+  can_release: boolean;
+  claim_stale: boolean;
   evidence_sources: StudentProgress["evidence_sources"];
   attachments: StudentProgress["attachments"];
   submitted_at: string;
@@ -263,6 +269,39 @@ type MeetingRequest = {
   version: number;
 };
 
+type MeetingAgenda = {
+  id: number;
+  mentor_user_id: number;
+  mentor_name: string;
+  title: string;
+  meeting_date: string | null;
+  status: "draft" | "scheduled" | "completed" | "cancelled";
+  created_at: string;
+  updated_at: string;
+  items: Array<{
+    id: number;
+    agenda_id: number;
+    student_id: string;
+    student_name: string;
+    topic: string;
+    reason: string;
+    duration_minutes: number;
+    sort_order: number;
+    status: "open" | "resolved";
+  }>;
+};
+
+type NotificationDelivery = {
+  id: number;
+  student_id: string;
+  student_name: string;
+  reason: string;
+  status: "sending" | "sent" | "failed";
+  error_message: string;
+  sent_at: string | null;
+  created_at: string;
+};
+
 type StudentGuidanceNote = {
   id: number;
   student_id: string;
@@ -270,9 +309,13 @@ type StudentGuidanceNote = {
   content: string;
   next_action: string;
   due_date: string | null;
+  acceptance_criteria: string;
+  verification_mode: "self_report" | "mentor_verify";
   status: "open" | "completed";
   mentor_name: string;
   acknowledged_at: string | null;
+  student_reported_at: string | null;
+  mentor_verified_at: string | null;
   completed_at: string | null;
   completed_by_name: string | null;
   completion_note: string;
@@ -280,10 +323,6 @@ type StudentGuidanceNote = {
 };
 
 type ViewerRole = "superadmin" | "admin" | "student";
-
-function isReviewerRole(role: ViewerRole) {
-  return role === "superadmin" || role === "admin";
-}
 
 type DashboardData = {
   viewer: {
@@ -298,19 +337,24 @@ type DashboardData = {
   pending: PendingEntry[];
   workflowTasks: Array<{
     id: number;
-    type: "proposal_review" | "blocked_milestone" | "overdue_milestone";
+    type: "proposal_review" | "blocked_milestone" | "overdue_milestone" | "guidance_verification";
     studentId: string;
     studentName: string;
     title: string;
     detail: string;
     targetDate: string | null;
+    context?: string;
+    nextAction?: string;
+    acceptanceCriteria?: string;
   }>;
   metrics: {
     total: number;
     doctors: number;
     masters: number;
     pending: number;
+    waiting: number;
     proposalPending: number;
+    guidancePending: number;
     blocked: number;
     outputs: number;
     attention: number;
@@ -324,13 +368,21 @@ type AuthGate = {
 };
 
 const navItems = [
-  { id: "overview", label: "总览", icon: "▦" },
+  { id: "inbox", label: "待我处理", icon: "✓" },
   { id: "students", label: "学生", icon: "◎" },
-  { id: "proposals", label: "研究方案", icon: "◇" },
-  { id: "reviews", label: "进展审核", icon: "✓" },
-  { id: "meetings", label: "组会与提醒", icon: "▣" },
-  { id: "settings", label: "系统设置", icon: "⚙" },
+  { id: "research", label: "研究台账", icon: "◇" },
+  { id: "meetings", label: "组会", icon: "▣" },
+  { id: "cohort", label: "课题组", icon: "▦" },
+  { id: "settings", label: "系统管理", icon: "⚙" },
 ] as const;
+
+type MentorView = (typeof navItems)[number]["id"];
+
+function mentorViewFromUrl(): MentorView {
+  if (typeof window === "undefined") return "inbox";
+  const requested = new URL(window.location.href).searchParams.get("mentorView");
+  return navItems.some((item) => item.id === requested) ? requested as MentorView : "inbox";
+}
 
 const progressKinds = ["文献", "实验", "算法", "数据", "论文", "复现", "项目", "组会"];
 
@@ -372,26 +424,50 @@ function daysSinceLatestSubmission(student: Student) {
   return Math.max(0, Math.floor((DASHBOARD_REFERENCE_TIME - latest) / 86_400_000));
 }
 
+function daysSinceSubstantiveProgress(student: Student) {
+  if (!student.lastSubstantiveAt) return student.risk.days;
+  const timestamp = new Date(student.lastSubstantiveAt).getTime();
+  if (!Number.isFinite(timestamp)) return student.risk.days;
+  return Math.max(0, Math.floor((DASHBOARD_REFERENCE_TIME - timestamp) / 86_400_000));
+}
+
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [view, setView] = useState<(typeof navItems)[number]["id"]>("overview");
+  const [view, setView] = useState<MentorView>("inbox");
   const [query, setQuery] = useState("");
   const [riskFilter, setRiskFilter] = useState<"全部" | RiskLevel>("全部");
   const [degreeFilter, setDegreeFilter] = useState<"全部" | Student["degree"]>("全部");
-  const [submitOpen, setSubmitOpen] = useState(false);
+  const [guidanceOpen, setGuidanceOpen] = useState(false);
   const [feishuOpen, setFeishuOpen] = useState(false);
   const [reviewBusy, setReviewBusy] = useState<number | null>(null);
   const [reviewNotes, setReviewNotes] = useState<Record<number, string>>({});
+  const [meetingRequests, setMeetingRequests] = useState<MeetingRequest[]>([]);
+  const [meetingLoadError, setMeetingLoadError] = useState("");
   const [toast, setToast] = useState("");
   const [authGate, setAuthGate] = useState<AuthGate | null>(null);
   const globalSearchRef = useRef<HTMLInputElement>(null);
 
+  const navigateMentor = useCallback((next: MentorView, replace = false) => {
+    setView(next);
+    const url = new URL(window.location.href);
+    const sameDestination = mentorViewFromUrl() === next;
+    url.searchParams.set("mentorView", next);
+    if (next !== "research") {
+      url.searchParams.delete("researchTab");
+      url.searchParams.delete("proposal");
+    }
+    window.history[replace || sameDestination ? "replaceState" : "pushState"]({}, "", url);
+  }, []);
+
   const loadDashboard = useCallback(async () => {
     try {
       setError("");
-      const response = await fetch("/api/dashboard", { cache: "no-store" });
+      const [response, meetingResponse] = await Promise.all([
+        fetch("/api/dashboard", { cache: "no-store" }),
+        fetch("/api/meeting-requests", { cache: "no-store" }).catch(() => null),
+      ]);
       const payload = (await response.json()) as DashboardData & { code?: string; error?: string };
       if (response.status === 401) {
         setAuthGate({ kind: "required", message: payload.error || "请使用飞书登录" });
@@ -408,6 +484,19 @@ export default function Dashboard() {
       if (!response.ok) throw new Error(payload.error || "加载失败");
       setAuthGate(null);
       setData(payload);
+      if (payload.viewer.role !== "student") {
+        if (!meetingResponse) {
+          setMeetingLoadError("预约服务暂时不可用");
+        } else {
+          const meetingPayload = await meetingResponse.json().catch(() => ({ error: "预约服务返回了无法识别的响应" })) as { requests?: MeetingRequest[]; error?: string };
+          if (meetingResponse.ok && !meetingPayload.error) {
+            setMeetingRequests(meetingPayload.requests ?? []);
+            setMeetingLoadError("");
+          } else {
+            setMeetingLoadError(meetingPayload.error || "预约读取失败");
+          }
+        }
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "加载失败");
     } finally {
@@ -419,6 +508,26 @@ export default function Dashboard() {
     const timer = window.setTimeout(() => void loadDashboard(), 0);
     return () => window.clearTimeout(timer);
   }, [loadDashboard]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setView(mentorViewFromUrl()), 0);
+    if (!new URL(window.location.href).searchParams.has("mentorView")) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("mentorView", mentorViewFromUrl());
+      window.history.replaceState({}, "", url);
+    }
+    const onPopState = () => setView(mentorViewFromUrl());
+    window.addEventListener("popstate", onPopState);
+    return () => { window.clearTimeout(timer); window.removeEventListener("popstate", onPopState); };
+  }, []);
+
+  useEffect(() => {
+    if (data?.viewer.role !== "superadmin" && view === "settings") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("mentorView", "inbox");
+      window.history.replaceState({}, "", url);
+    }
+  }, [data?.viewer.role, view]);
 
   useEffect(() => {
     if (!toast) return;
@@ -467,7 +576,7 @@ export default function Dashboard() {
       });
       const result = (await response.json()) as { error?: string; message?: string };
       if (!response.ok) throw new Error(result.error || "审核失败");
-      setToast(action === "start_review" ? "已接手审核" : action === "substantive" ? "已确认为实质性进展" : "审核结果已保存");
+      setToast(action === "start_review" ? (entry.claim_stale ? "已重新领取超时审核" : "已接手审核") : action === "release_review" ? "已释放审核" : action === "substantive" ? "已确认为实质性进展" : "审核结果已保存");
       await loadDashboard();
     } catch (reviewError) {
       setToast(reviewError instanceof Error ? reviewError.message : "审核失败");
@@ -524,11 +633,15 @@ export default function Dashboard() {
     </>;
   }
 
-  const visibleNavItems = navItems;
+  const visibleNavItems = data?.viewer.role === "superadmin"
+    ? navItems
+    : navItems.filter((item) => item.id !== "settings");
+  const activeView: MentorView = data?.viewer.role !== "superadmin" && view === "settings" ? "inbox" : view;
 
   const viewerRoleLabel = data?.viewer.role === "superadmin"
     ? "超级管理员"
     : data?.viewer.role === "admin" ? "管理员（导师）" : "学生";
+  const meetingPendingCount = meetingRequests.filter((request) => request.status === "requested").length;
 
   return (
     <main className="app-shell">
@@ -542,10 +655,11 @@ export default function Dashboard() {
             <div className="nav-entry" key={item.id}>
               {index === 0 ? <span className="nav-section-label">主线</span> : null}
               {index === 2 ? <span className="nav-section-label">科研协作</span> : null}
-              {index === 5 ? <span className="nav-section-label">系统</span> : null}
-              <button className={`nav-item ${view === item.id ? "active" : ""}`} onClick={() => setView(item.id)}>
+              {item.id === "settings" ? <span className="nav-section-label">系统</span> : null}
+              <button className={`nav-item ${activeView === item.id ? "active" : ""}`} onClick={() => navigateMentor(item.id)}>
                 <span>{item.icon}</span>{item.label}
-                {item.id === "reviews" && data?.metrics.pending ? <b>{data.metrics.pending}</b> : null}
+                {item.id === "inbox" && data && data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + data.metrics.blocked + meetingPendingCount > 0
+                  ? <b>{data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + data.metrics.blocked + meetingPendingCount}</b> : null}
               </button>
             </div>
           ))}
@@ -567,16 +681,16 @@ export default function Dashboard() {
               value={query}
               onChange={(event) => {
                 setQuery(event.target.value);
-                if (event.target.value && view !== "overview" && view !== "students") setView("students");
+                if (event.target.value && activeView !== "students") navigateMentor("students");
               }}
               placeholder="搜索学生、阶段或研究方向"
             />
             <kbd>⌘ K</kbd>
           </label>
           <div className="command-shortcuts" aria-label="科研工作区快捷入口">
-            <button type="button" onClick={() => setView("overview")}>论文轨道</button>
-            <button type="button" onClick={() => setView("proposals")}>课题轨道</button>
-            <button type="button" onClick={() => setView("meetings")}>组会纪要</button>
+            <button type="button" onClick={() => navigateMentor("inbox")}>下一步行动</button>
+            <button type="button" onClick={() => navigateMentor("research")}>研究台账</button>
+            <button type="button" onClick={() => navigateMentor("meetings")}>组会议程</button>
           </div>
           <button className="command-sync" type="button" onClick={() => void loadDashboard()} aria-label="同步最新数据" title="同步最新数据">↻</button>
         </div>
@@ -584,66 +698,40 @@ export default function Dashboard() {
         <header className="topbar">
           <div>
             <p className="eyebrow">{today}</p>
-            <h1>{view === "overview" ? data?.viewer.role === "student" ? "我的科研进展" : "科研进展驾驶舱" : navItems.find((item) => item.id === view)?.label}</h1>
+            <h1>{navItems.find((item) => item.id === activeView)?.label}</h1>
             <p className="subtitle">
-              {view === "overview" ? data?.viewer.role === "student" ? "查看自己的培养计划、证据进展和下一步行动。" : "只关注新增证据、研究结论和需要您决策的事项。" : view === "proposals" ? "由管理员代录、授权管理员或超级管理员确认，每次修订均保留版本与审核记录。" : "以阶段内是否产生可验证的新信息为核心。"}
+              {activeView === "inbox" ? "按判断、协调和跟进顺序处理；完成后自动进入下一项。"
+                : activeView === "research" ? "统一查看论文、课题方案与成果状态，正式判断均保留版本记录。"
+                  : activeView === "meetings" ? "从阻塞和逾期事项生成可保存议程，并追踪提醒是否送达。"
+                    : activeView === "students" ? "按学生进入完整档案与指导闭环。"
+                      : activeView === "cohort" ? "查看课题组结构、风险分布和培养节奏。"
+                        : "仅超级管理员可维护生产配置、名册与权限。"}
             </p>
           </div>
           <div className="top-actions">
             <button className="feishu connected" onClick={() => setFeishuOpen(true)}><i />飞书已登录</button>
-            {data && (data.viewer.role === "superadmin" || data.viewer.role === "admin" || data.viewer.role === "student")
-              ? <button className="primary" onClick={() => setSubmitOpen(true)}>＋ 提交进展</button> : null}
+            {data ? <button className="primary" onClick={() => setGuidanceOpen(true)}>＋ 记录指导</button> : null}
           </div>
         </header>
 
         {loading ? <LoadingState /> : null}
         {error ? <div className="error-state"><strong>数据暂时未加载</strong><span>{error}</span><button onClick={() => void loadDashboard()}>重试</button></div> : null}
 
-        {!loading && !error && data && view === "overview" ? (
-          <div className="workbench-overview-layout">
-            <div className="workbench-canvas">
-              <OverviewMetrics data={data} />
-
-              <ActionBoard data={data} onReviews={() => setView("reviews")} onProposals={() => setView("proposals")} />
-
-              <section className="panel student-panel">
-                <PanelHeader title="学生进展" subtitle="按距离上次实质性进展的时间排序" action={`查看全部 ${data.metrics.total} 人 →`} onAction={() => setView("students")} />
-                <StudentFilters query={query} setQuery={setQuery} riskFilter={riskFilter} setRiskFilter={setRiskFilter} degreeFilter={degreeFilter} setDegreeFilter={setDegreeFilter} />
-                <StudentTable students={filteredStudents.slice(0, 8)} />
-              </section>
-            </div>
-
-            <aside className="workbench-context-rail">
-              <ResearchAssistantRail
-                data={data}
-                onReviews={() => setView("reviews")}
-                onProposals={() => setView("proposals")}
-                onMeetings={() => setView("meetings")}
-              />
-              <div className="right-column">
-                <section className="panel decisions">
-                  <PanelHeader title={isReviewerRole(data.viewer.role) ? "待您确认" : "待审核确认"} subtitle="正式科研判断由对应主导师或超级管理员完成" count={data.metrics.pending} />
-                  {data.pending.slice(0, 3).map((entry) => (
-                    <a className="decision-card" key={entry.id} href={`/students/${encodeURIComponent(entry.student_id)}#evidence`} aria-label={`查看 ${entry.display_name} 的全部进展`}>
-                      <span className={`decision-icon kind-${entry.kind}`}>{entry.kind.slice(0, 1)}</span>
-                      <div><strong>{entry.display_name} · {entry.kind}</strong><small>{entry.title}</small></div><b>查看进展 ›</b>
-                    </a>
-                  ))}
-                  {!data.pending.length ? <div className="empty-small">目前没有待审核记录</div> : null}
-                </section>
-                <section className="panel rule-card">
-                  <PanelHeader title="预警规则" subtitle="最长 30 天必须更新一次" />
-                  <div className="rule-line"><i className="dot normal" /><span><strong>正常</strong>30 天内有确认进展</span></div>
-                  <div className="rule-line"><i className="dot yellow" /><span><strong>黄色</strong>30–59 天无实质进展</span></div>
-                  <div className="rule-line"><i className="dot orange" /><span><strong>橙色</strong>60–89 天无实质进展</span></div>
-                  <div className="rule-line"><i className="dot red" /><span><strong>红色</strong>90 天及以上无实质进展</span></div>
-                </section>
-              </div>
-            </aside>
-          </div>
+        {!loading && !error && data && activeView === "inbox" ? (
+          <MentorDecisionInbox
+            data={data}
+            reviewBusy={reviewBusy}
+            reviewNotes={reviewNotes}
+            setReviewNotes={setReviewNotes}
+            onReview={review}
+            onToast={setToast}
+            onRefresh={loadDashboard}
+            meetingRequests={meetingRequests}
+            meetingLoadError={meetingLoadError}
+          />
         ) : null}
 
-        {!loading && !error && data && view === "students" ? (
+        {!loading && !error && data && activeView === "students" ? (
           <section className="panel roster-panel">
             <PanelHeader title="全部学生" subtitle="博士与硕士均已纳入首批试用" count={filteredStudents.length} />
             <StudentFilters query={query} setQuery={setQuery} riskFilter={riskFilter} setRiskFilter={setRiskFilter} degreeFilter={degreeFilter} setDegreeFilter={setDegreeFilter} />
@@ -651,83 +739,313 @@ export default function Dashboard() {
           </section>
         ) : null}
 
-        {!loading && !error && data && view === "proposals" ? (
-          <ProposalWorkspace viewer={data.viewer} students={data.students} onToast={setToast} />
+        {!loading && !error && data && activeView === "research" ? (
+          <MentorResearchLedger data={data} onToast={setToast} />
         ) : null}
 
-        {!loading && !error && data && view === "reviews" ? (
-          <section className="review-layout">
-            <div className="review-intro">
-              <strong>{data.pending.length} 项待审核</strong>
-              <span>实质性进展会更新学生的最近进展日期；其他判断保留记录，但不重置预警。</span>
-            </div>
-            {data.pending.map((entry) => (
-              <article className="review-card" key={entry.id}>
-                <div className="review-card-head">
-                  <span className={`decision-icon kind-${entry.kind}`}>{entry.kind.slice(0, 1)}</span>
-                  <div><h2>{entry.paper?.title || entry.title}</h2><p>{entry.display_name} · {entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.project ? `${entry.project.milestone_title || "未关联节点"} · V${entry.current_revision}` : entry.kind} · {shortDate(entry.submitted_at)}提交</p></div>
-                  <a className="review-student-link" href={`/students/${encodeURIComponent(entry.student_id)}#evidence`}>查看学生全部进展 ↗</a>
-                  <span className={`status-pill ${entry.review_status === "in_review" ? "reviewing" : "pending"}`}>
-                    {entry.review_status === "in_review" ? `${entry.reviewer_name || "导师"}审核中` : "等待接手"}
-                  </span>
-                </div>
-                <div className="review-evidence">
-                  <div><span>新增结论 · 当前 V{entry.current_revision}</span><p>{entry.summary}</p></div>
-                  <div><span>证据 · 当前 V{entry.current_revision}</span><p>{entry.evidence}</p></div>
-                  {entry.literature_ref ? <div><span>论文 / DOI</span><p>{entry.literature_ref}</p></div> : null}
-                </div>
-                {entry.paper ? <div className="review-paper-plan"><div><span>下一行动</span><b>{entry.paper.next_action}</b></div><div><span>行动期限</span><b>{entry.paper.next_action_due_date}</b></div>{entry.paper.submission_identifier ? <div><span>稿件编号 / DOI</span><b>{entry.paper.submission_identifier}</b></div> : null}{entry.paper.blocker ? <div className="blocker"><span>当前阻塞</span><b>{entry.paper.blocker}</b></div> : null}</div> : null}
-                {entry.project ? <div className="review-project-plan">
-                  <div><span>关联节点</span><b>{entry.project.milestone_title || "未关联培养节点"}</b><small>{entry.project.milestone_target_date ? `目标 ${entry.project.milestone_target_date}` : "未设置节点日期"}</small></div>
-                  <div><span>下一行动</span><b>{entry.project.next_action}</b><small>{entry.project.next_action_due_date ? `计划 ${entry.project.next_action_due_date}` : "未设置期限"}</small></div>
-                  {entry.project.evidence_target ? <div><span>节点验收目标</span><b>{entry.project.evidence_target}</b></div> : null}
-                  {entry.project.blocker ? <div className="blocker"><span>当前阻塞</span><b>{entry.project.blocker}</b></div> : null}
-                  {entry.project.completion_requested ? <strong>学生申请完成该节点；只有“实质性进展”确认后才会回写完成。</strong> : null}
-                </div> : null}
-                <div className="evidence-source-list" aria-label="证据来源">
-                  {entry.evidence_sources.filter((source) => source.source_type !== "attachment").map((source) => <span key={source.id}>
-                    <b>{source.label} · V{source.revision_number}</b>
-                    {source.source_ref ? source.source_type === "git" || source.source_type === "url" || source.source_type === "attachment"
-                      ? <a href={source.source_ref} target={source.source_type === "attachment" ? undefined : "_blank"} rel={source.source_type === "attachment" ? undefined : "noreferrer"}>{source.source_type === "attachment" ? "下载附件" : "打开外部证据"}</a>
-                      : <small>{source.source_ref}</small> : null}
-                    {source.content_sha256 ? <em>指纹 {source.content_sha256}</em> : null}
-                  </span>)}
-                  {!entry.evidence_sources.some((source) => source.source_type !== "attachment") ? <span><b>历史文本证据</b><small>来源结构化将在下次补证时建立</small></span> : null}
-                </div>
-                {entry.attachments.length ? <div className="review-attachment-list" aria-label="当前修订附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>V{attachment.revision_number} 附件</span><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)} · 指纹 {attachment.content_sha256}</small></a>)}</div> : null}
-                <label className="review-note-field">审核意见
-                  <textarea
-                    rows={3}
-                    value={reviewNotes[entry.id] || ""}
-                    onChange={(event) => setReviewNotes((current) => ({ ...current, [entry.id]: event.target.value }))}
-                    disabled={!entry.can_finalize}
-                    placeholder="需要补充或判定为非进展时必须说明具体理由"
-                  />
-                </label>
-                <div className="review-actions" aria-label="进展判断">
-                  {entry.can_finalize ? <>
-                    {entry.review_status === "submitted" ? <button disabled={reviewBusy === entry.id} onClick={() => void review(entry, "start_review")}>接手审核</button> : null}
-                    <button disabled={reviewBusy === entry.id} className="approve" onClick={() => void review(entry, "substantive")}>实质性进展</button>
-                    <button disabled={reviewBusy === entry.id} onClick={() => void review(entry, "supporting")}>支持性工作</button>
-                    <button disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim()} title="请先填写具体理由" onClick={() => void review(entry, "supplement")}>需要补充</button>
-                    <button disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim()} title="请先填写具体理由" onClick={() => void review(entry, "rejected")}>非进展</button>
-                  </> : <p>{entry.reviewer_name ? `由 ${entry.reviewer_name} 审核中` : "当前账号无审核权"}</p>}
-                </div>
-              </article>
-            ))}
-            {!data.pending.length ? <div className="empty-state"><span>✓</span><strong>待审核记录已清空</strong><small>新的飞书提交会自动进入这里。</small></div> : null}
-          </section>
-        ) : null}
-
-        {!loading && !error && data && view === "meetings" ? <MeetingView viewer={data.viewer} students={data.students} onRemind={sendReminder} /> : null}
-        {!loading && !error && view === "settings" && data ? <SettingsView viewer={data.viewer} onFeishu={() => setFeishuOpen(true)} students={data.students} onRosterImported={async () => { setToast("真实学生名册已导入"); await loadDashboard(); }} /> : null}
+        {!loading && !error && data && activeView === "meetings" ? <MeetingView viewer={data.viewer} students={data.students} meetingRequests={meetingRequests} meetingLoadError={meetingLoadError} onRemind={sendReminder} onToast={setToast} onMeetingChange={loadDashboard} /> : null}
+        {!loading && !error && data && activeView === "cohort" ? <div className="cohort-workspace"><OverviewMetrics data={data} /><section className="panel roster-panel"><PanelHeader title="课题组培养节奏" subtitle="按距离上次实质性进展的时间排序" count={filteredStudents.length} /><StudentFilters query={query} setQuery={setQuery} riskFilter={riskFilter} setRiskFilter={setRiskFilter} degreeFilter={degreeFilter} setDegreeFilter={setDegreeFilter} /><StudentTable students={filteredStudents} /></section></div> : null}
+        {!loading && !error && activeView === "settings" && data?.viewer.role === "superadmin" ? <SettingsView viewer={data.viewer} onFeishu={() => setFeishuOpen(true)} students={data.students} onRosterImported={async () => { setToast("真实学生名册已导入"); await loadDashboard(); }} /> : null}
       </section>
 
-      {submitOpen && data ? <ProgressModal students={data.students} onClose={() => setSubmitOpen(false)} onSaved={async () => { setSubmitOpen(false); setToast("进展已提交，等待导师确认"); await loadDashboard(); }} /> : null}
+      {guidanceOpen && data ? <GuidanceQuickModal students={data.students} onClose={() => setGuidanceOpen(false)} onSaved={async () => { setGuidanceOpen(false); setToast("指导已保存，并进入学生下一步行动"); await loadDashboard(); }} /> : null}
       {feishuOpen && data ? <FeishuModal viewer={data.viewer} onClose={() => setFeishuOpen(false)} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.reload(); }} /> : null}
       {toast ? <div className="toast" role="status">{toast}</div> : null}
     </main>
   );
+}
+
+type MentorTaskCategory = "decision" | "coordination" | "followup" | "waiting";
+type MentorInboxTask =
+  | { key: string; category: MentorTaskCategory; kind: "progress"; entry: PendingEntry }
+  | { key: string; category: MentorTaskCategory; kind: "workflow"; task: DashboardData["workflowTasks"][number] }
+  | { key: string; category: MentorTaskCategory; kind: "meeting"; request: MeetingRequest };
+
+const mentorTaskLabels: Record<MentorTaskCategory, string> = {
+  decision: "需要判断",
+  coordination: "需要协调",
+  followup: "需要跟进",
+  waiting: "等待中",
+};
+
+function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, onReview, onToast, onRefresh, meetingRequests, meetingLoadError }: {
+  data: DashboardData;
+  reviewBusy: number | null;
+  reviewNotes: Record<number, string>;
+  setReviewNotes: Dispatch<SetStateAction<Record<number, string>>>;
+  onReview: (entry: PendingEntry, action: string) => Promise<void>;
+  onToast: (message: string) => void;
+  onRefresh: () => Promise<void>;
+  meetingRequests: MeetingRequest[];
+  meetingLoadError: string;
+}) {
+  const [filter, setFilter] = useState<"all" | MentorTaskCategory>("all");
+  const [selectedKey, setSelectedKey] = useState("");
+  const [meetingBusy, setMeetingBusy] = useState<number | null>(null);
+  const [meetingNotes, setMeetingNotes] = useState<Record<number, string>>({});
+  const [workflowBusy, setWorkflowBusy] = useState<number | null>(null);
+  const detailRef = useRef<HTMLDivElement>(null);
+
+  const tasks = useMemo<MentorInboxTask[]>(() => [
+    ...data.pending.map((entry): MentorInboxTask => ({
+      key: `progress-${entry.id}`,
+      category: entry.can_finalize ? "decision" : "waiting",
+      kind: "progress",
+      entry,
+    })),
+    ...data.workflowTasks.map((task): MentorInboxTask => ({
+      key: `workflow-${task.type}-${task.id}`,
+      category: task.type === "proposal_review" || task.type === "guidance_verification" ? "decision" : task.type === "blocked_milestone" ? "coordination" : "followup",
+      kind: "workflow",
+      task,
+    })),
+    ...meetingRequests.filter((request) => request.status === "requested").map((request): MentorInboxTask => ({
+      key: `meeting-${request.id}`,
+      category: "coordination",
+      kind: "meeting",
+      request,
+    })),
+  ], [data.pending, data.workflowTasks, meetingRequests]);
+  const categoryPriority: Record<MentorTaskCategory, number> = { decision: 0, coordination: 1, followup: 2, waiting: 3 };
+  const filtered = tasks
+    .filter((task) => filter === "all" || task.category === filter)
+    .sort((left, right) => categoryPriority[left.category] - categoryPriority[right.category]);
+  const selected = filtered.find((task) => task.key === selectedKey) ?? filtered[0];
+
+  async function handleMeeting(request: MeetingRequest, action: "confirm" | "decline") {
+    const meetingNote = meetingNotes[request.id] || "";
+    if (action === "decline" && !meetingNote.trim()) {
+      onToast("拒绝预约前请填写具体原因");
+      return;
+    }
+    setMeetingBusy(request.id);
+    try {
+      const response = await fetch("/api/meeting-requests", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: request.id,
+          expectedVersion: request.version,
+          action,
+          responseNote: meetingNote,
+        }),
+      });
+      const payload = await response.json() as { error?: string; message?: string };
+      if (!response.ok) throw new Error(payload.error || "预约处理失败");
+      onToast(payload.message || "预约已处理");
+      setMeetingNotes((current) => ({ ...current, [request.id]: "" }));
+      await onRefresh();
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "预约处理失败");
+    } finally {
+      setMeetingBusy(null);
+    }
+  }
+
+  async function verifyGuidance(task: DashboardData["workflowTasks"][number]) {
+    setWorkflowBusy(task.id);
+    try {
+      const response = await fetch("/api/student-guidance", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: task.id, action: "complete" }),
+      });
+      const payload = await response.json() as { error?: string; message?: string };
+      if (!response.ok) throw new Error(payload.error || "指导验收失败");
+      onToast(payload.message || "已完成导师验收");
+      await onRefresh();
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "指导验收失败");
+    } finally {
+      setWorkflowBusy(null);
+    }
+  }
+
+  const counts = tasks.reduce<Record<MentorTaskCategory, number>>((result, task) => {
+    result[task.category] += 1;
+    return result;
+  }, { decision: 0, coordination: 0, followup: 0, waiting: 0 });
+
+  return <section className="mentor-inbox">
+    <div className="mentor-inbox-summary">
+      <div><span>NEXT ACTION</span><h2>{tasks.filter((task) => task.category !== "waiting").length} 项需要您推进</h2><p>只呈现下一步动作；正式判断不会自动批量执行。</p></div>
+      <div className="mentor-inbox-filters" role="group" aria-label="待办类型">
+        <button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>全部 <b>{tasks.length}</b></button>
+        {(Object.keys(mentorTaskLabels) as MentorTaskCategory[]).map((category) => <button className={filter === category ? "active" : ""} key={category} onClick={() => setFilter(category)}>{mentorTaskLabels[category]} <b>{counts[category]}</b></button>)}
+      </div>
+    </div>
+    <div className="mentor-inbox-workspace">
+      <div className="mentor-task-queue" aria-label="待办队列">
+        {meetingLoadError ? <div className="mentor-task-load-error" role="alert"><strong>预约暂未同步</strong><small>{meetingLoadError}</small><button type="button" onClick={() => void onRefresh()}>重新读取</button></div> : null}
+        {filtered.map((task) => {
+          const student = task.kind === "progress" ? task.entry.display_name : task.kind === "workflow" ? task.task.studentName : task.request.student_name;
+          const title = task.kind === "progress" ? task.entry.paper?.title || task.entry.title : task.kind === "workflow" ? task.task.title : task.request.topic;
+          const meta = task.kind === "progress" ? `${task.entry.kind} · V${task.entry.current_revision}` : task.kind === "workflow" ? task.task.detail : `${task.request.preferred_date} ${task.request.preferred_time}`;
+          return <button key={task.key} className={selected?.key === task.key ? "active" : ""} onClick={() => {
+            setSelectedKey(task.key);
+            if (window.matchMedia("(max-width: 780px)").matches) window.requestAnimationFrame(() => {
+              detailRef.current?.scrollIntoView({ behavior: studentScrollBehavior(), block: "start" });
+              detailRef.current?.focus({ preventScroll: true });
+            });
+          }}>
+            <span className={`mentor-task-category ${task.category}`}>{mentorTaskLabels[task.category]}</span>
+            <strong>{student}</strong><b>{title}</b><small>{meta}</small>
+          </button>;
+        })}
+        {!filtered.length && !meetingLoadError ? <div className="mentor-task-empty"><span>✓</span><strong>这个队列已清空</strong><small>切换类型可查看其他事项。</small></div> : null}
+      </div>
+      <div className="mentor-task-detail" ref={detailRef} tabIndex={-1}>
+        {selected?.kind === "progress" ? <MentorProgressDecision
+          entry={selected.entry}
+          busy={reviewBusy === selected.entry.id}
+          note={reviewNotes[selected.entry.id] || ""}
+          onNote={(value) => setReviewNotes((current) => ({ ...current, [selected.entry.id]: value }))}
+          onReview={(action) => onReview(selected.entry, action)}
+        /> : null}
+        {selected?.kind === "workflow" ? <article className="mentor-workflow-detail">
+          <span className={`mentor-task-category ${selected.category}`}>{mentorTaskLabels[selected.category]}</span>
+          <h2>{selected.task.title}</h2><p>{selected.task.studentName} · {selected.task.detail}</p>
+          {selected.task.targetDate ? <div className="mentor-decision-fact"><span>目标日期</span><strong>{selected.task.targetDate}</strong></div> : null}
+          {selected.task.type === "guidance_verification" && selected.task.context ? <div className="mentor-decision-fact"><span>原指导内容</span><strong>{selected.task.context}</strong></div> : null}
+          {selected.task.type === "guidance_verification" && selected.task.nextAction ? <div className="mentor-decision-fact"><span>下一行动</span><strong>{selected.task.nextAction}</strong></div> : null}
+          {selected.task.type === "guidance_verification" ? <div className="mentor-decision-fact"><span>验收标准</span><strong>{selected.task.acceptanceCriteria || "未设置；请进入指导记录补齐并核对"}</strong></div> : null}
+          <div className="mentor-decision-effect"><b>下一步</b><span>{selected.task.type === "proposal_review" ? "打开当前版本，确认、批注或退回修改。" : selected.task.type === "guidance_verification" ? "核对学生的完成说明与验收标准，再作出导师确认。" : selected.task.type === "blocked_milestone" ? "进入学生档案，明确阻塞需要的资源、判断或协作。" : "进入学生档案，重排期限或记录跟进指导。"}</span></div>
+          <div className="mentor-detail-actions">{selected.task.type === "proposal_review" ? <a className="primary button-link" href={`/?mentorView=research&researchTab=proposals&proposal=${selected.task.id}`}>进入方案审核</a> : selected.task.type === "guidance_verification" ? <><a className={selected.task.acceptanceCriteria ? "button-link" : "primary button-link"} href={`/students/${encodeURIComponent(selected.task.studentId)}#guidance`}>查看指导记录</a>{selected.task.acceptanceCriteria ? <button className="primary" disabled={workflowBusy === selected.task.id} onClick={() => void verifyGuidance(selected.task)}>{workflowBusy === selected.task.id ? "验收中…" : "确认验收"}</button> : null}</> : <a className="primary button-link" href={`/students/${encodeURIComponent(selected.task.studentId)}#workflow`}>进入学生档案</a>}</div>
+        </article> : null}
+        {selected?.kind === "meeting" ? <article className="mentor-workflow-detail">
+          <span className="mentor-task-category coordination">需要协调</span>
+          <h2>{selected.request.topic}</h2><p>{selected.request.student_name} 申请 {selected.request.preferred_date} {selected.request.preferred_time}，预计 {selected.request.duration_minutes} 分钟。</p>
+          {selected.request.note ? <div className="mentor-decision-fact"><span>学生备注</span><strong>{selected.request.note}</strong></div> : null}
+          <label className="review-note-field">回复说明<textarea rows={3} value={meetingNotes[selected.request.id] || ""} onChange={(event) => setMeetingNotes((current) => ({ ...current, [selected.request.id]: event.target.value }))} placeholder="确认时可留空；拒绝时必须给出可行动的原因" /></label>
+          <div className="mentor-detail-actions"><button disabled={meetingBusy === selected.request.id} onClick={() => void handleMeeting(selected.request, "decline")}>拒绝并说明</button><button className="primary" disabled={meetingBusy === selected.request.id} onClick={() => void handleMeeting(selected.request, "confirm")}>确认预约</button></div>
+        </article> : null}
+        {!selected ? <div className="mentor-task-detail-empty"><span>✓</span><h2>没有需要处理的事项</h2><p>新进展、方案、阻塞或预约到达后会进入这里。</p></div> : null}
+      </div>
+    </div>
+  </section>;
+}
+
+function snapshotText(snapshot: Record<string, unknown> | undefined, key: string) {
+  const value = snapshot?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function MentorProgressDecision({ entry, busy, note, onNote, onReview }: {
+  entry: PendingEntry;
+  busy: boolean;
+  note: string;
+  onNote: (value: string) => void;
+  onReview: (action: string) => Promise<void>;
+}) {
+  const currentRevision = entry.revisions.find((revision) => revision.revision_number === entry.current_revision);
+  const previousRevision = entry.revisions.find((revision) => revision.revision_number === entry.current_revision - 1);
+  const previousSummary = snapshotText(previousRevision?.snapshot, "summary");
+  const previousEvidence = snapshotText(previousRevision?.snapshot, "evidence");
+  return <article className="mentor-progress-decision">
+    <header><div><span>{entry.kind} · 当前 V{entry.current_revision}</span><h2>{entry.paper?.title || entry.title}</h2><p>{entry.display_name} · {shortDate(entry.submitted_at)}提交</p></div><a href={`/students/${encodeURIComponent(entry.student_id)}#evidence`}>完整档案 ↗</a></header>
+    <div className="mentor-decision-status"><span className={`status-pill ${entry.review_status === "in_review" ? "reviewing" : "pending"}`}>{entry.claim_stale ? "接手已超时" : entry.review_status === "in_review" ? `${entry.reviewer_name || "导师"}审核中` : "等待判断"}</span><small>正式判断将写入版本与审计记录</small></div>
+    <section className="mentor-version-diff">
+      <div><span>本版新增结论</span><p>{entry.summary || snapshotText(currentRevision?.snapshot, "summary") || "未填写"}</p></div>
+      <div><span>本版核验证据</span><p>{entry.evidence || snapshotText(currentRevision?.snapshot, "evidence") || "未填写"}</p></div>
+      {previousRevision && previousSummary !== entry.summary ? <details><summary>查看与 V{previousRevision.revision_number} 的结论差异</summary><p>{previousSummary || "上一版未填写结论"}</p></details> : null}
+      {previousRevision && previousEvidence !== entry.evidence ? <details><summary>查看上一版证据</summary><p>{previousEvidence || "上一版未填写证据"}</p></details> : null}
+    </section>
+    {entry.paper ? <div className="mentor-decision-facts"><div><span>论文阶段</span><strong>{paperStageMeta[entry.paper.stage].label}</strong></div><div><span>下一行动</span><strong>{entry.paper.next_action}</strong></div><div><span>期限</span><strong>{entry.paper.next_action_due_date}</strong></div>{entry.paper.blocker ? <div className="blocker"><span>阻塞</span><strong>{entry.paper.blocker}</strong></div> : null}</div> : null}
+    {entry.project ? <div className="mentor-decision-facts"><div><span>培养节点</span><strong>{entry.project.milestone_title || "未关联节点"}</strong></div><div><span>下一行动</span><strong>{entry.project.next_action}</strong></div><div><span>期限</span><strong>{entry.project.next_action_due_date}</strong></div>{entry.project.blocker ? <div className="blocker"><span>阻塞</span><strong>{entry.project.blocker}</strong></div> : null}</div> : null}
+    <div className="mentor-evidence-strip">{entry.evidence_sources.map((source) => <span key={source.id}><b>{source.label}</b>{source.source_ref ? <a href={source.source_ref} target="_blank" rel="noreferrer">打开证据</a> : null}{source.content_sha256 ? <small>指纹 {source.content_sha256}</small> : null}</span>)}{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)}</small></a>)}</div>
+    <label className="review-note-field">判断依据或反馈<textarea rows={3} value={note} onChange={(event) => onNote(event.target.value)} disabled={!entry.can_finalize} placeholder="退回补证或判定为非进展时必须说明具体理由" /></label>
+    <div className="mentor-decision-effect"><b>保存后影响</b><span>“实质性进展”会更新最近进展日期；“支持性工作”仅留痕；退回与非进展不会重置预警。</span></div>
+    <div className="review-actions">
+      {entry.review_status === "submitted" && entry.can_finalize ? <button disabled={busy} onClick={() => void onReview("start_review")}>接手审核</button> : null}
+      {entry.claim_stale && entry.can_finalize ? <button className="primary" disabled={busy} onClick={() => void onReview("start_review")}>重新领取超时审核</button> : null}
+      {entry.can_release ? <button disabled={busy} onClick={() => void onReview("release_review")}>释放审核</button> : null}
+      {entry.can_decide ? <><button className="approve" disabled={busy} onClick={() => void onReview("substantive")}>实质性进展</button><button disabled={busy} onClick={() => void onReview("supporting")}>支持性工作</button><button disabled={busy || !note.trim()} onClick={() => void onReview("supplement")}>需要补充</button><button disabled={busy || !note.trim()} onClick={() => void onReview("rejected")}>非进展</button></> : null}
+      {!entry.can_finalize ? <p>{entry.reviewer_name ? `等待 ${entry.reviewer_name} 完成判断` : "当前账号没有该学生的审核权限"}</p> : null}
+    </div>
+  </article>;
+}
+
+type MentorResearchTab = "papers" | "proposals" | "outputs";
+
+function mentorResearchTabFromUrl(): MentorResearchTab {
+  if (typeof window === "undefined") return "papers";
+  const requested = new URL(window.location.href).searchParams.get("researchTab");
+  return requested === "proposals" || requested === "outputs" ? requested : "papers";
+}
+
+function MentorResearchLedger({ data, onToast }: { data: DashboardData; onToast: (message: string) => void }) {
+  const [tab, setTab] = useState<MentorResearchTab>(mentorResearchTabFromUrl);
+  const initialProposalId = typeof window === "undefined" ? undefined : Number(new URL(window.location.href).searchParams.get("proposal")) || undefined;
+  useEffect(() => {
+    const restoreTab = () => setTab(mentorResearchTabFromUrl());
+    window.addEventListener("popstate", restoreTab);
+    return () => window.removeEventListener("popstate", restoreTab);
+  }, []);
+  function selectTab(next: MentorResearchTab) {
+    setTab(next);
+    const url = new URL(window.location.href);
+    url.searchParams.set("researchTab", next);
+    if (next !== "proposals") url.searchParams.delete("proposal");
+    window.history[tab === next ? "replaceState" : "pushState"]({}, "", url);
+  }
+  return <div className="mentor-research-ledger">
+    <div className="research-ledger-tabs" role="tablist" aria-label="研究台账类型"><button role="tab" aria-selected={tab === "papers"} className={tab === "papers" ? "active" : ""} onClick={() => selectTab("papers")}>论文 <b>{data.papers.length}</b></button><button role="tab" aria-selected={tab === "proposals"} className={tab === "proposals" ? "active" : ""} onClick={() => selectTab("proposals")}>课题方案 <b>{data.metrics.proposalPending} 待审</b></button><button role="tab" aria-selected={tab === "outputs"} className={tab === "outputs" ? "active" : ""} onClick={() => selectTab("outputs")}>成果 <b>{data.metrics.outputs}</b></button></div>
+    {tab === "papers" ? <section className="panel research-paper-ledger"><PanelHeader title="论文台账" subtitle="按计划投稿日期与当前阶段组织，不与进展审核重复" count={data.papers.length} /><div className="research-paper-list">{data.papers.map((paper) => <a key={paper.id} href={`/students/${encodeURIComponent(paper.student_id)}#papers`}><div><span>{paper.student_name} · {paper.paper_type}</span><strong>{paper.title}</strong><small>{paper.target_venue || "目标期刊/会议待定"}</small></div><div><b>{paperStageMeta[paper.current_stage].label}</b><em>{paper.planned_submission_date || "未设投稿日期"}</em><small>{paper.pending_count} 项待确认 · {paper.update_count} 次更新</small></div></a>)}{!data.papers.length ? <div className="empty-small">尚无论文台账。</div> : null}</div></section> : null}
+    {tab === "proposals" ? <ProposalWorkspace viewer={data.viewer} students={data.students} onToast={onToast} initialSelectedId={initialProposalId} /> : null}
+    {tab === "outputs" ? <section className="panel research-output-ledger"><PanelHeader title="科研成果索引" subtitle="进入学生档案维护论文、数据、软件、专利等正式成果" count={data.metrics.outputs} /><div>{data.students.filter((student) => student.outputCount > 0).sort((a, b) => b.outputCount - a.outputCount).map((student) => <a key={student.id} href={`/students/${encodeURIComponent(student.id)}#outputs`}><span><strong>{student.name}</strong><small>{student.stage} · {student.degree}</small></span><b>{student.outputCount} 项</b></a>)}{!data.metrics.outputs ? <div className="empty-small">尚无已登记成果。</div> : null}</div></section> : null}
+  </div>;
+}
+
+function GuidanceQuickModal({ students, onClose, onSaved }: { students: Student[]; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [verificationMode, setVerificationMode] = useState<"self_report" | "mentor_verify">("mentor_verify");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])") ?? []);
+    focusable()[0]?.focus();
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      if (event.shiftKey && document.activeElement === items[0]) { event.preventDefault(); items.at(-1)?.focus(); }
+      else if (!event.shiftKey && document.activeElement === items.at(-1)) { event.preventDefault(); items[0].focus(); }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => { document.removeEventListener("keydown", onKeyDown); previousFocus?.focus(); };
+  }, [onClose]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true); setError("");
+    const body = Object.fromEntries(new FormData(event.currentTarget).entries());
+    try {
+      const response = await fetch("/api/student-guidance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "指导保存失败");
+      await onSaved();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "指导保存失败");
+      setBusy(false);
+    }
+  }
+
+  return <div className="modal-layer" role="presentation"><div className="modal guidance-quick-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="guidance-quick-title"><button className="close" aria-label="关闭记录指导对话框" onClick={onClose}>×</button><div className="modal-title"><span>导师指导</span><h2 id="guidance-quick-title">把讨论变成一条可验收的下一步行动</h2><p>学生确认收到并提交完成说明；需要时由导师做最终验收。</p></div><form onSubmit={submit}>
+    <div className="form-row"><label>学生<select name="studentId" required defaultValue=""><option value="" disabled>请选择学生</option>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label><label>指导类型<select name="guidanceType" defaultValue="general"><option value="general">一般指导</option><option value="meeting_followup">组会跟进</option><option value="paper">论文指导</option><option value="milestone">培养节点</option><option value="blocker">阻塞处理</option></select></label></div>
+    <label>指导主题<input name="title" required placeholder="例如：补齐实验对照并形成可审阅图表" /></label>
+    <label>指导内容<textarea name="content" rows={4} required placeholder="记录结论、关键取舍和学生需要理解的原因" /></label>
+    <label>下一步行动<textarea name="nextAction" rows={2} required placeholder="用一个可交付动作描述，不写笼统的‘继续推进’" /></label>
+    <div className="form-row"><label>完成期限<input name="dueDate" type="date" required /></label><label>验收方式<select name="verificationMode" value={verificationMode} onChange={(event) => setVerificationMode(event.target.value as "self_report" | "mentor_verify")}><option value="mentor_verify">学生提交，导师验收</option><option value="self_report">学生自行完成</option></select></label></div>
+    <label>验收标准<textarea name="acceptanceCriteria" rows={3} required={verificationMode === "mentor_verify"} placeholder={verificationMode === "mentor_verify" ? "例如：上传含三组对照的图表，误差条与参数说明完整" : "可选：写清学生自检条件"} /></label>
+    {error ? <p className="form-error">{error}</p> : null}<div className="modal-actions"><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={busy}>{busy ? "保存中…" : "保存并交给学生"}</button></div>
+  </form></div></div>;
 }
 
 const meetingStatusLabels: Record<MeetingRequest["status"], string> = {
@@ -804,6 +1122,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
   const [view, setView] = useState<StudentView>("today");
   const [researchTrack, setResearchTrack] = useState<StudentResearchTrack>("paper");
   const [composer, setComposer] = useState<"论文" | "项目" | null>(null);
+  const [composerVisible, setComposerVisible] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<StudentNavigationIntent | null>(null);
   const student = data.students.find((item) => item.id === data.viewer.studentId);
   const papers = student ? data.papers.filter((paper) => paper.student_id === student.id) : [];
@@ -817,11 +1136,12 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
     setView(intent.view);
     setResearchTrack(intent.researchTrack || "paper");
     if (intent.composerKind) setComposer(intent.composerKind);
+    setComposerVisible(Boolean(intent.composerKind));
     setPendingNavigation(intent);
   }, []);
 
   function navigateStudent(intent: StudentNavigationIntent) {
-    const nextIntent = intent.view === "progress" && !intent.composerKind && composer ? { ...intent, composerKind: composer } : intent;
+    const nextIntent = intent.view === "progress" && !intent.composerKind && composer && composerVisible ? { ...intent, composerKind: composer } : intent;
     window.history.pushState({ studentView: nextIntent.view }, "", studentNavigationHref(nextIntent));
     applyStudentNavigation(nextIntent);
   }
@@ -884,7 +1204,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
       <nav aria-label="我的科研导航">
         {(Object.entries(studentViewMeta) as Array<[StudentView, (typeof studentViewMeta)[StudentView]]>).map(([itemView, item]) => <a key={itemView} className={view === itemView ? "active" : ""} aria-current={view === itemView ? "page" : undefined} href={studentNavigationHref({ view: itemView })} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigateStudent({ view: itemView }); }}><i aria-hidden="true">{item.icon}</i><span>{item.label}</span></a>)}
       </nav>
-      <button className="student-workbench-create" type="button" aria-controls="student-quick-progress" aria-expanded={Boolean(composer)} onClick={() => openComposer("论文")}><i aria-hidden="true">＋</i>提交新进展</button>
+      <button className="student-workbench-create" type="button" aria-controls="student-quick-progress" aria-expanded={composerVisible} onClick={() => openComposer("论文")}><i aria-hidden="true">＋</i>提交新进展</button>
       <div className="student-workbench-boundary"><strong>本人数据空间</strong><small>论文、课题、组会和导师回复按账号隔离</small></div>
       <button className="student-workbench-account" type="button" onClick={onFeishu}><span className="avatar">{data.viewer.name.slice(0, 1)}</span><span><strong>{data.viewer.name}</strong><small>飞书账号</small></span><i>›</i></button>
     </aside>
@@ -911,7 +1231,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
       {view === "progress" ? <StudentViewIntro id="student-view-progress-title" eyebrow="PROGRESS" title="提交与查看全部进展" description="论文和课题在这里提交；全部记录、审核状态和导师回复按时间统一查看。" metric={`${waitingCount}`} metricLabel="条等待导师">
         <div className="student-view-intro-actions"><button className="primary" type="button" onClick={() => openComposer("论文")}>记论文进展</button><button type="button" onClick={() => openComposer("项目")}>记课题进展</button></div>
       </StudentViewIntro> : null}
-      {composer ? <div className="student-persistent-composer" hidden={view !== "progress"}><StudentQuickProgressComposer key={composer} kind={composer} student={student} papers={papers} onCancel={() => { setComposer(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); }} onSaved={async () => { const savedKind = composer; setComposer(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); onToast(`${savedKind === "论文" ? "论文" : "课题"}进展已提交，记录已更新`); await onRefresh(); }} /></div> : null}
+      {composer ? <div className="student-persistent-composer" hidden={view !== "progress" || !composerVisible}><StudentQuickProgressComposer key={composer} kind={composer} student={student} papers={papers} onCancel={() => { setComposerVisible(false); setComposer(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); }} onSaved={async () => { const savedKind = composer; setComposerVisible(false); setComposer(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); onToast(`${savedKind === "论文" ? "论文" : "课题"}进展已提交，记录已更新`); await onRefresh(); }} /></div> : null}
       {view === "progress" ? <StudentProgressOverview student={student} /> : null}
 
       {view === "library" ? <><StudentViewIntro id="student-view-library-title" eyebrow="ARTIFACT LIBRARY" title="科研资料与证据来源" description="文件、DOI、Git 链接和组会来源集中检索，不再回到每条进展里翻找。" /><StudentResearchLibrary student={student} onOpenSource={openResearchSource} /></> : null}
@@ -1543,6 +1863,7 @@ function StudentProjectProgressPanel({ student, onRefresh, onToast }: {
 
 function guidanceDueLabel(note: StudentGuidanceNote) {
   if (note.status === "completed") return "已完成";
+  if (note.student_reported_at && note.verification_mode === "mentor_verify") return "待导师验收";
   if (!note.due_date) return "未设置期限";
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -1612,11 +1933,12 @@ function StudentGuidanceInbox({ compact = false, onToast }: {
       {visibleNotes.map((note) => <article key={note.id} className={note.status}>
         <header><div><span>{note.mentor_name} · {shortDate(note.created_at)}</span><strong>{note.title || "导师指导"}</strong></div><em>{guidanceDueLabel(note)}</em></header>
         <p>{note.content}</p>
-        {note.next_action ? <div className="student-guidance-next"><span>下一项可交付行动</span><strong>{note.next_action}</strong>{note.due_date ? <small>期限 {note.due_date}</small> : null}</div> : null}
+        {note.next_action ? <div className="student-guidance-next"><span>下一项可交付行动</span><strong>{note.next_action}</strong>{note.due_date ? <small>期限 {note.due_date}</small> : null}{note.acceptance_criteria ? <div className="student-guidance-criteria"><span>完成标准</span><p>{note.acceptance_criteria}</p></div> : null}</div> : null}
         {note.status === "open" ? <footer>
           {!note.acknowledged_at ? <button type="button" disabled={busy === note.id} onClick={() => void update(note, "acknowledge")}>确认收到</button> : <span className="student-guidance-ack">✓ 已确认收到</span>}
-          <label>完成说明（可选）<input value={completionNotes[note.id] || ""} maxLength={1000} onChange={(event) => setCompletionNotes((current) => ({ ...current, [note.id]: event.target.value }))} placeholder="例如：已补做实验并提交结果表" /></label>
-          <button className="primary" type="button" disabled={busy === note.id} onClick={() => void update(note, "complete")}>{busy === note.id ? "保存中…" : "标记完成"}</button>
+          {note.student_reported_at && note.verification_mode === "mentor_verify" ? <span className="student-guidance-awaiting">✓ 已提交完成说明，等待导师验收{note.completion_note ? `：${note.completion_note}` : ""}</span> : null}
+          <label>完成说明{note.verification_mode === "mentor_verify" ? "（必填）" : "（可选）"}<input value={completionNotes[note.id] || ""} maxLength={1000} onChange={(event) => setCompletionNotes((current) => ({ ...current, [note.id]: event.target.value }))} placeholder="例如：已补做实验并提交结果表" /></label>
+          <button className="primary" type="button" disabled={busy === note.id || (note.verification_mode === "mentor_verify" && !(completionNotes[note.id] || "").trim())} onClick={() => void update(note, "complete")}>{busy === note.id ? "保存中…" : note.verification_mode === "mentor_verify" ? note.student_reported_at ? "更新完成说明" : "提交完成说明" : "标记完成"}</button>
         </footer> : <footer className="completed"><span>✓ {note.completed_by_name || "已完成"}{note.completed_at ? ` · ${shortDate(note.completed_at)}` : ""}</span>{note.completion_note ? <p>{note.completion_note}</p> : null}</footer>}
       </article>)}
       {!visibleNotes.length ? <div className="student-portal-empty">目前没有导师指导事项。</div> : null}
@@ -1705,21 +2027,14 @@ function StudentMeetingRequests({ onToast }: { onToast: (message: string) => voi
   </section>;
 }
 
-function StaffMeetingRequests() {
-  const [requests, setRequests] = useState<MeetingRequest[]>([]);
+function StaffMeetingRequests({ requests, loadError, onChanged }: {
+  requests: MeetingRequest[];
+  loadError: string;
+  onChanged: () => Promise<void>;
+}) {
   const [notes, setNotes] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState<number | null>(null);
   const [message, setMessage] = useState("");
-  const load = useCallback(async () => {
-    const response = await fetch("/api/meeting-requests", { cache: "no-store" });
-    const payload = (await response.json()) as { requests?: MeetingRequest[]; error?: string };
-    if (!response.ok) throw new Error(payload.error || "会议预约读取失败");
-    setRequests(payload.requests ?? []);
-  }, []);
-  useEffect(() => {
-    const timer = window.setTimeout(() => void load().catch((error: Error) => setMessage(error.message)), 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
 
   async function handle(item: MeetingRequest, action: "confirm" | "decline") {
     const responseNote = (notes[item.id] || "").trim();
@@ -1733,13 +2048,15 @@ function StaffMeetingRequests() {
       const payload = (await response.json()) as { error?: string; message?: string };
       if (!response.ok) throw new Error(payload.error || "预约处理失败");
       setMessage(payload.message || "预约状态已更新");
-      await load();
+      setNotes((current) => ({ ...current, [item.id]: "" }));
+      await onChanged();
     } catch (error) { setMessage(error instanceof Error ? error.message : "预约处理失败"); }
     finally { setBusy(null); }
   }
 
   return <section className="panel staff-meeting-requests">
     <PanelHeader title="学生会议预约" subtitle="管理员（导师）只处理已分配且可审核的学生；超级管理员可全局协调" count={requests.filter((item) => item.status === "requested").length} />
+    {loadError ? <div className="account-message" role="alert">{loadError}<button type="button" onClick={() => void onChanged()}>重新读取</button></div> : null}
     <div className="staff-meeting-list">{requests.map((item) => <article key={item.id}>
       <div className="staff-meeting-main"><span className={`meeting-state ${item.status}`}>{meetingStatusLabels[item.status]}</span><strong>{item.student_name} · {item.topic}</strong><small>{item.preferred_date} {item.preferred_time} · {item.duration_minutes} 分钟</small>{item.note ? <p>{item.note}</p> : null}{item.response_note ? <p>回复：{item.response_note}</p> : null}</div>
       {item.status === "requested" ? <div className="staff-meeting-actions"><label>回复意见<textarea rows={2} value={notes[item.id] || ""} onChange={(event) => setNotes((current) => ({ ...current, [item.id]: event.target.value }))} maxLength={2000} placeholder="拒绝时必填；确认时可选" /></label><div><button disabled={busy === item.id} onClick={() => void handle(item, "decline")}>拒绝预约</button><button className="primary" disabled={busy === item.id} onClick={() => void handle(item, "confirm")}>确认时间</button></div></div> : null}
@@ -1766,92 +2083,8 @@ function OverviewMetrics({ data }: { data: DashboardData }) {
   return <section className="metric-grid" aria-label="课题组概况">
     <article className="metric"><span>{data.viewer.role === "admin" ? "负责学生" : "在组学生"}</span><strong>{data.metrics.total}</strong><small>{data.metrics.doctors} 博士 · {data.metrics.masters} 硕士</small></article>
     <article className="metric"><span>科研成果与资产</span><strong>{data.metrics.outputs}</strong><small className="positive">论文、数据、软件、专利与交付物</small></article>
-    <article className="metric"><span>待我处理</span><strong>{data.metrics.pending + data.metrics.proposalPending + data.metrics.blocked}</strong><small>证据 {data.metrics.pending} · 方案 {data.metrics.proposalPending} · 节点 {data.metrics.blocked}</small></article>
+    <article className="metric"><span>待我处理</span><strong>{data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + data.metrics.blocked}</strong><small>证据 {data.metrics.pending} · 方案 {data.metrics.proposalPending} · 验收 {data.metrics.guidancePending} · 节点 {data.metrics.blocked}</small></article>
     <article className="metric attention"><span>需要关注</span><strong>{data.metrics.attention}</strong><small>黄 {data.metrics.riskCounts.黄色 ?? 0} · 橙 {data.metrics.riskCounts.橙色 ?? 0} · 红 {data.metrics.riskCounts.红色 ?? 0}</small></article>
-  </section>;
-}
-
-function ResearchAssistantRail({ data, onReviews, onProposals, onMeetings }: {
-  data: DashboardData;
-  onReviews: () => void;
-  onProposals: () => void;
-  onMeetings: () => void;
-}) {
-  const decisionCount = data.metrics.pending + data.metrics.proposalPending + data.metrics.blocked;
-  const priorityTask = data.workflowTasks[0];
-  const priorityEvidence = data.pending[0];
-  const priorityStudent = [...data.students]
-    .filter((student) => student.risk.level !== "正常")
-    .sort((a, b) => b.risk.days - a.risk.days)[0];
-
-  return <section className="panel research-assistant" aria-label="科研助手上下文">
-    <header className="research-assistant-head">
-      <span className="assistant-orb" aria-hidden="true">AI</span>
-      <div><strong>探研助手</strong><small><i /> 当前数据上下文已就绪</small></div>
-      <span className="assistant-mode">今日</span>
-    </header>
-    <div className="assistant-brief">
-      <span>FOCUS BRIEF</span>
-      <h2>{decisionCount ? `先完成 ${decisionCount} 项科研决策` : "今天没有积压的科研决策"}</h2>
-      <p>{priorityEvidence
-        ? `${priorityEvidence.display_name} 的“${priorityEvidence.title}”正在等待证据确认。`
-        : priorityTask
-          ? `${priorityTask.studentName} 的“${priorityTask.title}”需要继续跟进。`
-          : "可以把精力放在下一轮论文、课题与组会推进上。"}</p>
-    </div>
-    <div className="assistant-context-list">
-      <div><span>待审核证据</span><strong>{data.metrics.pending}</strong><button type="button" onClick={onReviews}>打开审核</button></div>
-      <div><span>研究方案</span><strong>{data.metrics.proposalPending}</strong><button type="button" onClick={onProposals}>查看方案</button></div>
-      <div><span>风险关注</span><strong>{data.metrics.attention}</strong>{priorityStudent ? <a href={`/students/${encodeURIComponent(priorityStudent.id)}`}>{priorityStudent.name} · {priorityStudent.risk.days} 天</a> : <small>当前平稳</small>}</div>
-    </div>
-    <div className="assistant-actions">
-      <button type="button" onClick={onReviews}><span>✓</span>审核证据</button>
-      <button type="button" onClick={onProposals}><span>◇</span>研究方案</button>
-      <button type="button" onClick={onMeetings}><span>▣</span>组会与提醒</button>
-    </div>
-    <footer><i />AI 只读取当前账号有权访问的科研数据</footer>
-  </section>;
-}
-
-function ActionBoard({ data, onReviews, onProposals }: { data: DashboardData; onReviews: () => void; onProposals: () => void }) {
-  const allRiskStudents = [...data.students]
-    .filter((student) => student.risk.level !== "正常")
-    .sort((a, b) => b.risk.days - a.risk.days);
-  const allDueStudents = [...data.students]
-    .filter((student) => student.risk.level === "正常" && student.cadenceDays - daysSinceLatestSubmission(student) <= 7)
-    .sort((a, b) => (a.cadenceDays - daysSinceLatestSubmission(a)) - (b.cadenceDays - daysSinceLatestSubmission(b)));
-  const riskStudents = allRiskStudents.slice(0, 3);
-  const dueStudents = allDueStudents.slice(0, 3);
-  const isStudent = data.viewer.role === "student";
-  const staffTasks = [
-    ...data.workflowTasks.map((task) => ({
-      key: `${task.type}-${task.id}`,
-      href: task.type === "proposal_review" ? "" : `/students/${encodeURIComponent(task.studentId)}#milestones`,
-      action: task.type === "proposal_review" ? "proposals" as const : "link" as const,
-      student: task.studentName,
-      title: task.title,
-      label: task.type === "proposal_review" ? "方案待审" : task.type === "blocked_milestone" ? "节点受阻" : "节点逾期",
-    })),
-    ...data.pending.map((entry) => ({
-      key: `progress-${entry.id}`,
-      href: `/students/${encodeURIComponent(entry.student_id)}#evidence`,
-      action: "reviews" as const,
-      student: entry.display_name,
-      title: entry.title,
-      label: entry.review_status === "in_review" ? "继续审核" : "证据待审",
-    })),
-  ];
-
-  return <section className="panel action-board">
-    <div className="action-board-head"><div><span>ROLE WORKSPACE</span><h2>{isStudent ? "我的下一步" : data.viewer.role === "superadmin" ? "超级管理员行动台" : "管理员（导师）行动台"}</h2><p>{isStudent ? "把等待反馈、当前状态和下次更新集中在一个入口。" : "先处理等待决策的事项，再跟进风险和即将到期的更新。"}</p></div><small>只给行动排序，不对学生综合评分</small></div>
-    <div className="action-board-grid">
-      <article><header><i className="review">审</i><div><strong>{isStudent ? "等待导师反馈" : "待我处理"}</strong><span>{isStudent ? data.pending.length : staffTasks.length} 项</span></div></header><div className="action-items">
-        {isStudent ? data.pending.slice(0, 4).map((entry) => <a key={entry.id} href={`/students/${encodeURIComponent(entry.student_id)}#evidence`}><span><b>{entry.display_name}</b><small>{entry.title}</small></span><em>查看</em></a>) : staffTasks.slice(0, 4).map((task) => task.href ? <a key={task.key} href={task.href}><span><b>{task.student}</b><small>{task.title}</small></span><em>{task.label}</em></a> : <button key={task.key} onClick={task.action === "proposals" ? onProposals : onReviews}><span><b>{task.student}</b><small>{task.title}</small></span><em>{task.label}</em></button>)}
-        {(isStudent ? !data.pending.length : !staffTasks.length) ? <p>目前没有等待处理的事项</p> : null}
-      </div></article>
-      <article><header><i className="risking">险</i><div><strong>{isStudent ? "当前培养状态" : "风险随访"}</strong><span>{allRiskStudents.length} 人</span></div></header><div className="action-items">{riskStudents.map((student) => <a key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><span><b>{student.name}</b><small>{student.risk.days} 天无实质性进展</small></span><em className={`risk ${student.risk.level}`}>{student.risk.level}</em></a>)}{!riskStudents.length ? <p>当前没有需要风险随访的学生</p> : null}</div></article>
-      <article><header><i className="due">期</i><div><strong>未来 7 天更新</strong><span>{allDueStudents.length} 人</span></div></header><div className="action-items">{dueStudents.map((student) => { const remaining = student.cadenceDays - daysSinceLatestSubmission(student); return <a key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><span><b>{student.name}</b><small>{student.cadenceDays} 天个人更新周期</small></span><em>{remaining < 0 ? "已到期" : remaining === 0 ? "今天" : `${remaining} 天后`}</em></a>; })}{!dueStudents.length ? <p>未来 7 天暂无计划更新</p> : null}</div></article>
-    </div>
   </section>;
 }
 
@@ -1870,7 +2103,7 @@ function StudentTable({ students }: { students: Student[] }) {
   return <div className="student-table"><div className="table-row table-head"><span>学生</span><span>当前阶段</span><span>下一行动</span><span>科研成果</span><span>状态</span></div>{students.map((student) => <a className="table-row student-row" key={student.id} href={`/students/${encodeURIComponent(student.id)}`} aria-label={`打开 ${student.name} 的专属档案与全部进展`}><div className="student-name"><div className="mini-avatar">{student.name.slice(-2)}</div><div><strong>{student.name}</strong><small>{student.gradeYear}级{student.degree} · 点击查看专属档案</small></div></div><div><span className="stage-tag">{student.stage}</span></div><div className="progress-copy"><strong>{student.nextMilestone || student.latestTitle}</strong><small><em>{student.nextMilestone ? "培养节点" : student.latestKind}</em>{student.nextMilestoneDate ? shortDate(student.nextMilestoneDate) : sinceText(student.risk.days)}</small></div><div className="output-count"><strong>{student.outputCount}</strong><small>论文/数据/软件等</small></div><div><span className={`risk ${student.risk.level}`}>{student.risk.level}</span></div></a>)}{!students.length ? <div className="empty-small">没有符合条件的学生</div> : null}</div>;
 }
 
-function ProgressModal({ students, papers = [], fixedKind, onClose, onSaved }: {
+export function ProgressModal({ students, papers = [], fixedKind, onClose, onSaved }: {
   students: Student[];
   papers?: StudentPaper[];
   fixedKind?: "论文" | "项目";
@@ -1943,10 +2176,11 @@ function ProgressModal({ students, papers = [], fixedKind, onClose, onSaved }: {
   return <div className="modal-layer" role="presentation"><div className="modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="progress-dialog-title"><button className="close" aria-label="关闭提交进展对话框" onClick={onClose}>×</button><div className="modal-title"><span>新增进展记录</span><h2 id="progress-dialog-title">{paperProgress ? "论文推进到了哪一步？" : "这次工作产生了什么新信息？"}</h2><p>填写结论，并通过文字说明或附件提供可核验的证据。</p></div><form onSubmit={submit}><div className="form-row"><label>学生<select name="studentId" required defaultValue={students[0]?.id}>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label><label>进展类型<select name="kind" value={kind} onChange={(event) => setKind(event.target.value)}>{progressKinds.map((item) => <option key={item}>{item}</option>)}</select></label></div><label>进展标题<input name="title" required placeholder="例如：完成跨材料泛化验证" /></label><label>新增结论<textarea name="summary" required rows={3} placeholder="本次工作确认、排除或发现了什么？" /></label><label>文字证据（可选）<textarea name="evidence" rows={2} placeholder="实验编号、图表位置、评审记录；也可以只上传附件" /></label>{kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required placeholder="至少提供可识别的论文题目或 DOI" /></label> : <input type="hidden" name="literatureRef" value="" />}<label>私有 GitHub 链接（可选）<input name="gitUrl" type="url" placeholder="只保存 HTTPS 链接；完整代码由本地 Agent 读取" /></label><label>进展附件（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件；单个不超过 50 MB，总计不超过 80 MB</small></label>{formError ? <p className="form-error">{formError}</p> : null}<div className="modal-actions"><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={busy}>{busy ? "正在上传并提交…" : "提交给导师确认"}</button></div></form></div></div>;
 }
 
-function ProposalWorkspace({ viewer, students, onToast }: {
+function ProposalWorkspace({ viewer, students, onToast, initialSelectedId }: {
   viewer: DashboardData["viewer"];
   students: Student[];
   onToast: (message: string) => void;
+  initialSelectedId?: number;
 }) {
   const [proposals, setProposals] = useState<ResearchProposal[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1965,18 +2199,40 @@ function ProposalWorkspace({ viewer, students, onToast }: {
       setProposals(items);
       setSelectedId((current) => items.some((item) => item.id === current)
         ? current
-        : items.find((item) => item.status === "submitted")?.id ?? items[0]?.id ?? null);
+        : items.find((item) => item.id === initialSelectedId)?.id ?? items.find((item) => item.status === "submitted")?.id ?? items[0]?.id ?? null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "研究方案加载失败");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [initialSelectedId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+
+  useEffect(() => {
+    function restoreProposal() {
+      const requestedId = Number(new URL(window.location.href).searchParams.get("proposal"));
+      const restoredId = proposals.find((proposal) => proposal.id === requestedId)?.id
+        ?? proposals.find((proposal) => proposal.status === "submitted")?.id
+        ?? proposals[0]?.id
+        ?? null;
+      setSelectedId(restoredId);
+    }
+    window.addEventListener("popstate", restoreProposal);
+    return () => window.removeEventListener("popstate", restoreProposal);
+  }, [proposals]);
+
+  function selectProposal(id: number) {
+    setSelectedId(id);
+    const url = new URL(window.location.href);
+    url.searchParams.set("mentorView", "research");
+    url.searchParams.set("researchTab", "proposals");
+    url.searchParams.set("proposal", String(id));
+    window.history[selectedId === id ? "replaceState" : "pushState"]({}, "", url);
+  }
 
   const effectiveAuthorStudentId = students.some((student) => student.id === authorStudentId)
     ? authorStudentId
@@ -2022,7 +2278,7 @@ function ProposalWorkspace({ viewer, students, onToast }: {
       <div className="panel proposal-list-panel">
         <PanelHeader title={viewer.role === "admin" ? "负责学生的研究方案" : "全部研究方案"} subtitle="优先显示待审核与待修改方案" count={proposals.length} />
         <div className="proposal-list">
-          {proposals.map((proposal) => <button key={proposal.id} className={selectedId === proposal.id ? "selected" : ""} onClick={() => setSelectedId(proposal.id)}>
+          {proposals.map((proposal) => <button key={proposal.id} className={selectedId === proposal.id ? "selected" : ""} onClick={() => selectProposal(proposal.id)}>
             <span className={`proposal-status ${proposal.status}`}>{proposalStatusMeta[proposal.status].label}</span>
             <strong>{proposal.student_name}</strong>
             <small>{proposal.title} · 第 {proposal.current_version || 0} 版</small>
@@ -2030,7 +2286,7 @@ function ProposalWorkspace({ viewer, students, onToast }: {
           {!proposals.length ? <div className="empty-small">管理员为负责学生建立研究方案后会显示在这里。</div> : null}
         </div>
       </div>
-      <div>{selected ? <ProposalDetail proposal={selected} canReview={selected.can_review} onToast={onToast} onRefresh={load} /> : <div className="empty-state"><span>◇</span><strong>暂无研究方案</strong><small>由管理员为负责学生建立并代录研究方案。</small></div>}</div>
+      <div>{selected ? <ProposalDetail key={selected.id} proposal={selected} canReview={selected.can_review} onToast={onToast} onRefresh={load} /> : <div className="empty-state"><span>◇</span><strong>暂无研究方案</strong><small>由管理员为负责学生建立并代录研究方案。</small></div>}</div>
     </section> : null}
   </div>;
 }
@@ -2179,22 +2435,136 @@ function ProposalDetail({ proposal, canReview, onToast, onRefresh }: {
 
 function FeishuModal({ viewer, onClose, onLogout }: { viewer: DashboardData["viewer"]; onClose: () => void; onLogout: () => Promise<void> }) {
   const roleLabel = viewer.role === "superadmin" ? "超级管理员" : viewer.role === "admin" ? "管理员（导师）" : "学生";
-  return <div className="modal-layer" role="presentation"><div className="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="feishu-dialog-title"><button className="close" aria-label="关闭" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2 id="feishu-dialog-title">{viewer.name}，飞书身份已验证</h2><p>当前角色：{roleLabel}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按每名学生的 7/14/21/30 天周期发送</small></span><em>下一步</em></div><div><b>3</b><span><strong>智能纪要个人进展</strong><small>自动识别学生姓名并把科研部分拆成独立进展</small></span><em className="done">已接入</em></div></div><div className="safe-banner">普通聊天会在接收时立即过滤且不落库；纪要只能在学生归属明确时自动建个人进展，正式评价由对应主导师或超级管理员完成。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
+  return <div className="modal-layer" role="presentation"><div className="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="feishu-dialog-title"><button className="close" aria-label="关闭" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2 id="feishu-dialog-title">{viewer.name}，飞书身份已验证</h2><p>当前角色：{roleLabel}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按学生个人周期发送，并保留送达与失败台账</small></span><em className="done">已接入</em></div><div><b>3</b><span><strong>智能纪要个人进展</strong><small>自动识别学生姓名并把科研部分拆成独立进展</small></span><em className="done">已接入</em></div></div><div className="safe-banner">普通聊天会在接收时立即过滤且不落库；纪要只能在学生归属明确时自动建个人进展，正式评价由对应主导师或超级管理员完成。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
 }
 
-function MeetingView({ viewer, students, onRemind }: { viewer: DashboardData["viewer"]; students: Student[]; onRemind: (student: Student) => Promise<void> }) {
+function MeetingView({ viewer, students, meetingRequests, meetingLoadError, onRemind, onToast, onMeetingChange }: {
+  viewer: DashboardData["viewer"];
+  students: Student[];
+  meetingRequests: MeetingRequest[];
+  meetingLoadError: string;
+  onRemind: (student: Student) => Promise<void>;
+  onToast: (message: string) => void;
+  onMeetingChange: () => Promise<void>;
+}) {
   const [busy, setBusy] = useState<string | null>(null);
   const [agendaOpen, setAgendaOpen] = useState(false);
+  const [agendaBusy, setAgendaBusy] = useState(false);
+  const [meetingDate, setMeetingDate] = useState("");
+  const [agendas, setAgendas] = useState<MeetingAgenda[]>([]);
+  const [agendaScheduleDates, setAgendaScheduleDates] = useState<Record<number, string>>({});
+  const [deliveries, setDeliveries] = useState<NotificationDelivery[]>([]);
+
+  const loadOperationalData = useCallback(async () => {
+    const [agendaResponse, reminderResponse] = await Promise.all([
+      fetch("/api/meeting-agendas", { cache: "no-store" }),
+      fetch("/api/feishu/reminders", { cache: "no-store" }),
+    ]);
+    const agendaPayload = await agendaResponse.json() as { agendas?: MeetingAgenda[]; error?: string };
+    const reminderPayload = await reminderResponse.json() as { deliveries?: NotificationDelivery[]; error?: string };
+    if (!agendaResponse.ok) throw new Error(agendaPayload.error || "议程读取失败");
+    if (!reminderResponse.ok) throw new Error(reminderPayload.error || "提醒台账读取失败");
+    setAgendas(agendaPayload.agendas ?? []);
+    setDeliveries(reminderPayload.deliveries ?? []);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadOperationalData().catch((error: Error) => onToast(error.message)), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadOperationalData, onToast]);
+
   const due = students
-    .map((student) => ({ student, remaining: student.cadenceDays - daysSinceLatestSubmission(student) }))
+    .map((student) => ({ student, remaining: student.cadenceDays - daysSinceSubstantiveProgress(student) }))
     .filter((item) => item.remaining <= 7)
     .sort((a, b) => a.remaining - b.remaining)
-    .slice(0, 6);
-  const agenda = [...students]
-    .filter((student) => student.risk.level !== "正常" || student.cadenceDays - daysSinceLatestSubmission(student) <= 7)
-    .sort((a, b) => b.risk.days - a.risk.days)
-    .slice(0, 6);
-  return <div className="meeting-workspace"><div className="meeting-grid"><section className="panel"><PanelHeader title="未来 7 天更新提醒" subtitle="按个人需要设置，最长不超过 30 天" count={due.length} /><div className="reminder-list">{due.map(({ student, remaining }) => <div key={student.id}><span>{remaining < 0 ? `逾期 ${Math.abs(remaining)} 天` : remaining === 0 ? "今天" : `${remaining} 天后`}</span><strong>{student.name}</strong><small>{student.cadenceDays} 天周期 · {student.stage}</small><button disabled={busy === student.id} onClick={async () => { setBusy(student.id); await onRemind(student); setBusy(null); }}>{busy === student.id ? "发送中…" : "飞书提醒"}</button></div>)}{!due.length ? <div className="empty-small">未来 7 天没有需要提醒的学生</div> : null}</div></section><section className="panel meeting-rule"><PanelHeader title="组会建议" subtitle="不是固定轮转，而是优先解决阻塞" /><div className="meeting-summary"><span>{agenda.length}</span><strong>名学生建议进入本周议程</strong><p>系统只根据连续无进展时间和个人更新周期排序，不自动评价学生。</p><button className="primary" onClick={() => setAgendaOpen((current) => !current)}>{agendaOpen ? "收起议程" : "生成本周议程"}</button>{agendaOpen ? <div className="agenda-list">{agenda.map((student, index) => <a key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><b>{index + 1}</b><span><strong>{student.name}</strong><small>{student.risk.level !== "正常" ? `${student.risk.days} 天无实质性进展，优先确认阻塞与决策` : `进入 ${student.cadenceDays} 天更新窗口，核对本周期证据`}</small></span></a>)}{!agenda.length ? <p>本周暂无需要优先讨论的学生。</p> : null}</div> : null}</div></section></div><StaffMeetingRequests />{viewer.role === "superadmin" ? <FeishuMeetingImports students={students} /> : null}</div>;
+    .slice(0, 8);
+  const agendaCandidates = [...students]
+    .filter((student) => student.risk.level !== "正常" || student.cadenceDays - daysSinceSubstantiveProgress(student) <= 7 || student.milestones.some((milestone) => milestone.status === "blocked"))
+    .sort((a, b) => {
+      const aBlocked = a.milestones.some((milestone) => milestone.status === "blocked") ? 1 : 0;
+      const bBlocked = b.milestones.some((milestone) => milestone.status === "blocked") ? 1 : 0;
+      return bBlocked - aBlocked || b.risk.days - a.risk.days;
+    })
+    .slice(0, 8);
+
+  function candidateReason(student: Student) {
+    const blocked = student.milestones.find((milestone) => milestone.status === "blocked");
+    if (blocked) return `培养节点“${blocked.title}”受阻，需要明确决策或资源`;
+    if (student.risk.level !== "正常") return `${student.risk.days} 天无实质性进展，确认阻塞与下一步行动`;
+    return `进入 ${student.cadenceDays} 天更新窗口，核对本周期证据`;
+  }
+
+  async function saveAgenda() {
+    if (!agendaCandidates.length) return;
+    setAgendaBusy(true);
+    try {
+      const response = await fetch("/api/meeting-agendas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "导师决策组会议程",
+          meetingDate,
+          items: agendaCandidates.map((student) => ({
+            studentId: student.id,
+            topic: student.nextMilestone ? `确认节点：${student.nextMilestone}` : "明确下一步行动",
+            reason: candidateReason(student),
+            durationMinutes: student.milestones.some((milestone) => milestone.status === "blocked") ? 15 : 10,
+          })),
+        }),
+      });
+      const payload = await response.json() as { error?: string; message?: string };
+      if (!response.ok) throw new Error(payload.error || "议程保存失败");
+      onToast(payload.message || "组会议程已保存");
+      await loadOperationalData();
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "议程保存失败");
+    } finally {
+      setAgendaBusy(false);
+    }
+  }
+
+  async function updateAgenda(agenda: MeetingAgenda, status: MeetingAgenda["status"], meetingDateOverride?: string) {
+    setAgendaBusy(true);
+    try {
+      const response = await fetch("/api/meeting-agendas", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: agenda.id, status, meetingDate: meetingDateOverride, expectedUpdatedAt: agenda.updated_at }),
+      });
+      const payload = await response.json() as { error?: string; message?: string };
+      if (!response.ok) throw new Error(payload.error || "议程更新失败");
+      onToast(payload.message || "议程状态已更新");
+      await loadOperationalData();
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "议程更新失败");
+    } finally {
+      setAgendaBusy(false);
+    }
+  }
+
+  return <div className="meeting-workspace">
+    <div className="meeting-grid">
+      <section className="panel"><PanelHeader title="更新提醒" subtitle="只提醒进入个人周期窗口的学生；同一学生每天最多一次" count={due.length} /><div className="reminder-list">{due.map(({ student, remaining }) => {
+        const lastDelivery = deliveries.find((delivery) => delivery.student_id === student.id);
+        return <div key={student.id}><span>{remaining < 0 ? `逾期 ${Math.abs(remaining)} 天` : remaining === 0 ? "到期" : `${remaining} 天后`}</span><strong>{student.name}</strong><small>{student.cadenceDays} 天周期 · {student.stage}{lastDelivery?.sent_at ? ` · 上次提醒 ${shortDate(lastDelivery.sent_at)}` : ""}</small><button disabled={busy === student.id} onClick={async () => { setBusy(student.id); await onRemind(student); await loadOperationalData().catch(() => undefined); setBusy(null); }}>{busy === student.id ? "发送中…" : "飞书提醒"}</button></div>;
+      })}{!due.length ? <div className="empty-small">未来 7 天没有需要提醒的学生</div> : null}</div></section>
+      <section className="panel meeting-rule"><PanelHeader title="议程生成器" subtitle="优先处理阻塞、逾期和进入周期窗口的学生" count={agendaCandidates.length} /><div className="meeting-summary"><span>{agendaCandidates.reduce((sum, student) => sum + (student.milestones.some((milestone) => milestone.status === "blocked") ? 15 : 10), 0)}</span><strong>分钟建议讨论时长</strong><p>系统只排序，不自动作出科研评价；保存后可排期、执行并归档。</p><div className="agenda-generator-actions"><label>组会日期<input type="date" value={meetingDate} onChange={(event) => setMeetingDate(event.target.value)} /></label><button onClick={() => setAgendaOpen((current) => !current)}>{agendaOpen ? "收起预览" : "预览议程"}</button><button className="primary" disabled={agendaBusy || !agendaCandidates.length} onClick={() => void saveAgenda()}>{agendaBusy ? "保存中…" : "保存为议程"}</button></div>{agendaOpen ? <div className="agenda-list">{agendaCandidates.map((student, index) => <a key={student.id} href={`/students/${encodeURIComponent(student.id)}`}><b>{index + 1}</b><span><strong>{student.name} · {student.nextMilestone || "下一步行动"}</strong><small>{candidateReason(student)}</small></span><em>{student.milestones.some((milestone) => milestone.status === "blocked") ? "15 分钟" : "10 分钟"}</em></a>)}{!agendaCandidates.length ? <p>当前暂无需要优先讨论的学生。</p> : null}</div> : null}</div></section>
+    </div>
+    <section className="panel saved-agendas">
+      <PanelHeader title="已保存议程" subtitle="草稿、排期和完成状态均持久保存" count={agendas.length} />
+      <div className="saved-agenda-list">{agendas.slice(0, 8).map((agenda) => {
+        const scheduleDate = agendaScheduleDates[agenda.id] ?? agenda.meeting_date ?? "";
+        return <details key={agenda.id}>
+          <summary><span className={`status-pill ${agenda.status === "completed" ? "safe" : agenda.status === "scheduled" ? "reviewing" : "pending"}`}>{agenda.status === "draft" ? "草稿" : agenda.status === "scheduled" ? "已排期" : agenda.status === "completed" ? "已完成" : "已取消"}</span><div><strong>{agenda.title}</strong><small>{agenda.meeting_date || "尚未排期"} · {agenda.items.length} 项 · {agenda.items.reduce((sum, item) => sum + item.duration_minutes, 0)} 分钟</small></div><i>展开</i></summary>
+          <div className="saved-agenda-items">{agenda.items.map((item, index) => <a key={item.id} href={`/students/${encodeURIComponent(item.student_id)}`}><b>{index + 1}</b><span><strong>{item.student_name} · {item.topic}</strong><small>{item.reason}</small></span><em>{item.duration_minutes} 分钟</em></a>)}</div>
+          <footer>{agenda.status === "draft" ? <><label>排期日期<input type="date" value={scheduleDate} onChange={(event) => setAgendaScheduleDates((current) => ({ ...current, [agenda.id]: event.target.value }))} /></label><button disabled={agendaBusy || !scheduleDate} onClick={() => void updateAgenda(agenda, "scheduled", scheduleDate)}>确认排期</button></> : null}{agenda.status === "scheduled" ? <button className="primary" disabled={agendaBusy} onClick={() => void updateAgenda(agenda, "completed")}>标记组会完成</button> : null}</footer>
+        </details>;
+      })}{!agendas.length ? <div className="empty-small">生成候选后保存，即可建立第一份可追踪议程。</div> : null}</div>
+    </section>
+    <section className="panel reminder-ledger"><PanelHeader title="提醒台账" subtitle="记录发送、失败与原因，防止导师重复催促" count={deliveries.length} /><div>{deliveries.slice(0, 12).map((delivery) => <div key={delivery.id}><span className={`status-pill ${delivery.status === "sent" ? "safe" : delivery.status === "failed" ? "danger" : "pending"}`}>{delivery.status === "sent" ? "已送达" : delivery.status === "failed" ? "发送失败" : "发送中"}</span><strong>{delivery.student_name}</strong><small>{delivery.reason} · {shortDate(delivery.sent_at || delivery.created_at)}</small>{delivery.error_message ? <em>{delivery.error_message}</em> : null}</div>)}{!deliveries.length ? <div className="empty-small">尚无提醒记录。</div> : null}</div></section>
+    <StaffMeetingRequests requests={meetingRequests} loadError={meetingLoadError} onChanged={onMeetingChange} />
+    {viewer.role === "superadmin" ? <FeishuMeetingImports students={students} /> : null}
+  </div>;
 }
 
 function FeishuMeetingImports({ students }: { students: Student[] }) {
@@ -2225,7 +2595,7 @@ function FeishuMeetingImports({ students }: { students: Student[] }) {
         body: JSON.stringify({
           action,
           importId: item.id,
-          studentId: choices[item.id] || students[0]?.id,
+          studentId: choices[item.id] || "",
           title: titles[item.id] || "AI 会议总结",
         }),
       });
@@ -2244,7 +2614,7 @@ function FeishuMeetingImports({ students }: { students: Student[] }) {
       <div className="meeting-import-head"><div><span className={`status-pill ${item.status === "pending" ? "pending" : "safe"}`}>{item.status === "pending" ? "无法自动归属" : "已拆分为个人进展"}</span><strong>{shortDate(item.message_created_at)} AI 会议总结</strong><small>识别依据：{item.detected_reason} · {item.message_type || "消息"}</small></div>{item.status === "pending" && !item.links.length ? <button disabled={busy === item.id} onClick={() => void update(item, "ignore")}>忽略</button> : null}</div>
       {item.status === "pending" ? <pre>{item.extracted_text}</pre> : null}
       {item.links.length ? <div className="meeting-import-links">{item.links.map((link) => <span key={link.id}>已生成 {link.student_name} 的个人进展 #{link.progress_entry_id}</span>)}</div> : null}
-      {item.status === "pending" ? <div className="meeting-import-actions"><select aria-label="关联学生" value={choices[item.id] || students[0]?.id || ""} onChange={(event) => setChoices((current) => ({ ...current, [item.id]: event.target.value }))}>{students.map((student) => <option value={student.id} key={student.id}>{student.name} · {student.stage}</option>)}</select><input aria-label="进展标题" value={titles[item.id] || ""} onChange={(event) => setTitles((current) => ({ ...current, [item.id]: event.target.value }))} placeholder="无法自动拆分时的备用标题" /><button className="primary" disabled={busy === item.id || !students.length} onClick={() => void update(item, "create_progress")}>{busy === item.id ? "处理中…" : "人工归属此候选"}</button></div> : null}
+      {item.status === "pending" ? <div className="meeting-import-actions"><select aria-label="关联学生" required value={choices[item.id] || ""} onChange={(event) => setChoices((current) => ({ ...current, [item.id]: event.target.value }))}><option value="" disabled>请明确选择学生</option>{students.map((student) => <option value={student.id} key={student.id}>{student.name} · {student.stage}</option>)}</select><input aria-label="进展标题" value={titles[item.id] || ""} onChange={(event) => setTitles((current) => ({ ...current, [item.id]: event.target.value }))} placeholder="无法自动拆分时的备用标题" /><button className="primary" disabled={busy === item.id || !choices[item.id]} onClick={() => void update(item, "create_progress")}>{busy === item.id ? "处理中…" : "人工归属此候选"}</button></div> : null}
     </article>)}{!imports.length ? <div className="empty-small">识别到智能纪要后，系统会自动拆分到对应学生的个人进展。</div> : null}</div>
     {message ? <div className="account-message">{message}</div> : null}
   </section>;
@@ -2261,7 +2631,7 @@ function SettingsView({ viewer, onFeishu, students, onRosterImported }: {
     {viewer.role === "superadmin" ? <RosterImport students={students} onImported={onRosterImported} /> : null}
     {viewer.role === "superadmin" ? <StudentAccessSetup /> : null}
     <section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、提醒与 AI 会议总结导入" /><div className="setting-body"><span className="status-pill safe">智能拆分已启用</span><p>普通聊天即时过滤；智能纪要会按学生姓名和汇报分段生成个人进展，归属不明确时才进入备用人工区。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section>
-    <section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><button>稍后连接 GitHub App</button></div></section>
+    <section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><small>当前不启用在线 GitHub 授权；仓库访问由导师本地工作区单独管理。</small></div></section>
     <section className="panel setting-card"><PanelHeader title="开源流程参考" subtitle="TUM · Moodle · OSIRIS · eLabFTW" /><div className="setting-body"><span className="status-pill safe">模式已吸收</span><p>采用方案版本、角色权限、待办审核、成果台账与证据溯源等成熟模式；未复制第三方界面或业务代码。</p><div className="reference-links"><a href="https://github.com/ls1intum/thesis-management" target="_blank" rel="noreferrer">TUM</a><a href="https://github.com/moodle/moodle" target="_blank" rel="noreferrer">Moodle</a><a href="https://github.com/OSIRIS-Solutions/osiris" target="_blank" rel="noreferrer">OSIRIS</a><a href="https://github.com/elabftw/elabftw" target="_blank" rel="noreferrer">eLabFTW</a></div></div></section>
     <AccountManagement viewer={viewer} students={students} />
     <section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section>
@@ -2638,7 +3008,7 @@ function FeishuAccessGate({ gate, onAuthenticated }: { gate: AuthGate; onAuthent
   }, []);
 
   const setup = gate.kind === "setup" || config?.configured === false;
-  return <main className="access-shell"><section className="access-card"><div className="access-brand"><div className="brand-mark">探</div><div><strong>探研</strong><span>射线探伤 × AI</span></div></div><div className={`access-orb ${pending ? "pending" : ""}`}>{pending ? "✓" : "飞"}</div><p className="access-kicker">飞书企业自建应用</p><h1>{pending ? "飞书身份已验证" : setup ? "飞书接入等待应用配置" : "正在通过飞书安全登录"}</h1><p className="access-copy">{pending ? "当前账号已经完成飞书登录，现在只差系统角色授权，无需反复点击飞书授权。" : message}</p>{pending ? <><div className="access-pending-note"><strong>下一步由超级管理员处理</strong><span>请在“系统设置 → 飞书账号与高权限授权”中，为当前账号分配学生或导师角色。</span></div><div className="access-actions"><button className="primary" disabled={status === "checking" || status === "authorizing"} onClick={() => void checkAccess()}>{status === "checking" ? "检查中…" : "重新检查权限"}</button><button disabled={status === "authorizing"} onClick={() => void switchAccount()}>{status === "authorizing" ? "切换中…" : "切换飞书账号"}</button></div></> : null}{setup ? <div className="setup-steps"><span><b>1</b>创建企业自建应用并添加“网页应用”能力</span><span><b>2</b>将应用主页设为当前系统地址</span><span><b>3</b>安全配置 App ID 和 App Secret 后发布</span></div> : null}{!pending && (status === "authorizing" || status === "checking") ? <div className="access-loading"><i /><span>正在确认飞书环境…</span></div> : null}{!pending && status === "error" && config?.configured ? <button className="primary access-retry" onClick={() => void authorize(config)}>重新尝试飞书登录</button> : null}<div className="access-safe">不会把 App Secret、飞书访问凭证或完整代码发送给云端 GPT</div></section></main>;
+  return <main className="access-shell"><section className="access-card"><div className="access-brand"><div className="brand-mark">探</div><div><strong>探研</strong><span>射线探伤 × AI</span></div></div><div className={`access-orb ${pending ? "pending" : ""}`}>{pending ? "✓" : "飞"}</div><p className="access-kicker">飞书企业自建应用</p><h1>{pending ? "飞书身份已验证" : setup ? "飞书接入等待应用配置" : "正在通过飞书安全登录"}</h1><p className="access-copy">{pending ? "当前账号已经完成飞书登录，现在只差系统角色授权，无需反复点击飞书授权。" : message}</p>{pending ? <><div className="access-pending-note"><strong>下一步由超级管理员处理</strong><span>请在“系统管理 → 飞书账号与高权限授权”中，为当前账号分配学生或导师角色。</span></div><div className="access-actions"><button className="primary" disabled={status === "checking" || status === "authorizing"} onClick={() => void checkAccess()}>{status === "checking" ? "检查中…" : "重新检查权限"}</button><button disabled={status === "authorizing"} onClick={() => void switchAccount()}>{status === "authorizing" ? "切换中…" : "切换飞书账号"}</button></div></> : null}{setup ? <div className="setup-steps"><span><b>1</b>创建企业自建应用并添加“网页应用”能力</span><span><b>2</b>将应用主页设为当前系统地址</span><span><b>3</b>安全配置 App ID 和 App Secret 后发布</span></div> : null}{!pending && (status === "authorizing" || status === "checking") ? <div className="access-loading"><i /><span>正在确认飞书环境…</span></div> : null}{!pending && status === "error" && config?.configured ? <button className="primary access-retry" onClick={() => void authorize(config)}>重新尝试飞书登录</button> : null}<div className="access-safe">不会把 App Secret、飞书访问凭证或完整代码发送给云端 GPT</div></section></main>;
 }
 
 function LoadingState() {

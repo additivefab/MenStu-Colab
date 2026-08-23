@@ -52,6 +52,7 @@ export const progressEntries = sqliteTable(
     assessment: text("assessment", { enum: ["substantive", "supporting"] }),
     submittedByUserId: integer("submitted_by_user_id"),
     reviewedByUserId: integer("reviewed_by_user_id"),
+    reviewClaimedAt: text("review_claimed_at"),
     reviewerNote: text("reviewer_note").notNull().default(""),
     reviewedAt: text("reviewed_at"),
     currentRevision: integer("current_revision").notNull().default(1),
@@ -136,10 +137,16 @@ export const studentGuidanceNotes = sqliteTable(
     content: text("content").notNull(),
     nextAction: text("next_action").notNull().default(""),
     dueDate: text("due_date"),
+    acceptanceCriteria: text("acceptance_criteria").notNull().default(""),
+    verificationMode: text("verification_mode", { enum: ["self_report", "mentor_verify"] })
+      .notNull()
+      .default("mentor_verify"),
     status: text("status", { enum: ["open", "completed"] })
       .notNull()
       .default("open"),
     acknowledgedAt: text("acknowledged_at"),
+    studentReportedAt: text("student_reported_at"),
+    mentorVerifiedAt: text("mentor_verified_at"),
     completedAt: text("completed_at"),
     completedByUserId: integer("completed_by_user_id")
       .references(() => appUsers.id),
@@ -150,6 +157,7 @@ export const studentGuidanceNotes = sqliteTable(
   (table) => [
     check("student_guidance_notes_type_check", sql`${table.guidanceType} IN ('meeting_followup', 'paper', 'milestone', 'blocker', 'general')`),
     check("student_guidance_notes_status_check", sql`${table.status} IN ('open', 'completed')`),
+    check("student_guidance_notes_verification_check", sql`${table.verificationMode} IN ('self_report', 'mentor_verify')`),
     index("idx_student_guidance_student_created").on(table.studentId, table.createdAt),
     index("idx_student_guidance_mentor_created").on(table.mentorUserId, table.createdAt),
     index("idx_student_guidance_source").on(table.sourceProgressEntryId),
@@ -281,6 +289,86 @@ export const meetingRequests = sqliteTable(
       table.preferredDate,
       table.preferredTime,
     ),
+  ],
+);
+
+export const meetingAgendas = sqliteTable(
+  "meeting_agendas",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    mentorUserId: integer("mentor_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    title: text("title").notNull(),
+    meetingDate: text("meeting_date"),
+    status: text("status", { enum: ["draft", "scheduled", "completed", "cancelled"] })
+      .notNull()
+      .default("draft"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    check("meeting_agendas_status_check", sql`${table.status} IN ('draft', 'scheduled', 'completed', 'cancelled')`),
+    index("idx_meeting_agendas_mentor_updated").on(table.mentorUserId, table.updatedAt),
+    index("idx_meeting_agendas_status_date").on(table.status, table.meetingDate),
+  ],
+);
+
+export const meetingAgendaItems = sqliteTable(
+  "meeting_agenda_items",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    agendaId: integer("agenda_id")
+      .notNull()
+      .references(() => meetingAgendas.id),
+    studentId: text("student_id")
+      .notNull()
+      .references(() => students.id),
+    topic: text("topic").notNull(),
+    reason: text("reason").notNull().default(""),
+    durationMinutes: integer("duration_minutes").notNull().default(10),
+    sortOrder: integer("sort_order").notNull().default(0),
+    status: text("status", { enum: ["open", "resolved"] }).notNull().default("open"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_meeting_agenda_items_agenda_order").on(table.agendaId, table.sortOrder),
+    index("idx_meeting_agenda_items_student_status").on(table.studentId, table.status),
+    check("meeting_agenda_items_status_check", sql`${table.status} IN ('open', 'resolved')`),
+    check("meeting_agenda_items_duration_check", sql`${table.durationMinutes} IN (5, 10, 15, 20, 30)`),
+  ],
+);
+
+export const notificationDeliveries = sqliteTable(
+  "notification_deliveries",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    studentId: text("student_id")
+      .notNull()
+      .references(() => students.id),
+    triggeredByUserId: integer("triggered_by_user_id")
+      .notNull()
+      .references(() => appUsers.id),
+    notificationType: text("notification_type", { enum: ["progress_reminder"] })
+      .notNull()
+      .default("progress_reminder"),
+    reason: text("reason").notNull().default(""),
+    idempotencyKey: text("idempotency_key").notNull(),
+    attemptToken: text("attempt_token").notNull().default(""),
+    status: text("status", { enum: ["sending", "sent", "failed"] }).notNull().default("sending"),
+    errorMessage: text("error_message").notNull().default(""),
+    providerMessageId: text("provider_message_id").notNull().default(""),
+    sentAt: text("sent_at"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    check("notification_deliveries_type_check", sql`${table.notificationType} IN ('progress_reminder')`),
+    check("notification_deliveries_status_check", sql`${table.status} IN ('sending', 'sent', 'failed')`),
+    uniqueIndex("idx_notification_deliveries_idempotency").on(table.idempotencyKey),
+    index("idx_notification_deliveries_student_created").on(table.studentId, table.createdAt),
+    index("idx_notification_deliveries_status_created").on(table.status, table.createdAt),
   ],
 );
 

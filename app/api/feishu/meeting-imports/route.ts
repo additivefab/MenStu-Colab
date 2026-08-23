@@ -1,6 +1,7 @@
 import { ensureDatabase, getD1 } from "../../../../lib/database";
 import { assertSameOrigin, requireAppUser } from "../../../../lib/feishu-auth";
 import { sha256Text } from "../../../../lib/progress-evidence";
+import { importedProgressSnapshot, removeImportedProgress } from "../../../../lib/progress-import";
 
 type ImportRow = {
   id: number;
@@ -117,13 +118,22 @@ export async function PATCH(request: Request) {
       .first<{ id: number }>();
     if (!progress?.id) throw new Error("无法建立进展草稿");
     createdProgressId = progress.id;
+    const evidence = "飞书 AI 会议总结 · 人工确认归属";
     await d1.batch([
       d1.prepare(`INSERT INTO feishu_meeting_summary_links
         (import_id, student_id, progress_entry_id) VALUES (?, ?, ?)`)
         .bind(importId, studentId, progress.id),
+      d1.prepare(`INSERT INTO progress_revisions
+        (progress_entry_id, revision_number, snapshot_json, submitted_by_user_id, review_status)
+        VALUES (?, 1, ?, ?, 'submitted')`)
+        .bind(progress.id, importedProgressSnapshot({
+          title,
+          summary: source.extracted_text,
+          evidence,
+        }), auth.user.id),
       d1.prepare(`INSERT INTO progress_evidence_sources
-        (progress_entry_id, source_type, label, source_ref, source_import_id, content_sha256, occurred_at, created_by_user_id)
-        VALUES (?, ?, '飞书纪要人工归属', '', ?, ?, CURRENT_TIMESTAMP, ?)`)
+        (progress_entry_id, source_type, label, source_ref, source_import_id, content_sha256, revision_number, occurred_at, created_by_user_id)
+        VALUES (?, ?, '飞书纪要人工归属', '', ?, ?, 1, CURRENT_TIMESTAMP, ?)`)
         .bind(
           progress.id,
           importSourceType(`${source.raw_content}\n${source.extracted_text}`),
@@ -145,8 +155,7 @@ export async function PATCH(request: Request) {
   } catch (error) {
     if (createdProgressId) {
       try {
-        await getD1().prepare("DELETE FROM progress_entries WHERE id = ? AND status = 'pending'")
-          .bind(createdProgressId).run();
+        await removeImportedProgress(createdProgressId);
       } catch { /* 保留原始错误，遗留草稿可由管理员审核处理 */ }
     }
     return Response.json(

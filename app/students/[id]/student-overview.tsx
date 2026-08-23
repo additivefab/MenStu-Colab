@@ -26,6 +26,9 @@ type StudentProgress = {
   submitted_at: string;
   reviewed_at: string | null;
   can_finalize?: boolean;
+  can_decide?: boolean;
+  can_release?: boolean;
+  claim_stale?: boolean;
   paper: {
     id: number;
     title: string;
@@ -153,8 +156,12 @@ type GuidanceNote = {
   content: string;
   next_action: string;
   due_date: string | null;
+  acceptance_criteria: string;
+  verification_mode: "self_report" | "mentor_verify";
   status: "open" | "completed";
   acknowledged_at: string | null;
+  student_reported_at: string | null;
+  mentor_verified_at: string | null;
   completed_at: string | null;
   completed_by_name: string | null;
   completion_note: string;
@@ -299,7 +306,12 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         viewer?: { role: ViewerRole };
         students?: Student[];
         papers?: StudentPaper[];
-        pending?: Array<StudentProgress & { can_finalize: boolean }>;
+        pending?: Array<StudentProgress & {
+          can_finalize: boolean;
+          can_decide: boolean;
+          can_release: boolean;
+          claim_stale: boolean;
+        }>;
         error?: string;
       };
       if (!dashboardResponse.ok) throw new Error(dashboard.error || "学生信息读取失败");
@@ -320,10 +332,21 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       if (!guidanceResponse.ok) throw new Error(guidancePayload.error || "导师指导与飞书总结读取失败");
       const matched = dashboard.students?.find((item) => item.id === studentId) ?? null;
       if (!matched) throw new Error("学生不存在，或当前账号无权查看该学生");
-      const reviewability = new Map((dashboard.pending ?? []).map((entry) => [entry.id, entry.can_finalize]));
+      const reviewability = new Map((dashboard.pending ?? []).map((entry) => [entry.id, {
+        can_finalize: entry.can_finalize,
+        can_decide: entry.can_decide,
+        can_release: entry.can_release,
+        claim_stale: entry.claim_stale,
+      }]));
       setStudent({
         ...matched,
-        progress: matched.progress.map((entry) => ({ ...entry, can_finalize: reviewability.get(entry.id) ?? false })),
+        progress: matched.progress.map((entry) => ({
+          ...entry,
+          can_finalize: reviewability.get(entry.id)?.can_finalize ?? false,
+          can_decide: reviewability.get(entry.id)?.can_decide ?? false,
+          can_release: reviewability.get(entry.id)?.can_release ?? false,
+          claim_stale: reviewability.get(entry.id)?.claim_stale ?? false,
+        })),
       });
       setViewerRole(dashboard.viewer?.role ?? null);
       setProposal(proposals.proposals?.find((item) => item.student_id === studentId) ?? null);
@@ -475,13 +498,14 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     }
   }
 
-  async function reviewProgress(entry: StudentProgress, action: "start_review" | "substantive" | "supporting" | "supplement" | "rejected") {
+  async function reviewProgress(entry: StudentProgress, action: "start_review" | "release_review" | "substantive" | "supporting" | "supplement" | "rejected") {
     const note = (reviewNotes[entry.id] || "").trim();
     if ((action === "supplement" || action === "rejected") && !note) {
       setGuidanceMessage("需要补充或判定为非进展时，请先写清具体指导意见。");
       return;
     }
-    if (!entry.can_finalize) {
+    const permitted = action === "release_review" ? entry.can_release : action === "start_review" ? entry.can_finalize : entry.can_decide;
+    if (!permitted) {
       setGuidanceMessage(entry.reviewer_name ? `该证据正在由 ${entry.reviewer_name} 审核` : "当前账号不能审核这条进展");
       return;
     }
@@ -495,7 +519,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       });
       const payload = (await response.json()) as { error?: string; message?: string };
       if (!response.ok) throw new Error(payload.error || "指导意见保存失败");
-      setGuidanceMessage(action === "start_review" ? "已接手审核，可继续形成导师判断。" : payload.message || "导师判断与指导意见已保存。");
+      setGuidanceMessage(action === "start_review" ? "已接手审核，可继续形成导师判断。" : action === "release_review" ? "审核已释放，其他授权导师可以接手。" : payload.message || "导师判断与指导意见已保存。");
       await load();
     } catch (reviewError) {
       setGuidanceMessage(reviewError instanceof Error ? reviewError.message : "指导意见保存失败");
@@ -634,6 +658,8 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         <label className="wide">导师想说的话<textarea name="content" rows={6} required maxLength={3000} placeholder="自由记录研究判断、方法建议、问题讨论、阅读建议、实验思路或任何需要学生关注的内容。" /></label>
         <label>下一项可交付行动<input name="nextAction" maxLength={800} placeholder="例如：补做消融实验并更新结果表" /></label>
         <label>建议完成期限<input name="dueDate" type="date" /></label>
+        <label>完成确认方式<select name="verificationMode" defaultValue="self_report"><option value="self_report">学生自行确认完成</option><option value="mentor_verify">学生提交，导师验收</option></select></label>
+        <label>验收标准<textarea name="acceptanceCriteria" rows={2} maxLength={1200} placeholder="选择导师验收且布置行动时，请写清可判断的完成标准" /></label>
         <div className="student-guidance-compose-actions"><span>指导记录与飞书总结分别保存，关联后可以相互追溯。</span><button className="primary" disabled={guidanceSaveBusy}>{guidanceSaveBusy ? "保存中…" : "保存导师指导"}</button></div>
       </form>
       {guidanceMessage ? <p className="student-guidance-message" role="status">{guidanceMessage}</p> : null}
@@ -641,7 +667,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         <div className="student-guidance-ledger-head"><div><span>GUIDANCE LOG</span><h3>已保存的导师指导</h3></div><strong>{guidanceNotes.length}</strong></div>
         <div>{guidanceNotes.map((note) => <details key={note.id} className={note.status}>
           <summary><span className={`student-guidance-state ${note.status}`}>{note.status === "open" ? "进行中" : "已完成"}</span><div><strong>{note.title || "自由指导"}{note.source_title ? ` · ${note.source_title}` : ""}</strong><small>{note.mentor_name} · {dateText(note.created_at)}</small></div><i>展开查看</i></summary>
-          <div className="student-guidance-note-body"><p>{note.content}</p>{note.next_action ? <dl><div><dt>下一项行动</dt><dd>{note.next_action}</dd></div>{note.due_date ? <div><dt>建议期限</dt><dd>{note.due_date}</dd></div> : null}</dl> : null}{note.status === "open" ? <p className="student-guidance-delivery">{note.acknowledged_at ? `✓ 学生已于 ${dateText(note.acknowledged_at)} 确认收到` : "等待学生确认收到"}</p> : <p className="student-guidance-delivery completed">✓ {note.completed_by_name || "已完成"}{note.completed_at ? ` 于 ${dateText(note.completed_at)} 完成` : ""}{note.completion_note ? `：${note.completion_note}` : ""}</p>}<footer><span>{note.source_title ? `关联 ${note.source_kind || "进展"}：${note.source_title}` : "独立指导记录"}</span><button type="button" disabled={guidanceStatusBusy === note.id} onClick={() => void updateGuidanceStatus(note, note.status === "open" ? "complete" : "reopen")}>{note.status === "open" ? "导师代为标记完成" : "重新打开"}</button></footer></div>
+          <div className="student-guidance-note-body"><p>{note.content}</p>{note.next_action ? <dl><div><dt>下一项行动</dt><dd>{note.next_action}</dd></div>{note.due_date ? <div><dt>建议期限</dt><dd>{note.due_date}</dd></div> : null}{note.acceptance_criteria ? <div><dt>验收标准</dt><dd>{note.acceptance_criteria}</dd></div> : null}</dl> : null}{note.status === "open" ? <p className={`student-guidance-delivery${note.student_reported_at ? " completed" : ""}`}>{note.student_reported_at ? `✓ 学生已提交完成说明，等待导师验收${note.completion_note ? `：${note.completion_note}` : ""}` : note.acknowledged_at ? `✓ 学生已于 ${dateText(note.acknowledged_at)} 确认收到` : "等待学生确认收到"}</p> : <p className="student-guidance-delivery completed">✓ {note.completed_by_name || "已完成"}{note.completed_at ? ` 于 ${dateText(note.completed_at)} 完成` : ""}{note.completion_note ? `：${note.completion_note}` : ""}</p>}<footer><span>{note.source_title ? `关联 ${note.source_kind || "进展"}：${note.source_title}` : note.verification_mode === "mentor_verify" ? "需导师验收" : "学生自行确认"}</span><button type="button" disabled={guidanceStatusBusy === note.id} onClick={() => void updateGuidanceStatus(note, note.status === "open" ? "complete" : "reopen")}>{note.status === "open" ? note.student_reported_at ? "确认验收" : "导师代为标记完成" : "重新打开"}</button></footer></div>
         </details>)}{!guidanceNotes.length ? <div className="student-guidance-ledger-empty">尚无已保存指导；使用上方表单即可建立第一条。</div> : null}</div>
       </div>
       <details className="student-formal-review">
@@ -658,7 +684,13 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
             {!entry.evidence_sources.some((source) => source.source_type !== "attachment") && !entry.attachments.length ? <span><b>仅有文本证据</b><small>如不足以判断，可要求学生补充来源或文件。</small></span> : null}
           </div>
           <label>导师指导意见<textarea rows={3} maxLength={3000} value={reviewNotes[entry.id] || ""} disabled={!entry.can_finalize} onChange={(event) => setReviewNotes((current) => ({ ...current, [entry.id]: event.target.value }))} placeholder="写清判断依据、需要修正的问题和下一项可交付成果；退回补证或判定非进展时必填。" /></label>
-          <footer>{entry.can_finalize ? <>{entry.review_status === "submitted" ? <button disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "start_review")}>接手审核</button> : null}<button className="approve" disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "substantive")}>确认实质性进展</button><button disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "supporting")}>记为支持性工作</button><button disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim()} onClick={() => void reviewProgress(entry, "supplement")}>要求补充证据</button><button className="reject" disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim()} onClick={() => void reviewProgress(entry, "rejected")}>不认定为进展</button></> : <p>{entry.reviewer_name ? `该记录正在由 ${entry.reviewer_name} 审核` : "该记录不可由当前账号审核"}</p>}</footer>
+          <footer>
+            {entry.review_status === "submitted" && entry.can_finalize ? <button disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "start_review")}>接手审核</button> : null}
+            {entry.claim_stale && entry.can_finalize ? <button className="approve" disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "start_review")}>重新领取超时审核</button> : null}
+            {entry.can_release ? <button disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "release_review")}>释放审核</button> : null}
+            {entry.can_decide ? <><button className="approve" disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "substantive")}>确认实质性进展</button><button disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "supporting")}>记为支持性工作</button><button disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim()} onClick={() => void reviewProgress(entry, "supplement")}>要求补充证据</button><button className="reject" disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim()} onClick={() => void reviewProgress(entry, "rejected")}>不认定为进展</button></> : null}
+            {!entry.can_finalize ? <p>{entry.reviewer_name ? `该记录正在由 ${entry.reviewer_name} 审核` : "该记录不可由当前账号审核"}</p> : null}
+          </footer>
         </article>)}
         {!pendingGuidance.length ? <div className="student-guidance-clear"><i>✓</i><div><strong>当前没有待审核进展</strong><p>导师仍可继续使用上方自由指导区。</p></div><a href="#evidence">查看完整证据链 ↓</a></div> : null}
       </div>

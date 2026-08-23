@@ -51,7 +51,8 @@ test("admin assignment scope, evidence provenance, outputs, guidance, and upgrad
   assert.match(outputsRoute, /research_output_events/);
   assert.match(outputsRoute, /requireAppUser\(request, \["superadmin", "admin"\]\)/);
   assert.match(guidanceRoute, /canViewStudent/);
-  assert.doesNotMatch(guidanceRoute, /canReviewStudent/);
+  assert.match(guidanceRoute, /canReviewStudent/);
+  assert.match(guidanceRoute, /只有创建这条指导的导师或有审核权的导师可以变更状态/);
   assert.match(guidanceRoute, /日常指导与正式审核分权/);
   assert.match(guidanceRoute, /assertSameOrigin/);
   assert.match(guidanceRoute, /feishu_meeting_summary_links/);

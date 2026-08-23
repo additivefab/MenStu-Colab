@@ -3,7 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-test("0010-0017 preserve existing data while adding identity, attachment, paper, guidance, production, and revision gates", async () => {
+test("0010-0018 preserve existing data while adding identity, attachment, paper, guidance, production, revision, and mentor operation gates", async () => {
   const migrationDirectory = new URL("../drizzle/", import.meta.url);
   const names = (await readdir(migrationDirectory))
     .filter((name) => /^\d{4}_.*\.sql$/.test(name))
@@ -11,7 +11,7 @@ test("0010-0017 preserve existing data while adding identity, attachment, paper,
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
 
-  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_", "0014_", "0015_", "0016_", "0017_"].some((prefix) => item.startsWith(prefix)))) {
+  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_", "0014_", "0015_", "0016_", "0017_", "0018_"].some((prefix) => item.startsWith(prefix)))) {
     database.exec(await readFile(new URL(name, migrationDirectory), "utf8"));
   }
   database.exec(`
@@ -39,6 +39,7 @@ test("0010-0017 preserve existing data while adding identity, attachment, paper,
   const freeGuidanceMigration = await readFile(new URL(names.find((item) => item.startsWith("0015_")), migrationDirectory), "utf8");
   const productionMigration = await readFile(new URL(names.find((item) => item.startsWith("0016_")), migrationDirectory), "utf8");
   const revisionMigration = await readFile(new URL(names.find((item) => item.startsWith("0017_")), migrationDirectory), "utf8");
+  const mentorOperationsMigration = await readFile(new URL(names.find((item) => item.startsWith("0018_")), migrationDirectory), "utf8");
   database.exec(businessMigration);
   database.exec(roleMigration);
   database.exec(roleIndexMigration);
@@ -344,6 +345,70 @@ test("0010-0017 preserve existing data while adding identity, attachment, paper,
       (progress_entry_id, next_action, next_action_due_date, completion_requested)
       VALUES (1, '非法完成值', '2026-09-11', 2)`),
     /CHECK constraint failed: project_progress_completion_requested/,
+  );
+  database.exec(`INSERT INTO student_guidance_events
+    (guidance_note_id, actor_user_id, actor_type, action, note)
+    VALUES (1, 9002, 'staff', 'created', '迁移前已存在的指导事件')`);
+  database.exec("BEGIN");
+  try {
+    database.exec(mentorOperationsMigration);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+  const guidanceAfterUpgrade = database.prepare(`SELECT title, acceptance_criteria, verification_mode,
+    student_reported_at, mentor_verified_at FROM student_guidance_notes WHERE student_id = ?`).get("student-upgrade");
+  assert.deepEqual({ ...guidanceAfterUpgrade }, {
+    title: "下一轮实验设计",
+    acceptance_criteria: "",
+    verification_mode: "self_report",
+    student_reported_at: null,
+    mentor_verified_at: null,
+  });
+  assert.deepEqual(
+    { ...database.prepare(`SELECT guidance_note_id, action, note
+      FROM student_guidance_events WHERE guidance_note_id = 1`).get() },
+    { guidance_note_id: 1, action: "created", note: "迁移前已存在的指导事件" },
+  );
+  assert.equal(database.prepare("SELECT version FROM app_schema_meta WHERE id = 1").get().version, 18);
+  database.exec(`INSERT INTO student_guidance_notes
+    (student_id, mentor_user_id, guidance_type, content)
+    VALUES ('student-upgrade', 9002, 'general', '迁移后新增指导')`);
+  assert.equal(
+    database.prepare("SELECT verification_mode FROM student_guidance_notes WHERE id = 2").get().verification_mode,
+    "mentor_verify",
+  );
+  assert.ok(database.prepare("PRAGMA table_info('progress_entries')").all().some((column) => column.name === "review_claimed_at"));
+  assert.deepEqual(
+    database.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'
+      AND name IN ('meeting_agendas', 'meeting_agenda_items', 'notification_deliveries')
+      ORDER BY name`).all().map((row) => row.name),
+    ["meeting_agenda_items", "meeting_agendas", "notification_deliveries"],
+  );
+  assert.ok(database.prepare("PRAGMA table_info('notification_deliveries')").all().some((column) => column.name === "attempt_token"));
+  assert.ok(database.prepare("PRAGMA table_info('notification_deliveries')").all().some((column) => column.name === "provider_message_id"));
+  database.exec(`
+    INSERT INTO meeting_agendas (mentor_user_id, title, meeting_date)
+      VALUES (9002, '迁移后组会议程', '2026-09-21');
+    INSERT INTO meeting_agenda_items
+      (agenda_id, student_id, topic, reason, duration_minutes, sort_order)
+      VALUES (1, 'student-upgrade', '确认复现实验节点', '节点受阻，需要导师决策', 15, 0);
+    INSERT INTO notification_deliveries
+      (student_id, triggered_by_user_id, reason, idempotency_key, status, sent_at)
+      VALUES ('student-upgrade', 9002, '进入个人更新周期', 'migration-reminder-1', 'sent', CURRENT_TIMESTAMP);
+  `);
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM meeting_agenda_items").get().count, 1);
+  assert.throws(
+    () => database.exec(`INSERT INTO meeting_agenda_items
+      (agenda_id, student_id, topic, duration_minutes) VALUES (1, 'student-upgrade', '非法时长', 12)`),
+    /CHECK constraint failed: meeting_agenda_items_duration_check/,
+  );
+  assert.throws(
+    () => database.exec(`INSERT INTO notification_deliveries
+      (student_id, triggered_by_user_id, reason, idempotency_key, status)
+      VALUES ('student-upgrade', 9002, '重复提醒', 'migration-reminder-1', 'sent')`),
+    /UNIQUE constraint failed: notification_deliveries\.idempotency_key/,
   );
   assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
   database.close();

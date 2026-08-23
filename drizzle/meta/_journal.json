@@ -127,6 +127,13 @@
       "when": 1787503435399,
       "tag": "0017_loud_iron_lad",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1787507270958,
+      "tag": "0018_nasty_valkyrie",
+      "breakpoints": true
     }
   ]
 }
