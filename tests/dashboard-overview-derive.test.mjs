@@ -37,7 +37,7 @@ test("blocked milestone outranks mentor review and preserves the additional issu
 
   assert.equal(result.primaryState, "intervene");
   assert.equal(result.primaryReasonCode, "MILESTONE_BLOCKED");
-  assert.equal(result.additionalIssueCount, 2);
+  assert.equal(result.additionalIssueCount, 1);
   assert.ok(result.issues.some((issue) => issue.code === "MENTOR_PROGRESS_REVIEW"));
   assert.equal(result.counters.actionableByMentor, 1);
 });
@@ -74,6 +74,19 @@ test("changes requested is waiting for the student", () => {
   assert.equal(result.primaryState, "student");
   assert.equal(result.primaryReasonCode, "STUDENT_CHANGES_REQUESTED");
   assert.equal(result.primaryAction, "view_progress");
+});
+
+test("a returned proposal waits for student revision and links to that proposal", () => {
+  const result = deriveStudentOverview(input({
+    latestSubstantiveAt: null,
+    hasConfirmedMainline: false,
+    studentWaits: [{ id: 44, title: "重构研究假设", dueDate: null, occurredAt: "2026-08-22T00:00:00Z", kind: "proposal_changes_requested" }],
+  }), now);
+
+  assert.equal(result.primaryState, "student");
+  assert.equal(result.primaryReasonCode, "STUDENT_CHANGES_REQUESTED");
+  assert.equal(result.primaryAction, "view_proposal");
+  assert.equal(result.primaryActionTargetId, 44);
 });
 
 test("cadence overdue alone is waiting for the student rather than red", () => {

@@ -1,6 +1,6 @@
 export type AcceptedTrackAuthority = {
   track_type: "paper" | "project";
-  confirmed_at: string;
+  current_revision_created_at: string;
 };
 
 export type OutstandingTrackAuthority = {
@@ -29,14 +29,17 @@ export function canActOnProgressReview(
     submitted_by_user_id: number | null;
     reviewed_by_user_id: number | null;
     review_claimed_at: string | null;
+    revision_review_status: "submitted" | "in_review" | "changes_requested";
+    revision_reviewed_by_user_id: number | null;
   },
   viewerId: number,
   canReview: boolean,
   now: string | Date,
 ) {
-  if (!canReview || row.submitted_by_user_id === viewerId) return false;
+  if (!canReview || row.submitted_by_user_id === viewerId || row.revision_review_status !== row.review_status) return false;
   if (row.review_status === "submitted") return true;
   if (row.review_status !== "in_review") return false;
+  if (row.revision_reviewed_by_user_id !== row.reviewed_by_user_id) return false;
   return row.reviewed_by_user_id === viewerId || reviewLeaseExpired(row.review_claimed_at, now);
 }
 
@@ -64,6 +67,6 @@ export function filterCurrentAcceptedTracks<T extends AcceptedTrackAuthority>(
 ) {
   return acceptedTracks.filter((track) => !outstanding.some((row) => (
     row.track_type === track.track_type
-    && instantOrder(row.current_revision_created_at) > instantOrder(track.confirmed_at)
+    && instantOrder(row.current_revision_created_at) > instantOrder(track.current_revision_created_at)
   )));
 }

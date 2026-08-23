@@ -32,6 +32,7 @@ export type OverviewAction =
   | "verify_guidance"
   | "view_guidance"
   | "view_progress"
+  | "view_proposal"
   | "view_student"
   | "complete_profile";
 
@@ -86,7 +87,7 @@ export type OverviewStudentWaitFact = {
   title: string;
   dueDate: string | null;
   occurredAt: string | null;
-  kind: "changes_requested" | "guidance";
+  kind: "changes_requested" | "proposal_changes_requested" | "guidance";
 };
 
 export type StudentOverviewInput = {

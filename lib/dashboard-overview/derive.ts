@@ -142,16 +142,21 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
         actionTargetId: wait.id,
       });
     }
+    const changesRequested = wait.kind === "changes_requested" || wait.kind === "proposal_changes_requested";
     issues.push({
-      code: wait.kind === "changes_requested" ? "STUDENT_CHANGES_REQUESTED" : "STUDENT_GUIDANCE_ACTION",
+      code: changesRequested ? "STUDENT_CHANGES_REQUESTED" : "STUDENT_GUIDANCE_ACTION",
       state: "student",
-      label: wait.kind === "changes_requested" ? `等待补交：${wait.title}` : `等待学生执行：${wait.title}`,
+      label: wait.kind === "changes_requested"
+        ? `等待补交：${wait.title}`
+        : wait.kind === "proposal_changes_requested"
+          ? `等待方案修改：${wait.title}`
+          : `等待学生执行：${wait.title}`,
       owner: "student",
       dueDate: wait.dueDate,
       occurredAt: wait.occurredAt,
-      sourceType: wait.kind === "changes_requested" ? "progress" : "guidance",
+      sourceType: wait.kind === "changes_requested" ? "progress" : wait.kind === "proposal_changes_requested" ? "proposal" : "guidance",
       sourceId: wait.id,
-      action: wait.kind === "changes_requested" ? "view_progress" : "view_guidance",
+      action: wait.kind === "changes_requested" ? "view_progress" : wait.kind === "proposal_changes_requested" ? "view_proposal" : "view_guidance",
       actionTargetId: wait.id,
     });
   }
@@ -173,7 +178,7 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
       action: "view_student",
       actionTargetId: input.studentId,
     });
-  } else if (input.latestSubstantiveAt && input.cadenceDays && daysSinceBaseline !== null
+  } else if (!issues.length && input.latestSubstantiveAt && input.cadenceDays && daysSinceBaseline !== null
     && daysSinceBaseline <= input.cadenceDays) {
     issues.push({
       code: "ON_TRACK_RECENT_PROGRESS",

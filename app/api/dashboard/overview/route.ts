@@ -1,5 +1,6 @@
 import { ensureDatabase } from "../../../../lib/database";
 import { requireAppUser } from "../../../../lib/feishu-auth";
+import { assertMentorOverviewResponse } from "../../../../lib/dashboard-overview/contract";
 import { loadMentorOverview } from "../../../../lib/dashboard-overview/query";
 
 const privateHeaders = {
@@ -19,6 +20,7 @@ export async function GET(request: Request) {
     if ("response" in auth && auth.response) return privateResponse(auth.response);
     await ensureDatabase();
     const overview = await loadMentorOverview(auth.user);
+    assertMentorOverviewResponse(overview);
     return Response.json(overview, { headers: privateHeaders });
   } catch {
     return Response.json(
