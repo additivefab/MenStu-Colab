@@ -349,6 +349,9 @@ type DashboardData = {
     name: string;
     avatarUrl: string;
     role: ViewerRole;
+    primaryRole: ViewerRole;
+    activePersona: "management" | "student";
+    canSwitchPersona: boolean;
     studentId: string | null;
   };
   students: Student[];
@@ -490,6 +493,7 @@ export default function Dashboard() {
   const [toast, setToast] = useState("");
   const [overviewRefreshRequest, setOverviewRefreshRequest] = useState(0);
   const [authGate, setAuthGate] = useState<AuthGate | null>(null);
+  const [personaBusy, setPersonaBusy] = useState(false);
   const globalSearchRef = useRef<HTMLInputElement>(null);
 
   const navigateMentor = useCallback((next: MentorView, replace = false) => {
@@ -503,6 +507,23 @@ export default function Dashboard() {
       url.searchParams.delete("proposal");
     }
     window.history[replace || sameDestination ? "replaceState" : "pushState"]({}, "", url);
+  }, []);
+
+  const switchPersona = useCallback(async (persona: "management" | "student") => {
+    setPersonaBusy(true);
+    try {
+      const response = await fetch("/api/auth/persona", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ persona }),
+      });
+      const payload = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "界面切换失败");
+      window.location.assign(persona === "student" ? "/" : "/?mentorView=overview");
+    } catch (switchError) {
+      setToast(switchError instanceof Error ? switchError.message : "界面切换失败");
+      setPersonaBusy(false);
+    }
   }, []);
 
   const loadDashboard = useCallback(async () => {
@@ -557,7 +578,16 @@ export default function Dashboard() {
       const response = await fetch("/api/auth/session", { cache: "no-store" });
       const payload = await response.json().catch(() => ({})) as {
         configured?: boolean;
-        user?: { id: number; displayName: string; avatarUrl: string; role: ViewerRole | "pending"; studentId: string | null } | null;
+        user?: {
+          id: number;
+          displayName: string;
+          avatarUrl: string;
+          role: ViewerRole | "pending";
+          primaryRole: ViewerRole | "pending";
+          activePersona: "management" | "student";
+          canSwitchPersona: boolean;
+          studentId: string | null;
+        } | null;
       };
       if (response.status === 503 || payload.configured === false) {
         setAuthGate({ kind: "setup", message: "飞书应用尚未配置" });
@@ -582,6 +612,9 @@ export default function Dashboard() {
         name: payload.user.displayName,
         avatarUrl: payload.user.avatarUrl,
         role: payload.user.role,
+        primaryRole: payload.user.primaryRole as ViewerRole,
+        activePersona: payload.user.activePersona,
+        canSwitchPersona: payload.user.canSwitchPersona,
         studentId: payload.user.studentId,
       });
     } catch (loadError) {
@@ -737,8 +770,10 @@ export default function Dashboard() {
         onRefresh={loadDashboard}
         onToast={setToast}
         onFeishu={() => setFeishuOpen(true)}
+        onSwitchToManagement={() => void switchPersona("management")}
+        personaBusy={personaBusy}
       />
-      {feishuOpen ? <FeishuModal viewer={data.viewer} onClose={() => setFeishuOpen(false)} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.reload(); }} /> : null}
+      {feishuOpen ? <FeishuModal viewer={data.viewer} onClose={() => setFeishuOpen(false)} onSwitchPersona={switchPersona} personaBusy={personaBusy} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.reload(); }} /> : null}
       {toast ? <div className="toast" role="status">{toast}</div> : null}
     </>;
   }
@@ -774,6 +809,7 @@ export default function Dashboard() {
             </div>
           ))}
         </nav>
+        {currentViewer.canSwitchPersona ? <button className="persona-switch" type="button" disabled={personaBusy} onClick={() => void switchPersona("student")}><span aria-hidden="true">⇄</span><span><strong>{personaBusy ? "正在切换…" : "打开本人学生端"}</strong><small>仅查看并操作{currentViewer.name}本人的学生档案</small></span></button> : null}
         <div className="privacy-note"><span>AI 数据边界已启用</span><small>代码与保密项目仅限本地模型</small></div>
         <div className="sidebar-foot">
           <div className="avatar">{currentViewer.name.slice(0, 1) || "佘"}</div>
@@ -867,7 +903,7 @@ export default function Dashboard() {
       </section>
 
       {guidanceOpen && data ? <GuidanceQuickModal students={data.students} onClose={() => setGuidanceOpen(false)} onSaved={async () => { setGuidanceOpen(false); setToast("指导已保存，并进入学生下一步行动"); await loadDashboard(); }} /> : null}
-      {feishuOpen ? <FeishuModal viewer={currentViewer} onClose={() => setFeishuOpen(false)} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.reload(); }} /> : null}
+      {feishuOpen ? <FeishuModal viewer={currentViewer} onClose={() => setFeishuOpen(false)} onSwitchPersona={switchPersona} personaBusy={personaBusy} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.reload(); }} /> : null}
       {toast ? <div className="toast" role="status">{toast}</div> : null}
     </main>
   );
@@ -1300,11 +1336,13 @@ function studentNavigationFallbackTargetId(intent: StudentNavigationIntent) {
   return "student-view-main";
 }
 
-function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
+function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagement, personaBusy }: {
   data: DashboardData;
   onRefresh: () => Promise<void>;
   onToast: (message: string) => void;
   onFeishu: () => void;
+  onSwitchToManagement: () => void;
+  personaBusy: boolean;
 }) {
   const [view, setView] = useState<StudentView>("today");
   const [researchTrack, setResearchTrack] = useState<StudentResearchTrack>("paper");
@@ -1443,7 +1481,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
     <main className="student-portal-shell" id="student-view-main" tabIndex={-1} aria-labelledby={`student-view-${view}-title`}>
       <header className="student-portal-header">
         <div className="student-workbench-context"><span>当前界面</span><strong>{currentView.label} · {student.currentFocus || "我的科研进展"}</strong></div>
-        <div className="student-account"><span className="student-workbench-status"><i />数据已同步</span><button type="button" onClick={onFeishu}>飞书账号</button></div>
+        <div className="student-account"><span className="student-workbench-status"><i />数据已同步</span>{data.viewer.canSwitchPersona ? <button className="student-persona-switch" type="button" disabled={personaBusy} onClick={onSwitchToManagement}>{personaBusy ? "正在切换…" : "返回管理端"}</button> : null}<button type="button" onClick={onFeishu}>飞书账号</button></div>
       </header>
 
       {view === "today" ? <StudentNextAction action={data.studentNextAction} student={student} papers={papers} onPaper={(paperId) => openComposer("论文", paperId)} onProject={(milestoneId) => openComposer("项目", milestoneId)} onMeeting={openMeetingDesk} onGuidance={openGuidanceDesk} onProgress={(entryId) => navigateStudent({ view: "progress", entryId })} onSupplement={openSupplement} /> : null}
@@ -2667,7 +2705,13 @@ function ProposalDetail({ proposal, canReview, onToast, onRefresh }: {
   </article>;
 }
 
-function FeishuModal({ viewer, onClose, onLogout }: { viewer: DashboardData["viewer"]; onClose: () => void; onLogout: () => Promise<void> }) {
+function FeishuModal({ viewer, onClose, onSwitchPersona, personaBusy, onLogout }: {
+  viewer: DashboardData["viewer"];
+  onClose: () => void;
+  onSwitchPersona: (persona: "management" | "student") => Promise<void>;
+  personaBusy: boolean;
+  onLogout: () => Promise<void>;
+}) {
   const roleLabel = viewer.role === "superadmin" ? "超级管理员" : viewer.role === "admin" ? "管理员（导师）" : "学生";
   const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -2688,7 +2732,7 @@ function FeishuModal({ viewer, onClose, onLogout }: { viewer: DashboardData["vie
     document.addEventListener("keydown", onKeyDown);
     return () => { document.removeEventListener("keydown", onKeyDown); previousFocus?.focus(); };
   }, [onClose]);
-  return <div className="modal-layer" role="presentation"><div className="modal compact-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="feishu-dialog-title"><button className="close" aria-label="关闭" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2 id="feishu-dialog-title">{viewer.name}，飞书身份已验证</h2><p>当前角色：{roleLabel}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按学生个人周期发送，并保留送达与失败台账</small></span><em className="done">已接入</em></div><div><b>3</b><span><strong>智能纪要个人进展</strong><small>自动识别学生姓名并把科研部分拆成独立进展</small></span><em className="done">已接入</em></div></div><div className="safe-banner">普通聊天会在接收时立即过滤且不落库；纪要只能在学生归属明确时自动建个人进展，正式评价由对应主导师或超级管理员完成。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
+  return <div className="modal-layer" role="presentation"><div className="modal compact-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="feishu-dialog-title"><button className="close" aria-label="关闭" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2 id="feishu-dialog-title">{viewer.name}，飞书身份已验证</h2><p>当前角色：{roleLabel}。{viewer.canSwitchPersona ? `当前在${viewer.activePersona === "student" ? "本人学生端" : "管理端"}，切换后权限会由服务端重新收口。` : "系统权限由服务端校验。"}</p></div>{viewer.canSwitchPersona ? <div className="persona-modal-card"><strong>双端身份</strong><p>学生端只允许访问本人档案；返回管理端后才恢复课题组管理权限。</p><button className="primary" type="button" disabled={personaBusy} onClick={() => void onSwitchPersona(viewer.activePersona === "student" ? "management" : "student")}>{personaBusy ? "正在切换…" : viewer.activePersona === "student" ? "返回管理端" : "打开本人学生端"}</button></div> : null}<div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按学生个人周期发送，并保留送达与失败台账</small></span><em className="done">已接入</em></div><div><b>3</b><span><strong>智能纪要个人进展</strong><small>自动识别学生姓名并把科研部分拆成独立进展</small></span><em className="done">已接入</em></div></div><div className="safe-banner">普通聊天会在接收时立即过滤且不落库；纪要只能在学生归属明确时自动建个人进展，正式评价由对应主导师或超级管理员完成。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
 }
 
 function MeetingView({ viewer, students, meetingRequests, meetingLoadError, onRemind, onToast, onMeetingChange }: {

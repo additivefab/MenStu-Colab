@@ -142,12 +142,15 @@ async function listRequests(user: AppUser) {
           AND assignment.student_id = m.student_id
           AND assignment.active = 1 AND assignment.can_review = 1
       )
+        AND m.student_id != ?
       ${listOrder}`)
-      .bind(user.id)
+      .bind(user.id, user.studentId ?? "")
       .all<MeetingRequestRow>();
     return results;
   }
-  const { results } = await d1.prepare(`${selectFields} ${listOrder}`).all<MeetingRequestRow>();
+  const { results } = await d1.prepare(`${selectFields} WHERE m.student_id != ? ${listOrder}`)
+    .bind(user.studentId ?? "")
+    .all<MeetingRequestRow>();
   return results;
 }
 
@@ -169,11 +172,13 @@ async function scopedRequest(user: AppUser, id: number) {
         WHERE assignment.mentor_user_id = ?
           AND assignment.student_id = m.student_id
           AND assignment.active = 1 AND assignment.can_review = 1
-      )`)
-      .bind(id, user.id)
+      ) AND m.student_id != ?`)
+      .bind(id, user.id, user.studentId ?? "")
       .first<ExistingRequest>();
   }
-  return d1.prepare(`${fields} WHERE id = ?`).bind(id).first<ExistingRequest>();
+  return d1.prepare(`${fields} WHERE id = ? AND m.student_id != ?`)
+    .bind(id, user.studentId ?? "")
+    .first<ExistingRequest>();
 }
 
 export async function GET(request: Request) {

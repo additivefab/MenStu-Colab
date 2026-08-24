@@ -1,5 +1,6 @@
 import {
   assertSameOrigin,
+  clearPersonaCookie,
   clearSessionCookie,
   deleteSession,
 } from "../../../../lib/feishu-auth";
@@ -9,8 +10,8 @@ export async function POST(request: Request) {
     return Response.json({ error: "请求来源无效" }, { status: 403 });
   }
   await deleteSession(request);
-  return Response.json(
-    { message: "已退出" },
-    { headers: { "Set-Cookie": clearSessionCookie() } },
-  );
+  const headers = new Headers();
+  headers.append("Set-Cookie", clearSessionCookie());
+  headers.append("Set-Cookie", clearPersonaCookie());
+  return Response.json({ message: "已退出" }, { headers });
 }

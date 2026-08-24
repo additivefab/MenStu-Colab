@@ -1,10 +1,13 @@
 import { env } from "cloudflare:workers";
 import { ensureDatabase, getD1 } from "./database";
+import { resolvePersona, type AppPersona } from "./persona-policy";
 
 const SESSION_COOKIE = "tanyan_session";
+const PERSONA_COOKIE = "tanyan_persona";
 const SESSION_DAYS = 14;
 
 export type AppRole = "superadmin" | "admin" | "student" | "pending";
+export type { AppPersona } from "./persona-policy";
 
 export function isAdminRole(role: AppRole) {
   return role === "superadmin" || role === "admin";
@@ -20,11 +23,19 @@ export type AppUser = {
   displayName: string;
   avatarUrl: string;
   email: string;
+  /** Effective role for the current request. */
   role: AppRole;
+  /** Persisted account role; never derived from the persona cookie. */
+  primaryRole: AppRole;
+  activePersona: AppPersona;
+  canSwitchPersona: boolean;
   studentId: string | null;
 };
 
-export type PublicAppUser = Pick<AppUser, "id" | "displayName" | "avatarUrl" | "role" | "studentId">;
+export type PublicAppUser = Pick<
+  AppUser,
+  "id" | "displayName" | "avatarUrl" | "role" | "primaryRole" | "activePersona" | "canSwitchPersona" | "studentId"
+>;
 
 export function publicAppUser(user: AppUser): PublicAppUser {
   return {
@@ -32,6 +43,9 @@ export function publicAppUser(user: AppUser): PublicAppUser {
     displayName: user.displayName,
     avatarUrl: user.avatarUrl,
     role: user.role,
+    primaryRole: user.primaryRole,
+    activePersona: user.activePersona,
+    canSwitchPersona: user.canSwitchPersona,
     studentId: user.studentId,
   };
 }
@@ -171,19 +185,27 @@ async function hashToken(value: string) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function mapUser(row: UserRow): AppUser {
-  const role: AppRole = row.role === "mentor"
+function primaryRoleFromRow(row: UserRow): AppRole {
+  return row.role === "mentor"
     ? "admin"
     : ["superadmin", "admin", "student", "pending"].includes(row.role)
       ? row.role as AppRole
       : "pending";
+}
+
+function mapUser(row: UserRow, requestedPersona?: string): AppUser {
+  const primaryRole = primaryRoleFromRow(row);
+  const persona = resolvePersona(primaryRole, row.student_id, requestedPersona);
   return {
     id: row.id,
     feishuOpenId: row.feishu_open_id,
     displayName: row.display_name,
     avatarUrl: row.avatar_url,
     email: row.email,
-    role,
+    role: persona.role,
+    primaryRole,
+    activePersona: persona.activePersona,
+    canSwitchPersona: persona.canSwitchPersona,
     studentId: row.student_id,
   };
 }
@@ -347,18 +369,30 @@ export function clearSessionCookie() {
   return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 
+export function personaCookie(persona: AppPersona) {
+  return `${PERSONA_COOKIE}=${persona}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_DAYS * 24 * 60 * 60}`;
+}
+
+export function clearPersonaCookie() {
+  return `${PERSONA_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+}
+
 export async function getAppUser(request: Request) {
   if (!isFeishuConfigured()) return null;
   const token = readCookie(request, SESSION_COOKIE);
   if (!token) return null;
   await ensureDatabase();
   const tokenHash = await hashToken(token);
-  const row = await getD1().prepare(`SELECT u.id, u.feishu_open_id, u.display_name, u.avatar_url, u.email, u.role, u.student_id
+  const row = await getD1().prepare(`SELECT u.id, u.feishu_open_id, u.display_name, u.avatar_url, u.email, u.role,
+    CASE WHEN EXISTS (
+      SELECT 1 FROM students bound_student
+      WHERE bound_student.id = u.student_id AND bound_student.active = 1
+    ) THEN u.student_id ELSE NULL END AS student_id
     FROM app_sessions s JOIN app_users u ON u.id = s.app_user_id
     WHERE s.token_hash = ? AND datetime(s.expires_at) > CURRENT_TIMESTAMP AND u.active = 1`)
     .bind(tokenHash)
     .first<UserRow>();
-  return row ? mapUser(row) : null;
+  return row ? mapUser(row, readCookie(request, PERSONA_COOKIE)) : null;
 }
 
 export async function deleteSession(request: Request) {

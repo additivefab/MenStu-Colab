@@ -2,6 +2,7 @@ import {
   assertSameOrigin,
   createFeishuSession,
   exchangeFeishuCode,
+  personaCookie,
   publicAppUser,
   sessionCookie,
 } from "../../../../../lib/feishu-auth";
@@ -19,10 +20,10 @@ export async function POST(request: Request) {
 
     const info = await exchangeFeishuCode(code);
     const session = await createFeishuSession(info);
-    return Response.json(
-      { user: publicAppUser(session.user) },
-      { headers: { "Set-Cookie": sessionCookie(session.token, session.expiresAt) } },
-    );
+    const headers = new Headers();
+    headers.append("Set-Cookie", sessionCookie(session.token, session.expiresAt));
+    headers.append("Set-Cookie", personaCookie("management"));
+    return Response.json({ user: publicAppUser(session.user) }, { headers });
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "飞书登录失败" },

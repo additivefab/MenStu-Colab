@@ -467,6 +467,9 @@ export async function POST(request: Request) {
     requestHash = await progressRequestHash(values, paperValues, projectValues, files);
 
     const d1 = getD1();
+    if (auth.user.role !== "student" && auth.user.studentId === values.studentId) {
+      return Response.json({ error: "请切换到本人学生端提交自己的进展" }, { status: 403 });
+    }
     if (auth.user.role !== "student" && !(await canViewStudent(auth.user, values.studentId))) {
       return Response.json({ error: "当前账号无权为该学生提交进展" }, { status: 403 });
     }
@@ -726,6 +729,9 @@ export async function PATCH(request: Request) {
         project_evidence_target: string | null; project_proposal_version: number | null;
       }>();
     if (!existing) return Response.json({ error: "进展记录不存在" }, { status: 404 });
+    if (auth.user.role !== "student" && auth.user.studentId === existing.student_id) {
+      return Response.json({ error: "请切换到本人学生端补充自己的进展证据" }, { status: 403 });
+    }
     if (!(await canViewStudent(auth.user, existing.student_id))) {
       return Response.json({ error: "无权修改该学生的进展" }, { status: 403 });
     }

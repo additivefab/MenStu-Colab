@@ -15,6 +15,10 @@ export function roleCanViewStudent(user: ScopedUser, studentId: string, assigned
   return false;
 }
 
+export function isOwnStudentRecord(user: Pick<ScopedUser, "studentId">, studentId: string) {
+  return Boolean(user.studentId && user.studentId === studentId);
+}
+
 export function scopeSql(scope: StudentScope, column: string) {
   if (scope.all) return { clause: "", bindings: [] as string[] };
   if (!scope.studentIds.length) return { clause: " AND 1 = 0", bindings: [] as string[] };

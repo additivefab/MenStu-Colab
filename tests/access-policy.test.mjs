@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { roleCanViewStudent, scopeSql } from "../lib/access-policy.ts";
+import { isOwnStudentRecord, roleCanViewStudent, scopeSql } from "../lib/access-policy.ts";
 
 test("student data access defaults to deny outside the explicit role scope", () => {
   assert.equal(roleCanViewStudent({ role: "superadmin", studentId: null }, "student-a", []), true);
@@ -11,6 +11,12 @@ test("student data access defaults to deny outside the explicit role scope", () 
   assert.equal(roleCanViewStudent({ role: "student", studentId: "student-a" }, "student-b", []), false);
   assert.equal(roleCanViewStudent({ role: "pending", studentId: null }, "student-a", ["student-a"]), false);
   assert.equal(roleCanViewStudent({ role: "unexpected", studentId: null }, "student-a", ["student-a"]), false);
+});
+
+test("dual-persona staff are recognized as the owner of their bound student record", () => {
+  assert.equal(isOwnStudentRecord({ studentId: "student-a" }, "student-a"), true);
+  assert.equal(isOwnStudentRecord({ studentId: "student-a" }, "student-b"), false);
+  assert.equal(isOwnStudentRecord({ studentId: null }, "student-a"), false);
 });
 
 test("database scopes deny an empty admin assignment and bind assigned students", () => {

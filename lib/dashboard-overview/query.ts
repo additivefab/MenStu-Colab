@@ -143,7 +143,9 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
 
   const [reviewableResult, substantiveResult, trackResult, submittedResult, outstandingResult, proposalResult, milestoneResult, guidanceResult, paperResult] = await Promise.all([
     viewer.role === "superadmin"
-      ? Promise.resolve({ results: studentIds.map((student_id) => ({ student_id })) })
+      ? Promise.resolve({ results: studentIds
+        .filter((studentId) => studentId !== viewer.studentId)
+        .map((student_id) => ({ student_id })) })
       : d1.prepare(reviewableStudentSql)
         .bind(viewer.id).all<{ student_id: string }>(),
     d1.prepare(substantiveProgressSql(studentIds.length)).bind(...studentIds).all<SubstantiveRow>(),
@@ -166,7 +168,9 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
   const paperRows = paperResult.results as PaperRow[];
   return assembleMentorOverview({
     students: baseStudents,
-    reviewableStudentIds: reviewableRows.map((row) => row.student_id),
+    reviewableStudentIds: reviewableRows
+      .map((row) => row.student_id)
+      .filter((studentId) => studentId !== viewer.studentId),
     substantive: substantiveRows,
     acceptedTracks: acceptedTrackRows,
     latestSubmitted: submittedRows,

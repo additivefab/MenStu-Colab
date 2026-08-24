@@ -131,6 +131,9 @@ export async function POST(request: Request) {
     if (!(await canViewStudent(auth.user, studentId))) {
       return Response.json({ error: "当前账号无权指导该学生" }, { status: 403 });
     }
+    if (auth.user.studentId === studentId) {
+      return Response.json({ error: "不能以导师身份给本人学生档案下达指导，请切换到学生端操作本人事项" }, { status: 403 });
+    }
     const d1 = getD1();
     const student = await d1.prepare("SELECT id FROM students WHERE id = ? AND active = 1")
       .bind(studentId).first();
@@ -226,6 +229,9 @@ export async function PATCH(request: Request) {
     const isStudent = auth.user.role === "student";
     if (isStudent && auth.user.studentId !== note.student_id) {
       return Response.json({ error: "学生账号只能更新本人的导师指导" }, { status: 403 });
+    }
+    if (!isStudent && auth.user.studentId === note.student_id) {
+      return Response.json({ error: "不能以导师身份处理本人学生档案的指导" }, { status: 403 });
     }
     if (isStudent && action === "reopen") {
       return Response.json({ error: "学生不能重新打开已完成的导师指导" }, { status: 403 });

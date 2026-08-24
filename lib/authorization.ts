@@ -1,8 +1,8 @@
 import type { AppUser } from "./feishu-auth";
 import { getD1 } from "./database";
-import { type StudentScope } from "./access-policy";
+import { isOwnStudentRecord, type StudentScope } from "./access-policy";
 
-export { roleCanViewStudent, scopeSql, type StudentScope } from "./access-policy";
+export { isOwnStudentRecord, roleCanViewStudent, scopeSql, type StudentScope } from "./access-policy";
 
 export async function getStudentScope(user: AppUser): Promise<StudentScope> {
   if (user.role === "superadmin") return { all: true, studentIds: [] };
@@ -28,6 +28,9 @@ export async function canViewStudent(user: AppUser, studentId: string) {
 }
 
 export async function canReviewStudent(user: AppUser, studentId: string) {
+  // A dual-persona account may manage the group, but must never make a formal
+  // mentor decision on the student record bound to that same account.
+  if (isOwnStudentRecord(user, studentId)) return false;
   if (user.role === "superadmin") return true;
   if (user.role !== "admin") return false;
   const assignment = await getD1().prepare(`SELECT id FROM mentor_student_assignments

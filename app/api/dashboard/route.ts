@@ -239,10 +239,12 @@ export async function GET(request: Request) {
 
     const studentIds = studentResult.results.map((row) => row.id);
     const reviewableStudentIds = viewer.role === "superadmin"
-      ? new Set(studentIds)
+      ? new Set(studentIds.filter((studentId) => studentId !== viewer.studentId))
       : new Set((await d1.prepare(`SELECT student_id FROM mentor_student_assignments
           WHERE mentor_user_id = ? AND active = 1 AND can_review = 1`)
-        .bind(viewer.id).all<{ student_id: string }>()).results.map((item) => item.student_id));
+        .bind(viewer.id).all<{ student_id: string }>()).results
+        .map((item) => item.student_id)
+        .filter((studentId) => studentId !== viewer.studentId));
     let progressRows: ProgressRow[] = [];
     let paperRows: StudentPaperRow[] = [];
     let milestoneRows: MilestoneSummaryRow[] = [];
@@ -553,6 +555,9 @@ export async function GET(request: Request) {
           name: viewer.displayName,
           avatarUrl: viewer.avatarUrl,
           role: viewer.role,
+          primaryRole: viewer.primaryRole,
+          activePersona: viewer.activePersona,
+          canSwitchPersona: viewer.canSwitchPersona,
           studentId: viewer.studentId,
         },
         students: students.map((student) => ({
@@ -698,6 +703,9 @@ export async function GET(request: Request) {
         name: viewer.displayName,
         avatarUrl: viewer.avatarUrl,
         role: viewer.role,
+        primaryRole: viewer.primaryRole,
+        activePersona: viewer.activePersona,
+        canSwitchPersona: viewer.canSwitchPersona,
         studentId: viewer.studentId,
       },
       students,

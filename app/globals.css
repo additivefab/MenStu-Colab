@@ -34,6 +34,12 @@ button:disabled { cursor: wait; opacity: .55; }
 .nav-item:hover { background: #efefeb; color: #252825; }
 .nav-item.active { border-color: #dededa; background: #fff; color: #202321; box-shadow: 0 2px 10px #2023210d; font-weight: 750; }
 .nav-item.active > span { color: var(--blue); }
+.persona-switch { width: calc(100% - 12px); min-height: 60px; margin: 15px 6px 0; padding: 10px 11px; display: grid; grid-template-columns: 28px 1fr; align-items: center; gap: 9px; border: 1px solid #c9dceb; border-radius: 11px; color: #285c7b; background: linear-gradient(135deg, #edf7fd, #f8fbfd); text-align: left; }
+.persona-switch > span:first-child { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px; color: #fff; background: #286fae; font-size: 14px; }
+.persona-switch strong, .persona-switch small { display: block; }
+.persona-switch strong { font-size: 12px; }
+.persona-switch small { margin-top: 3px; color: #66808f; font-size: 11px; line-height: 1.45; }
+.persona-switch:disabled { cursor: wait; opacity: .65; }
 .privacy-note { margin: auto 6px 16px; border: 1px solid #dbe5ec; background: #edf5fa; border-radius: 11px; padding: 12px; }
 .privacy-note span, .privacy-note small { display: block; }
 .privacy-note span { color: #325f78; font-size: 12px; font-weight: 800; }
@@ -294,6 +300,11 @@ button.primary { border: 0; background: var(--blue); color: white; box-shadow: 0
 .integration-list small { margin-top: 4px; color: #8c98a8; font-size: 11px; }
 .integration-list em { color: #9a6b16; background: #fff5d8; padding: 5px 8px; border-radius: 20px; font-size: 11px; font-style: normal; }
 .integration-list em.done { color: #23785a; background: #e9f7f0; }
+.persona-modal-card { margin-bottom: 14px; padding: 14px; display: grid; grid-template-columns: 1fr auto; gap: 5px 16px; align-items: center; border: 1px solid #c9dceb; border-radius: 11px; background: #eff7fc; }
+.persona-modal-card strong { color: #285c7b; font-size: 13px; }
+.persona-modal-card p { margin: 0; color: #617987; font-size: 11px; line-height: 1.55; }
+.persona-modal-card button { grid-column: 2; grid-row: 1 / span 2; min-height: 38px; padding: 0 13px; border: 1px solid #286fae; border-radius: 8px; color: #fff; background: #286fae; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.persona-modal-card button:disabled { cursor: wait; opacity: .65; }
 .safe-banner { margin-top: 14px; padding: 11px; background: #eef8f3; color: #32785d; border-radius: 8px; font-size: 11px; text-align: center; }
 .toast { position: fixed; z-index: 100; left: 50%; bottom: 28px; transform: translateX(-50%); padding: 12px 18px; border-radius: 9px; color: white; background: #15263e; box-shadow: 0 10px 30px #06132640; font-size: 11px; font-weight: 700; pointer-events: none; }
 
@@ -747,6 +758,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-account > div strong, .student-account > div small { display: block; }
 .student-account > div small { color: #8b97a8; font-size: 12px; }
 .student-account > button { min-height: 40px; padding: 0 13px; border: 1px solid #dededa; border-radius: 20px; color: #59635a; background: #fff; font-size: 13px; font-weight: 750; }
+.student-account > button.student-persona-switch { border-color: #9dc4df; color: #155f91; background: #edf7fd; }
+.student-account > button.student-persona-switch:disabled { cursor: wait; opacity: .65; }
 .student-workbench-status { display: flex; align-items: center; gap: 6px; color: #626a63; font-size: 12px; font-weight: 700; }
 .student-workbench-status i { width: 6px; height: 6px; border-radius: 50%; background: #36a477; }
 .student-view-intro { min-height: 128px; margin-bottom: 18px; padding: 25px 28px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 24px; overflow: hidden; border: 1px solid #dededa; border-radius: 16px; background: linear-gradient(145deg, #fff, #fafaf8 68%, #eef6fb); box-shadow: 0 2px 12px #20232108; }
