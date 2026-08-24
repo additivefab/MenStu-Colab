@@ -114,4 +114,9 @@ test("overview UI keeps old views, accessible drawer, responsive cards, and read
   assert.match(mobile, /group-overview-mobile-list/);
   assert.match(css, /@media \(max-width: 1280px\)/);
   assert.match(css, /\.group-overview-mobile-list\s*\{\s*display: grid/);
+  assert.match(css, /\.group-overview-state-cell \{[^}]*grid-template-columns:\s*29px/);
+  assert.match(css, /\.group-overview-position > span \{[^}]*grid-template-columns:\s*20px/);
+  assert.match(css, /\.group-overview-issue-list article \{[^}]*grid-template-columns:\s*27px/);
+  assert.match(css, /--state-color:\s*#925f14/);
+  assert.match(css, /--state-color:\s*#656d71/);
 });
