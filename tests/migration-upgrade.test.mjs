@@ -3,7 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-test("0010-0018 preserve existing data while adding identity, attachment, paper, guidance, production, revision, and mentor operation gates", async () => {
+test("0010-0019 preserve existing data while adding identity, evidence, concurrency, and recovery gates", async () => {
   const migrationDirectory = new URL("../drizzle/", import.meta.url);
   const names = (await readdir(migrationDirectory))
     .filter((name) => /^\d{4}_.*\.sql$/.test(name))
@@ -11,7 +11,7 @@ test("0010-0018 preserve existing data while adding identity, attachment, paper,
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
 
-  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_", "0014_", "0015_", "0016_", "0017_", "0018_"].some((prefix) => item.startsWith(prefix)))) {
+  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_", "0014_", "0015_", "0016_", "0017_", "0018_", "0019_"].some((prefix) => item.startsWith(prefix)))) {
     database.exec(await readFile(new URL(name, migrationDirectory), "utf8"));
   }
   database.exec(`
@@ -40,6 +40,7 @@ test("0010-0018 preserve existing data while adding identity, attachment, paper,
   const productionMigration = await readFile(new URL(names.find((item) => item.startsWith("0016_")), migrationDirectory), "utf8");
   const revisionMigration = await readFile(new URL(names.find((item) => item.startsWith("0017_")), migrationDirectory), "utf8");
   const mentorOperationsMigration = await readFile(new URL(names.find((item) => item.startsWith("0018_")), migrationDirectory), "utf8");
+  const studentProMigration = await readFile(new URL(names.find((item) => item.startsWith("0019_")), migrationDirectory), "utf8");
   database.exec(businessMigration);
   database.exec(roleMigration);
   database.exec(roleIndexMigration);
@@ -410,6 +411,44 @@ test("0010-0018 preserve existing data while adding identity, attachment, paper,
       VALUES ('student-upgrade', 9002, '重复提醒', 'migration-reminder-1', 'sent')`),
     /UNIQUE constraint failed: notification_deliveries\.idempotency_key/,
   );
+  database.exec(studentProMigration);
+  assert.equal(database.prepare("SELECT version FROM app_schema_meta WHERE id = 1").get().version, 19);
+  assert.deepEqual(
+    database.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'
+      AND name IN ('paper_submission_candidates', 'progress_file_cleanup_queue')
+      ORDER BY name`).all().map((row) => row.name),
+    ["paper_submission_candidates", "progress_file_cleanup_queue"],
+  );
+  assert.equal(database.prepare("SELECT version FROM student_guidance_notes WHERE id = 1").get().version, 1);
+  assert.throws(
+    () => database.exec("UPDATE student_guidance_notes SET version = 0 WHERE id = 1"),
+    /CHECK constraint failed/,
+  );
+  const progressIndex = database.prepare("PRAGMA index_list('progress_entries')").all()
+    .find((index) => index.name === "idx_progress_submitter_idempotency");
+  const meetingIndex = database.prepare("PRAGMA index_list('meeting_requests')").all()
+    .find((index) => index.name === "idx_meeting_requester_idempotency");
+  assert.deepEqual({ unique: progressIndex.unique, partial: progressIndex.partial }, { unique: 1, partial: 1 });
+  assert.deepEqual({ unique: meetingIndex.unique, partial: meetingIndex.partial }, { unique: 1, partial: 1 });
+  database.exec("UPDATE progress_entries SET idempotency_key = 'migration_same_key', request_hash = 'hash-a' WHERE id = 1");
+  assert.throws(
+    () => database.exec(`INSERT INTO progress_entries
+      (student_id, kind, title, summary, evidence, submitted_by_user_id, idempotency_key, request_hash)
+      VALUES ('student-upgrade', '项目', '重复请求', '不应写入', '证据', 9002, 'migration_same_key', 'hash-a')`),
+    /UNIQUE constraint failed/,
+  );
+  database.exec(`INSERT INTO progress_entries
+    (student_id, kind, title, summary, evidence, submitted_by_user_id, idempotency_key, request_hash)
+    VALUES ('student-upgrade', '项目', '不同提交人可复用', '合法', '证据', 9003, 'migration_same_key', 'hash-a')`);
+  database.exec(`INSERT INTO progress_entries
+    (student_id, kind, title, summary, evidence, submitted_by_user_id)
+    VALUES ('student-upgrade', '项目', '清理队列关联', '临时', '证据', 9002)`);
+  const cleanupProgressId = database.prepare("SELECT last_insert_rowid() AS id").get().id;
+  database.prepare(`INSERT INTO progress_file_cleanup_queue
+    (storage_key, progress_entry_id, student_id, revision_number, last_error)
+    VALUES (?, ?, 'student-upgrade', 1, 'fault injection')`).run("progress/test/orphan.bin", cleanupProgressId);
+  database.prepare("DELETE FROM progress_entries WHERE id = ?").run(cleanupProgressId);
+  assert.equal(database.prepare("SELECT progress_entry_id FROM progress_file_cleanup_queue").get().progress_entry_id, null);
   assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
   database.close();
 });

@@ -3,15 +3,16 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("database initialization is version-gated through the immutable progress schema and never seeds demonstration students", async () => {
-  const [database, productionMigration, revisionMigration, mentorOperationsMigration, health] = await Promise.all([
+  const [database, productionMigration, revisionMigration, mentorOperationsMigration, studentProMigration, health] = await Promise.all([
     readFile(new URL("../lib/database.ts", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0016_dashing_union_jack.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0017_loud_iron_lad.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0018_nasty_valkyrie.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0019_chilly_titania.sql", import.meta.url), "utf8"),
     readFile(new URL("../app/api/health/ready/route.ts", import.meta.url), "utf8"),
   ]);
 
-  assert.match(database, /CURRENT_SCHEMA_VERSION = 18/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = 19/);
   assert.match(database, /databaseReadyPromise \?\?=/);
   assert.match(database, /数据库结构不完整/);
   assert.match(database, /app_schema_meta/);
@@ -32,10 +33,14 @@ test("database initialization is version-gated through the immutable progress sc
   assert.match(mentorOperationsMigration, /CREATE TABLE `meeting_agendas`/);
   assert.match(mentorOperationsMigration, /CREATE TABLE `notification_deliveries`/);
   assert.match(mentorOperationsMigration, /ALTER TABLE `progress_entries` ADD `review_claimed_at`/);
+  assert.match(studentProMigration, /CREATE TABLE `paper_submission_candidates`/);
+  assert.match(studentProMigration, /CREATE TABLE `progress_file_cleanup_queue`/);
+  assert.match(studentProMigration, /VALUES \(1, 19, CURRENT_TIMESTAMP\)/);
   assert.match(health, /confirmedRoster/);
   assert.match(health, /student_feishu_identity_bindings/);
   assert.match(health, /mainland_networks/);
   assert.match(health, /backup_restore/);
+  assert.match(health, /file_cleanup_queue/);
   assert.doesNotMatch(health, /appId:/);
 });
 

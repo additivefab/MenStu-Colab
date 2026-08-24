@@ -33,6 +33,7 @@ type StudentProgress = {
   reviewer_name: string | null;
   submitted_at: string;
   reviewed_at: string | null;
+  current_revision: number;
   ai_summary_origin: boolean;
   can_finalize?: boolean;
   can_decide?: boolean;
@@ -186,6 +187,7 @@ type GuidanceNote = {
   completed_at: string | null;
   completed_by_name: string | null;
   completion_note: string;
+  version: number;
   created_at: string;
   updated_at: string;
   mentor_name: string;
@@ -457,6 +459,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     setProgressMessage((current) => ({ ...current, [entry.id]: "" }));
     const formData = new FormData(event.currentTarget);
     formData.set("id", String(entry.id));
+    formData.set("expectedRevision", String(entry.current_revision));
     formData.set("kind", entry.kind);
     formData.set("title", entry.title);
     try {
@@ -521,7 +524,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       const response = await fetch("/api/student-guidance", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: note.id, action }),
+        body: JSON.stringify({ id: note.id, action, expectedVersion: note.version }),
       });
       const payload = await response.json() as { error?: string; message?: string };
       if (!response.ok) throw new Error(payload.error || "导师指导状态更新失败");

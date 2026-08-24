@@ -56,6 +56,8 @@ export const progressEntries = sqliteTable(
     reviewerNote: text("reviewer_note").notNull().default(""),
     reviewedAt: text("reviewed_at"),
     currentRevision: integer("current_revision").notNull().default(1),
+    idempotencyKey: text("idempotency_key").notNull().default(""),
+    requestHash: text("request_hash").notNull().default(""),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
@@ -63,6 +65,9 @@ export const progressEntries = sqliteTable(
     index("idx_progress_status").on(table.status, table.submittedAt),
     index("idx_progress_review_status").on(table.reviewStatus, table.submittedAt),
     index("idx_progress_reviewer").on(table.reviewedByUserId, table.reviewStatus),
+    uniqueIndex("idx_progress_submitter_idempotency")
+      .on(table.submittedByUserId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} <> ''`),
   ],
 );
 
@@ -151,6 +156,7 @@ export const studentGuidanceNotes = sqliteTable(
     completedByUserId: integer("completed_by_user_id")
       .references(() => appUsers.id),
     completionNote: text("completion_note").notNull().default(""),
+    version: integer("version").notNull().default(1),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
@@ -158,6 +164,7 @@ export const studentGuidanceNotes = sqliteTable(
     check("student_guidance_notes_type_check", sql`${table.guidanceType} IN ('meeting_followup', 'paper', 'milestone', 'blocker', 'general')`),
     check("student_guidance_notes_status_check", sql`${table.status} IN ('open', 'completed')`),
     check("student_guidance_notes_verification_check", sql`${table.verificationMode} IN ('self_report', 'mentor_verify')`),
+    check("student_guidance_notes_version_check", sql`${table.version} >= 1`),
     index("idx_student_guidance_student_created").on(table.studentId, table.createdAt),
     index("idx_student_guidance_mentor_created").on(table.mentorUserId, table.createdAt),
     index("idx_student_guidance_source").on(table.sourceProgressEntryId),
@@ -266,6 +273,8 @@ export const meetingRequests = sqliteTable(
     responseNote: text("response_note").notNull().default(""),
     handledAt: text("handled_at"),
     version: integer("version").notNull().default(1),
+    idempotencyKey: text("idempotency_key").notNull().default(""),
+    requestHash: text("request_hash").notNull().default(""),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
@@ -289,6 +298,9 @@ export const meetingRequests = sqliteTable(
       table.preferredDate,
       table.preferredTime,
     ),
+    uniqueIndex("idx_meeting_requester_idempotency")
+      .on(table.requestedByUserId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} <> ''`),
   ],
 );
 
@@ -434,6 +446,25 @@ export const progressAttachments = sqliteTable(
   ],
 );
 
+export const progressFileCleanupQueue = sqliteTable(
+  "progress_file_cleanup_queue",
+  {
+    storageKey: text("storage_key").primaryKey(),
+    progressEntryId: integer("progress_entry_id").references(() => progressEntries.id, { onDelete: "set null" }),
+    studentId: text("student_id").notNull(),
+    revisionNumber: integer("revision_number").notNull().default(1),
+    reason: text("reason").notNull().default("compensation_failed"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error").notNull().default(""),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_progress_cleanup_updated").on(table.updatedAt),
+    index("idx_progress_cleanup_entry").on(table.progressEntryId),
+  ],
+);
+
 export const progressRevisions = sqliteTable(
   "progress_revisions",
   {
@@ -489,6 +520,33 @@ export const studentPapers = sqliteTable(
   (table) => [
     index("idx_student_papers_student_status").on(table.studentId, table.status, table.updatedAt),
     index("idx_student_papers_stage_due").on(table.currentStage, table.plannedSubmissionDate),
+  ],
+);
+
+export const paperSubmissionCandidates = sqliteTable(
+  "paper_submission_candidates",
+  {
+    progressEntryId: integer("progress_entry_id")
+      .primaryKey()
+      .references(() => progressEntries.id),
+    title: text("title").notNull(),
+    paperType: text("paper_type", { enum: ["期刊论文", "会议论文", "学位论文"] }).notNull(),
+    targetVenue: text("target_venue").notNull().default(""),
+    plannedSubmissionDate: text("planned_submission_date").notNull(),
+    stage: text("stage", {
+      enum: ["planning", "research", "drafting", "internal_review", "submitted", "peer_review", "revision", "accepted", "published"],
+    }).notNull(),
+    manuscriptVersion: text("manuscript_version").notNull().default(""),
+    nextAction: text("next_action").notNull(),
+    nextActionDueDate: text("next_action_due_date").notNull(),
+    blocker: text("blocker").notNull().default(""),
+    submissionIdentifier: text("submission_identifier").notNull().default(""),
+    promotedPaperId: integer("promoted_paper_id").references(() => studentPapers.id),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_paper_candidates_promoted").on(table.promotedPaperId),
   ],
 );
 

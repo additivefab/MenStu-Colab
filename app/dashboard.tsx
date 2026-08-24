@@ -3,6 +3,7 @@
 import { FormEvent, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { paperDeadlineState, paperStageMeta, paperStages, paperTypes, type PaperStage } from "../lib/paper-progress";
 import { MentorGroupOverview } from "../components/dashboard-overview/mentor-group-overview";
+import { clearMutationKey, mutationKeyForForm } from "../lib/client-idempotency";
 
 declare global {
   interface Window {
@@ -328,7 +329,16 @@ type StudentGuidanceNote = {
   completed_at: string | null;
   completed_by_name: string | null;
   completion_note: string;
+  version: number;
   created_at: string;
+  events: Array<{
+    id: number;
+    actor_type: "staff" | "student" | "system";
+    actor_name: string | null;
+    action: "created" | "acknowledged" | "completed" | "reopened";
+    note: string;
+    created_at: string;
+  }>;
 };
 
 type ViewerRole = "superadmin" | "admin" | "student";
@@ -355,7 +365,24 @@ type DashboardData = {
     context?: string;
     nextAction?: string;
     acceptanceCriteria?: string;
+    version?: number;
   }>;
+  studentNextAction?: {
+    primary: {
+      id: string;
+      kind: "supplement" | "guidance" | "paper" | "project" | "meeting" | "waiting" | "onboarding";
+      destination: "supplement" | "guidance" | "paper" | "project" | "meeting" | "progress";
+      kicker: string;
+      title: string;
+      detail: string;
+      meta: string;
+      targetId?: number;
+      attention: boolean;
+      waiting: boolean;
+    } | null;
+    additionalActionCount: number;
+    waitingCount: number;
+  } | null;
   metrics: {
     total: number;
     doctors: number;
@@ -416,8 +443,6 @@ const milestoneStatusLabels: Record<MilestoneStatus, string> = {
   blocked: "受阻",
 };
 
-const DASHBOARD_REFERENCE_TIME = Date.now();
-
 function shortDate(value: string | null) {
   if (!value) return "尚无记录";
   return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(new Date(value));
@@ -437,14 +462,14 @@ function fileSizeText(bytes: number) {
 function daysSinceLatestSubmission(student: Student) {
   const latest = student.progress.reduce((value, entry) => Math.max(value, new Date(entry.submitted_at).getTime()), 0);
   if (!latest) return student.risk.days;
-  return Math.max(0, Math.floor((DASHBOARD_REFERENCE_TIME - latest) / 86_400_000));
+  return Math.max(0, Math.floor((Date.now() - latest) / 86_400_000));
 }
 
 function daysSinceSubstantiveProgress(student: Student) {
   if (!student.lastSubstantiveAt) return student.risk.days;
   const timestamp = new Date(student.lastSubstantiveAt).getTime();
   if (!Number.isFinite(timestamp)) return student.risk.days;
-  return Math.max(0, Math.floor((DASHBOARD_REFERENCE_TIME - timestamp) / 86_400_000));
+  return Math.max(0, Math.floor((Date.now() - timestamp) / 86_400_000));
 }
 
 export default function Dashboard() {
@@ -941,7 +966,7 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
       const response = await fetch("/api/student-guidance", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: task.id, action: "complete" }),
+        body: JSON.stringify({ id: task.id, action: "complete", expectedVersion: task.version }),
       });
       const payload = await response.json() as { error?: string; message?: string };
       if (!response.ok) throw new Error(payload.error || "指导验收失败");
@@ -1198,7 +1223,11 @@ type StudentNavigationIntent = {
   entryId?: number;
   action?: "supplement";
   composerKind?: "论文" | "项目";
-  focus?: "meeting";
+  focus?: "meeting" | "guidance";
+  paperId?: number;
+  milestoneId?: number;
+  guidanceId?: number;
+  meetingId?: number;
 };
 
 const studentViewMeta: Record<StudentView, { label: string; icon: string }> = {
@@ -1217,6 +1246,10 @@ function studentNavigationHref(intent: StudentNavigationIntent) {
   if (intent.action) params.set("action", intent.action);
   if (intent.composerKind) params.set("compose", intent.composerKind === "论文" ? "paper" : "project");
   if (intent.focus) params.set("focus", intent.focus);
+  if (intent.paperId) params.set("paper", String(intent.paperId));
+  if (intent.milestoneId) params.set("milestone", String(intent.milestoneId));
+  if (intent.guidanceId) params.set("guidance", String(intent.guidanceId));
+  if (intent.meetingId) params.set("meeting", String(intent.meetingId));
   return params.size ? `/?${params.toString()}` : "/";
 }
 
@@ -1225,6 +1258,10 @@ function studentNavigationFromLocation(href: string): StudentNavigationIntent {
   const rawView = params.get("studentView");
   const view: StudentView = rawView === "research" || rawView === "progress" || rawView === "library" || rawView === "mentor" ? rawView : "today";
   const rawEntry = Number(params.get("entry"));
+  const rawPaper = Number(params.get("paper"));
+  const rawMilestone = Number(params.get("milestone"));
+  const rawGuidance = Number(params.get("guidance"));
+  const rawMeeting = Number(params.get("meeting"));
   const compose = params.get("compose");
   return {
     view,
@@ -1232,12 +1269,35 @@ function studentNavigationFromLocation(href: string): StudentNavigationIntent {
     entryId: Number.isInteger(rawEntry) && rawEntry > 0 ? rawEntry : undefined,
     action: params.get("action") === "supplement" ? "supplement" : undefined,
     composerKind: compose === "paper" ? "论文" : compose === "project" ? "项目" : undefined,
-    focus: params.get("focus") === "meeting" ? "meeting" : undefined,
+    focus: params.get("focus") === "meeting" ? "meeting" : params.get("focus") === "guidance" ? "guidance" : undefined,
+    paperId: Number.isInteger(rawPaper) && rawPaper > 0 ? rawPaper : undefined,
+    milestoneId: Number.isInteger(rawMilestone) && rawMilestone > 0 ? rawMilestone : undefined,
+    guidanceId: Number.isInteger(rawGuidance) && rawGuidance > 0 ? rawGuidance : undefined,
+    meetingId: Number.isInteger(rawMeeting) && rawMeeting > 0 ? rawMeeting : undefined,
   };
 }
 
 function studentScrollBehavior(): ScrollBehavior {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+}
+
+function studentNavigationTargetId(intent: StudentNavigationIntent) {
+  if (intent.focus === "meeting" && intent.meetingId) return `student-meeting-${intent.meetingId}`;
+  if (intent.focus === "meeting") return "student-meeting-form";
+  if (intent.focus === "guidance" && intent.guidanceId) return `student-guidance-${intent.guidanceId}`;
+  if (intent.focus === "guidance") return "student-guidance-inbox";
+  if (intent.entryId) {
+    return intent.action === "supplement" || intent.view === "research"
+      ? `student-action-entry-${intent.entryId}`
+      : `student-progress-${intent.entryId}`;
+  }
+  return intent.composerKind ? "student-quick-progress" : "student-view-main";
+}
+
+function studentNavigationFallbackTargetId(intent: StudentNavigationIntent) {
+  if (intent.focus === "meeting") return "student-meeting-form";
+  if (intent.focus === "guidance") return "student-guidance-inbox";
+  return "student-view-main";
 }
 
 function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
@@ -1250,6 +1310,8 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
   const [researchTrack, setResearchTrack] = useState<StudentResearchTrack>("paper");
   const [composer, setComposer] = useState<"论文" | "项目" | null>(null);
   const [composerVisible, setComposerVisible] = useState(false);
+  const [composerTargetId, setComposerTargetId] = useState<number | null>(null);
+  const [researchPaperId, setResearchPaperId] = useState<number | null>(null);
   const [pendingNavigation, setPendingNavigation] = useState<StudentNavigationIntent | null>(null);
   const student = data.students.find((item) => item.id === data.viewer.studentId);
   const papers = student ? data.papers.filter((paper) => paper.student_id === student.id) : [];
@@ -1260,9 +1322,13 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
   const waitingCount = student?.progress.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length ?? 0;
 
   const applyStudentNavigation = useCallback((intent: StudentNavigationIntent) => {
+    const nextResearchTrack = intent.researchTrack || "paper";
     setView(intent.view);
-    setResearchTrack(intent.researchTrack || "paper");
+    setResearchTrack(nextResearchTrack);
+    setResearchPaperId(intent.view === "research" && nextResearchTrack === "paper" ? intent.paperId ?? null : null);
     if (intent.composerKind) setComposer(intent.composerKind);
+    setComposerTargetId(intent.composerKind === "论文" ? intent.paperId ?? null
+      : intent.composerKind === "项目" ? intent.milestoneId ?? null : null);
     setComposerVisible(Boolean(intent.composerKind));
     setPendingNavigation(intent);
   }, []);
@@ -1284,32 +1350,66 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
 
   useEffect(() => {
     if (!pendingNavigation || pendingNavigation.view !== view) return;
-    const frame = window.requestAnimationFrame(() => {
-      const targetId = pendingNavigation.focus === "meeting"
-        ? "student-meeting-form"
-        : pendingNavigation.entryId
-          ? pendingNavigation.view === "research" ? `student-action-entry-${pendingNavigation.entryId}` : `student-progress-${pendingNavigation.entryId}`
-          : pendingNavigation.composerKind ? "student-quick-progress" : "student-view-main";
-      const target = document.getElementById(targetId);
+    const intent = pendingNavigation;
+    const targetId = studentNavigationTargetId(intent);
+    const fallbackTargetId = studentNavigationFallbackTargetId(intent);
+    const waitsForAsyncTarget = Boolean(
+      (intent.focus === "guidance" && intent.guidanceId)
+      || (intent.focus === "meeting" && intent.meetingId),
+    );
+    let frame = 0;
+    let timeout = 0;
+    let observer: MutationObserver | null = null;
+
+    function focusNavigationTarget(allowFallback = false) {
+      const target = document.getElementById(targetId)
+        ?? (allowFallback ? document.getElementById(fallbackTargetId) : null);
+      if (!target) return false;
       if (target instanceof HTMLDetailsElement) target.open = true;
-      const supplement = pendingNavigation.action === "supplement" ? target?.querySelector("details") : null;
+      const supplement = intent.action === "supplement" ? target.querySelector("details") : null;
       if (supplement instanceof HTMLDetailsElement) supplement.open = true;
       const focusTarget = supplement?.querySelector("summary") ?? target;
-      target?.scrollIntoView({ behavior: studentScrollBehavior(), block: targetId === "student-view-main" ? "start" : "center" });
+      target.scrollIntoView({ behavior: studentScrollBehavior(), block: target.id === "student-view-main" ? "start" : "center" });
       if (focusTarget instanceof HTMLElement) focusTarget.focus({ preventScroll: true });
-      setPendingNavigation(null);
+      observer?.disconnect();
+      if (timeout) window.clearTimeout(timeout);
+      setPendingNavigation((current) => current === intent ? null : current);
+      return true;
+    }
+
+    frame = window.requestAnimationFrame(() => {
+      if (focusNavigationTarget()) return;
+      if (!waitsForAsyncTarget) {
+        focusNavigationTarget(true);
+        return;
+      }
+      const root = document.getElementById("student-view-main");
+      if (root) {
+        observer = new MutationObserver(() => { focusNavigationTarget(); });
+        observer.observe(root, { childList: true, subtree: true });
+      }
+      timeout = window.setTimeout(() => { focusNavigationTarget(true); }, 5_000);
     });
-    return () => window.cancelAnimationFrame(frame);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (timeout) window.clearTimeout(timeout);
+      observer?.disconnect();
+    };
   }, [pendingNavigation, view]);
 
   if (!student) return <main className="student-portal-shell"><div className="error-state"><strong>学生档案尚未绑定</strong><span>请联系管理员核对飞书账号与学生记录。</span></div></main>;
 
-  function openComposer(kind: "论文" | "项目") {
-    navigateStudent({ view: "progress", composerKind: kind });
+  function openComposer(kind: "论文" | "项目", targetId?: number) {
+    navigateStudent({
+      view: "progress",
+      composerKind: kind,
+      paperId: kind === "论文" ? targetId : undefined,
+      milestoneId: kind === "项目" ? targetId : undefined,
+    });
   }
 
   function openSupplement(entry: StudentProgress) {
-    navigateStudent({ view: "research", researchTrack: entry.kind === "项目" ? "project" : "paper", entryId: entry.id, action: "supplement" });
+    navigateStudent({ view: "progress", entryId: entry.id, action: "supplement" });
   }
 
   function openResearchSource(entry: StudentProgress) {
@@ -1320,8 +1420,12 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
     navigateStudent({ view: entry.kind === "组会" ? "mentor" : "progress", entryId: entry.id });
   }
 
-  function openMeetingDesk() {
-    navigateStudent({ view: "mentor", focus: "meeting" });
+  function openMeetingDesk(meetingId?: number) {
+    navigateStudent({ view: "mentor", focus: "meeting", meetingId });
+  }
+
+  function openGuidanceDesk(guidanceId?: number) {
+    navigateStudent({ view: "mentor", focus: "guidance", guidanceId });
   }
   const currentView = studentViewMeta[view];
   return <div className="student-workbench-shell">
@@ -1342,7 +1446,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
         <div className="student-account"><span className="student-workbench-status"><i />数据已同步</span><button type="button" onClick={onFeishu}>飞书账号</button></div>
       </header>
 
-      {view === "today" ? <StudentNextAction student={student} papers={papers} onPaper={() => openComposer("论文")} onProject={() => openComposer("项目")} onMeeting={openMeetingDesk} onSupplement={openSupplement} /> : null}
+      {view === "today" ? <StudentNextAction action={data.studentNextAction} student={student} papers={papers} onPaper={(paperId) => openComposer("论文", paperId)} onProject={(milestoneId) => openComposer("项目", milestoneId)} onMeeting={openMeetingDesk} onGuidance={openGuidanceDesk} onProgress={(entryId) => navigateStudent({ view: "progress", entryId })} onSupplement={openSupplement} /> : null}
 
       {view === "research" ? <>
         <StudentViewIntro id="student-view-research-title" eyebrow="RESEARCH TRACKS" title="论文与课题，分开推进" description="选择一条研究线，只看这一类的阶段、台账、导师反馈和待补材料。" metric={`${paperReturned + projectReturned}`} metricLabel="项待补充">
@@ -1351,19 +1455,18 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu }: {
             <a className={researchTrack === "project" ? "active" : ""} aria-current={researchTrack === "project" ? "page" : undefined} href={studentNavigationHref({ view: "research", researchTrack: "project" })} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigateStudent({ view: "research", researchTrack: "project" }); }}>课题研究<span>{projectEntries.length} 条</span></a>
           </nav>
         </StudentViewIntro>
-        <StudentResearchTracks scope={researchTrack} student={student} papers={papers} onOpenComposer={openComposer} />
-        {researchTrack === "paper" ? <StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} /> : <StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} />}
+        <StudentResearchTracks scope={researchTrack} student={student} papers={papers} selectedPaperId={researchPaperId} onSelectPaper={(paperId) => navigateStudent({ view: "research", researchTrack: "paper", paperId })} onOpenComposer={openComposer} />
       </> : null}
 
       {view === "progress" ? <StudentViewIntro id="student-view-progress-title" eyebrow="PROGRESS" title="提交与查看全部进展" description="论文和课题在这里提交；全部记录、审核状态和导师回复按时间统一查看。" metric={`${waitingCount}`} metricLabel="条等待导师">
         <div className="student-view-intro-actions"><button className="primary" type="button" onClick={() => openComposer("论文")}>记论文进展</button><button type="button" onClick={() => openComposer("项目")}>记课题进展</button></div>
       </StudentViewIntro> : null}
-      {composer ? <div className="student-persistent-composer" hidden={view !== "progress" || !composerVisible}><StudentQuickProgressComposer key={composer} kind={composer} student={student} papers={papers} onCancel={() => { setComposerVisible(false); setComposer(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); }} onSaved={async () => { const savedKind = composer; setComposerVisible(false); setComposer(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); onToast(`${savedKind === "论文" ? "论文" : "课题"}进展已提交，记录已更新`); await onRefresh(); }} /></div> : null}
-      {view === "progress" ? <StudentProgressOverview student={student} /> : null}
+      {composer ? <div className="student-persistent-composer" hidden={view !== "progress" || !composerVisible}><StudentQuickProgressComposer key={`${composer}-${composerTargetId ?? "default"}`} kind={composer} initialTargetId={composerTargetId} student={student} papers={papers} onCancel={() => { setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); }} onSaved={async () => { const savedKind = composer; setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); onToast(`${savedKind === "论文" ? "论文" : "课题"}进展已提交，记录已更新`); await onRefresh(); }} /></div> : null}
+      {view === "progress" ? <><StudentProgressOverview student={student} onSupplement={openSupplement} /><StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} returnedOnly /><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} returnedOnly /></> : null}
 
       {view === "library" ? <><StudentViewIntro id="student-view-library-title" eyebrow="ARTIFACT LIBRARY" title="科研资料与证据来源" description="文件、DOI、Git 链接和组会来源集中检索，不再回到每条进展里翻找。" /><StudentResearchLibrary student={student} onOpenSource={openResearchSource} /></> : null}
 
-      {view === "mentor" ? <><StudentViewIntro id="student-view-mentor-title" eyebrow="MENTOR COLLABORATION" title="组会与导师协作" description="接收导师指导、回报完成情况、发起预约，并回看 AI 组会总结形成的进展。" /><div className="student-mentor-grid"><StudentGuidanceInbox onToast={onToast} /><StudentMeetingRequests onToast={onToast} /><StudentProgressOverview student={student} fixedFilter="组会" /></div></> : null}
+      {view === "mentor" ? <><StudentViewIntro id="student-view-mentor-title" eyebrow="MENTOR COLLABORATION" title="组会与导师协作" description="接收导师指导、回报完成情况、发起预约，并回看 AI 组会总结形成的进展。" /><div className="student-mentor-grid"><StudentGuidanceInbox onToast={onToast} onRefresh={onRefresh} /><StudentMeetingRequests onToast={onToast} onRefresh={onRefresh} /><StudentProgressOverview student={student} fixedFilter="组会" /></div></> : null}
 
       <footer className="student-portal-boundary">这里仅显示你自己的论文、课题、组会记录和导师回复。</footer>
     </main>
@@ -1386,114 +1489,63 @@ function StudentViewIntro({ id, eyebrow, title, description, metric, metricLabel
   </section>;
 }
 
-function StudentNextAction({ student, papers, onPaper, onProject, onMeeting, onSupplement }: {
+function StudentNextAction({ action, student, papers, onPaper, onProject, onMeeting, onGuidance, onProgress, onSupplement }: {
+  action: DashboardData["studentNextAction"] | undefined;
   student: Student;
   papers: StudentPaper[];
-  onPaper: () => void;
-  onProject: () => void;
-  onMeeting: () => void;
+  onPaper: (paperId?: number) => void;
+  onProject: (milestoneId?: number) => void;
+  onMeeting: (meetingId?: number) => void;
+  onGuidance: (guidanceId?: number) => void;
+  onProgress: (entryId?: number) => void;
   onSupplement: (entry: StudentProgress) => void;
 }) {
-  const entries = [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
-  const returnedEntry = entries.find((entry) => (entry.kind === "论文" || entry.kind === "项目") && entry.review_status === "changes_requested");
-  const projectEntries = entries.filter((entry) => entry.kind === "项目");
-  const activePaper = papers.find((paper) => paper.status === "active") ?? papers.find((paper) => paper.status === "on_hold") ?? papers[0];
-  const latestPaperEntry = entries.find((entry) => entry.kind === "论文" && (!activePaper || entry.paper?.id === activePaper.id)) ?? entries.find((entry) => entry.kind === "论文");
-  const focusPaper = papers.find((paper) => paper.id === latestPaperEntry?.paper?.id) ?? activePaper;
-  const paperAction = latestPaperEntry?.paper?.next_action.trim() || "";
-  const paperBlocker = latestPaperEntry?.paper?.blocker.trim() || "";
-  const paperActionDate = latestPaperEntry?.paper?.next_action_due_date || null;
-  const paperDeadline = paperDeadlineState(paperActionDate);
-  const milestoneDeadline = paperDeadlineState(student.nextMilestoneDate);
-  const latestProjectAt = projectEntries[0]?.submitted_at;
-  const projectUpdateDays = latestProjectAt ? Math.max(0, Math.floor((DASHBOARD_REFERENCE_TIME - new Date(latestProjectAt).getTime()) / 86_400_000)) : null;
-  const projectRhythmOverdue = projectUpdateDays !== null && projectUpdateDays > student.cadenceDays;
-  const paperContext = focusPaper ? `${focusPaper.title} · ${paperStageMeta[focusPaper.current_stage].label}` : latestPaperEntry?.paper?.title || "论文推进";
-  const focus = returnedEntry
-    ? {
-        kicker: "导师已退回 · 需要补证",
-        title: returnedEntry.paper?.title || returnedEntry.title,
-        detail: returnedEntry.reviewer_note || "按导师意见补充结论、证据或附件后重新提交。",
-        meta: "补充后重新提交，原审核记录会保留",
-        action: "supplement" as const,
-        attention: true,
-      }
-    : paperAction && paperDeadline.overdue
-      ? {
-          kicker: "下一行动已逾期",
-          title: paperAction,
-          detail: paperContext,
-          meta: `${paperActionDate} · ${paperDeadline.label}`,
-          action: "paper" as const,
-          attention: true,
-        }
-      : paperBlocker
-        ? {
-            kicker: "论文推进受阻",
-            title: paperBlocker,
-            detail: paperContext,
-            meta: "需要导师决策、资源或协作时，可直接发起预约",
-            action: "meeting" as const,
-            attention: true,
-          }
-        : paperAction
-          ? {
-              kicker: "论文下一行动",
-              title: paperAction,
-              detail: paperContext,
-              meta: paperActionDate ? `${paperActionDate} · ${paperDeadline.label}` : "完成后记一条论文进展",
-              action: "paper" as const,
-              attention: false,
-            }
-          : student.nextMilestone
-            ? {
-                kicker: "下一培养节点",
-                title: student.nextMilestone,
-                detail: student.currentFocus || "围绕节点目标形成一项可核验成果。",
-                meta: student.nextMilestoneDate ? `${student.nextMilestoneDate} · ${milestoneDeadline.label}` : "完成后记一条课题进展",
-                action: "project" as const,
-                attention: milestoneDeadline.overdue,
-              }
-            : projectRhythmOverdue
-              ? {
-                  kicker: "课题记录到期",
-                  title: "补充一条可核验的课题进展",
-                  detail: student.currentFocus || "记录最近完成的实验、数据整理或阶段结果。",
-                  meta: `距上次课题记录 ${projectUpdateDays} 天 · 建议每 ${student.cadenceDays} 天更新`,
-                  action: "project" as const,
-                  attention: true,
-                }
-              : {
-                  kicker: "保持科研节奏",
-                  title: student.currentFocus || "记录下一项可核验进展",
-                  detail: `建议每 ${student.cadenceDays} 天至少更新一次。`,
-                  meta: "完成后记一条进展",
-                  action: activePaper || latestPaperEntry ? "paper" as const : "project" as const,
-                  attention: false,
-                };
-
-  const actionLabel = focus.action === "supplement"
+  const focus = action?.primary ?? {
+    id: "onboarding",
+    kind: "onboarding" as const,
+    destination: papers.some((paper) => paper.status === "active") ? "paper" as const : "project" as const,
+    kicker: "从第一条记录开始",
+    title: student.currentFocus || "记录下一项可核验进展",
+    detail: `建议每 ${student.cadenceDays} 天至少更新一次。`,
+    meta: "完成后记录论文或课题进展",
+    attention: false,
+    waiting: false,
+  };
+  const actionLabel = focus.destination === "supplement"
     ? "补充这项进展"
-    : focus.action === "meeting"
-      ? "约导师解决阻塞"
-      : focus.action === "paper"
+    : focus.destination === "meeting"
+      ? focus.kind === "waiting" ? "查看会议预约" : "约导师解决阻塞"
+      : focus.destination === "guidance"
+        ? "查看导师指导"
+      : focus.destination === "paper"
         ? "完成后记录论文进展"
-        : "完成后记录课题进展";
+        : focus.destination === "progress"
+          ? "查看已提交进展"
+          : "完成后记录课题进展";
 
   function runAction() {
-    if (focus.action === "supplement") {
+    if (focus.destination === "supplement") {
+      const returnedEntry = student.progress.find((entry) => entry.id === focus.targetId);
       if (returnedEntry) onSupplement(returnedEntry);
       return;
     }
-    if (focus.action === "meeting") {
-      onMeeting();
+    if (focus.destination === "meeting") {
+      onMeeting(focus.kind === "waiting" ? focus.targetId : undefined);
       return;
     }
-    if (focus.action === "paper") {
-      onPaper();
+    if (focus.destination === "guidance") {
+      onGuidance(focus.targetId);
       return;
     }
-    onProject();
+    if (focus.destination === "progress") {
+      onProgress(focus.targetId);
+      return;
+    }
+    if (focus.destination === "paper") {
+      onPaper(focus.targetId);
+      return;
+    }
+    onProject(focus.targetId);
   }
 
   return <section className="student-next-action-page" aria-labelledby="student-view-today-title">
@@ -1503,6 +1555,8 @@ function StudentNextAction({ student, papers, onPaper, onProject, onMeeting, onS
       <strong>{focus.title}</strong>
       <p>{focus.detail}</p>
       <small>{focus.meta}</small>
+      {action?.additionalActionCount ? <small className="student-next-action-more">另有 {action.additionalActionCount} 项待办</small> : null}
+      {action?.waitingCount && focus.kind !== "waiting" ? <small className="student-next-action-waiting">另有 {action.waitingCount} 项已提交，正在等待导师</small> : null}
       <button className="primary" type="button" onClick={runAction}>{actionLabel}</button>
     </article>
   </section>;
@@ -1515,8 +1569,9 @@ function formDataHasVerifiableEvidence(formData: FormData) {
   return Boolean(evidence || gitUrl || hasAttachment);
 }
 
-function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved }: {
+function StudentQuickProgressComposer({ kind, initialTargetId, student, papers, onCancel, onSaved }: {
   kind: "论文" | "项目";
+  initialTargetId: number | null;
   student: Student;
   papers: StudentPaper[];
   onCancel: () => void;
@@ -1526,10 +1581,12 @@ function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved
   const activeMilestones = [...student.milestones]
     .filter((milestone) => milestone.status !== "completed")
     .sort((a, b) => a.sort_order - b.sort_order);
-  const [paperSelection, setPaperSelection] = useState(activePapers[0] ? String(activePapers[0].id) : "new");
+  const initialPaper = activePapers.find((paper) => paper.id === initialTargetId) ?? activePapers[0];
+  const [paperSelection, setPaperSelection] = useState(initialPaper ? String(initialPaper.id) : "new");
   const selectedPaper = activePapers.find((paper) => String(paper.id) === paperSelection);
   const [paperStage, setPaperStage] = useState<PaperStage>(selectedPaper?.current_stage ?? "planning");
-  const [projectMilestoneSelection, setProjectMilestoneSelection] = useState(activeMilestones[0] ? String(activeMilestones[0].id) : "");
+  const initialMilestone = activeMilestones.find((milestone) => milestone.id === initialTargetId) ?? activeMilestones[0];
+  const [projectMilestoneSelection, setProjectMilestoneSelection] = useState(initialMilestone ? String(initialMilestone.id) : "");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
   const [{ minimumDate, nextWeek }] = useState(() => {
@@ -1542,7 +1599,8 @@ function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const summary = String(formData.get("summary") ?? "").trim();
     if (!summary) return setFormError("写一句这次做完了什么");
     if (!formDataHasVerifiableEvidence(formData)) return setFormError("请填写可核验证据、提供 GitHub 链接，或上传至少一个附件");
@@ -1561,9 +1619,10 @@ function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved
     }
     setBusy(true); setFormError("");
     try {
-      const response = await fetch("/api/progress", { method: "POST", body: formData });
+      const response = await fetch("/api/progress", { method: "POST", headers: { "Idempotency-Key": mutationKeyForForm(form) }, body: formData });
       const payload = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(payload.error || "提交失败，请再试一次");
+      clearMutationKey(form);
       await onSaved();
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "提交失败，请再试一次");
@@ -1602,18 +1661,22 @@ function StudentQuickProgressComposer({ kind, student, papers, onCancel, onSaved
   </section>;
 }
 
-function StudentResearchTracks({ scope, student, papers, onOpenComposer }: {
+function StudentResearchTracks({ scope, student, papers, selectedPaperId, onSelectPaper, onOpenComposer }: {
   scope: StudentResearchTrack;
   student: Student;
   papers: StudentPaper[];
-  onOpenComposer: (kind: "论文" | "项目") => void;
+  selectedPaperId: number | null;
+  onSelectPaper: (paperId: number) => void;
+  onOpenComposer: (kind: "论文" | "项目", targetId?: number) => void;
 }) {
   const entries = [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
   const trackingPapers = papers.filter((paper) => paper.status === "active" || paper.status === "on_hold");
-  const leadPaper = trackingPapers.find((paper) => paper.status === "active") ?? trackingPapers[0] ?? papers[0];
+  const defaultPaper = trackingPapers.find((paper) => paper.status === "active") ?? trackingPapers[0] ?? papers[0];
+  const leadPaper = trackingPapers.find((paper) => paper.id === selectedPaperId) ?? defaultPaper;
   const paperEntries = entries.filter((entry) => entry.kind === "论文");
   const projectEntries = entries.filter((entry) => entry.kind === "项目");
-  const latestPaperEntry = paperEntries.find((entry) => !leadPaper || entry.paper?.id === leadPaper.id) ?? paperEntries[0];
+  const selectedPaperEntries = leadPaper ? paperEntries.filter((entry) => entry.paper?.id === leadPaper.id) : [];
+  const latestPaperEntry = selectedPaperEntries[0];
   const latestProjectEntry = projectEntries[0];
   const planMilestones = [...student.milestones].sort((a, b) => a.sort_order - b.sort_order);
   const currentProjectMilestoneId = latestProjectEntry?.project?.milestone_id
@@ -1625,8 +1688,8 @@ function StudentResearchTracks({ scope, student, papers, onOpenComposer }: {
   const repliedCount = scopedEntries.filter((entry) => Boolean(entry.reviewer_note?.trim())).length;
   const stageIndex = leadPaper ? paperStages.indexOf(leadPaper.current_stage) : -1;
   const stagePercent = stageIndex < 0 ? 0 : Math.round((stageIndex / (paperStages.length - 1)) * 100);
-  const nextAction = latestPaperEntry?.paper?.next_action || student.nextMilestone || student.currentFocus || "把下一件要完成的事写清楚";
-  const nextActionDate = latestPaperEntry?.paper?.next_action_due_date || student.nextMilestoneDate;
+  const nextAction = latestPaperEntry?.paper?.next_action || "先记录这篇论文的下一行动";
+  const nextActionDate = latestPaperEntry?.paper?.next_action_due_date || null;
   const actionDeadline = paperDeadlineState(nextActionDate || null);
   const updateDays = daysSinceLatestSubmission(student);
   const rhythmOverdue = Boolean(entries.length) && updateDays > student.cadenceDays;
@@ -1640,7 +1703,14 @@ function StudentResearchTracks({ scope, student, papers, onOpenComposer }: {
 
     <div className="student-research-track-grid single">
       {scope === "paper" ? <article className="student-research-track paper-track">
-        <div className="student-research-track-head"><span className="student-research-track-icon">文</span><div><small>论文这条线</small><strong>{leadPaper?.title || "还没有建立论文"}</strong></div><em>{paperEntries.length} 次更新</em></div>
+        {trackingPapers.length ? <div className="student-paper-selector" role="group" aria-label="选择要查看的论文">
+          {trackingPapers.map((paper) => {
+            const paperUpdates = paperEntries.filter((entry) => entry.paper?.id === paper.id).length;
+            const selected = paper.id === leadPaper?.id;
+            return <button key={paper.id} type="button" className={selected ? "active" : ""} aria-pressed={selected} onClick={() => onSelectPaper(paper.id)}><span>{paper.status === "on_hold" ? "已暂停" : "推进中"}</span><strong>{paper.title}</strong><small>{paperUpdates} 次更新 · {paperStageMeta[paper.current_stage].label}</small></button>;
+          })}
+        </div> : null}
+        <div className="student-research-track-head"><span className="student-research-track-icon">文</span><div><small>论文这条线</small><strong>{leadPaper?.title || "还没有建立论文"}</strong></div><em>{selectedPaperEntries.length} 次更新</em></div>
         {leadPaper ? <>
           <div className="student-paper-stage-summary"><span>当前阶段</span><strong>{paperStageMeta[leadPaper.current_stage].label}</strong><em>第 {stageIndex + 1} / {paperStages.length} 阶段</em></div>
           <div className="student-paper-stage-bar" role="progressbar" aria-label={`${leadPaper.title} 论文阶段位置`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={stagePercent}><i style={{ width: `${stagePercent}%` }} /></div>
@@ -1648,7 +1718,7 @@ function StudentResearchTracks({ scope, student, papers, onOpenComposer }: {
           <p className="student-paper-stage-gate">这一阶段要做到：{paperStageMeta[leadPaper.current_stage].gate}</p>
           <div className={`student-track-next-action ${actionDeadline.overdue ? "overdue" : ""}`}><span>先做这一件事</span><strong>{nextAction}</strong><small>{nextActionDate ? `准备完成：${nextActionDate} · ${actionDeadline.label}` : "完成后记一条论文进展"}</small></div>
         </> : <div className="student-track-empty"><strong>先把论文建起来</strong><span>题目可以先写暂定名，后面随时继续更新。</span></div>}
-        <button type="button" onClick={() => onOpenComposer("论文")}>{leadPaper ? "记录论文进展" : "新建论文并记录"}</button>
+        <button type="button" onClick={() => onOpenComposer("论文", leadPaper?.id)}>{leadPaper ? "记录这篇论文的进展" : "新建论文并记录"}</button>
       </article> : null}
 
       {scope === "project" ? <article className="student-research-track project-track">
@@ -1665,7 +1735,7 @@ function StudentResearchTracks({ scope, student, papers, onOpenComposer }: {
         {latestProjectEntry?.project ? <div className="student-project-next"><span>关联节点</span><strong>{latestProjectEntry.project.milestone_title || "未关联节点"}</strong><small>{latestProjectEntry.project.completion_requested ? "已申请完成，等待导师实质性进展确认" : latestProjectEntry.project.evidence_target || "继续围绕节点积累证据"}</small></div> : student.nextMilestone ? <div className="student-project-next"><span>下一培养节点</span><strong>{student.nextMilestone}</strong><small>{student.nextMilestoneDate ? `目标 ${student.nextMilestoneDate}` : "围绕节点形成一项可核验成果"}</small></div> : null}
         <div className={`student-project-rhythm ${rhythmOverdue ? "overdue" : ""}`}><span>记录节奏</span><strong>{rhythmLabel}</strong><small>建议每 {student.cadenceDays} 天至少更新一次</small></div>
         <div className="student-project-review"><span>最近状态</span><strong>{latestProjectEntry ? studentReviewLabels[latestProjectEntry.review_status] : "等待第一条记录"}</strong></div>
-        <button type="button" onClick={() => onOpenComposer("项目")}>记录课题进展</button>
+        <button type="button" onClick={() => onOpenComposer("项目", currentProjectMilestoneId)}>记录课题进展</button>
       </article> : null}
     </div>
 
@@ -1828,7 +1898,7 @@ function StudentRevisionHistory({ entry }: { entry: StudentProgress }) {
   </details>;
 }
 
-function StudentProgressOverview({ student, fixedFilter }: { student: Student; fixedFilter?: Exclude<StudentProgressFilter, "all"> }) {
+function StudentProgressOverview({ student, fixedFilter, onSupplement }: { student: Student; fixedFilter?: Exclude<StudentProgressFilter, "all">; onSupplement?: (entry: StudentProgress) => void }) {
   const [filter, setFilter] = useState<StudentProgressFilter>("all");
   const entries = useMemo(() => [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime()), [student.progress]);
   const activeFilter = fixedFilter || filter;
@@ -1853,13 +1923,19 @@ function StudentProgressOverview({ student, fixedFilter }: { student: Student; f
           <em className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</em><i aria-hidden="true">查看</i>
         </summary>
         <article>
-          <p>{entry.summary || entry.evidence}</p>
-          {entry.paper ? <dl className="student-progress-entry-paper"><div><dt>论文阶段</dt><dd>{paperStageMeta[entry.paper.stage].label}</dd></div><div><dt>下一步</dt><dd>{entry.paper.next_action}</dd></div><div><dt>准备完成</dt><dd>{entry.paper.next_action_due_date}</dd></div></dl> : null}
-          {entry.project ? <StudentProjectDetail project={entry.project} /> : null}
-          {entry.evidence ? <div className="student-progress-evidence"><span>可核验证据</span><p>{entry.evidence}</p></div> : null}
-          {entry.attachments?.length ? <div className="student-attachment-list" aria-label="提交附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>V{attachment.revision_number || 1} · {fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
-          {entry.reviewer_note ? <blockquote><b>{entry.reviewer_name ? `${entry.reviewer_name}的回复` : "导师回复"}</b><span>{entry.reviewer_note}</span></blockquote> : null}
-          <StudentRevisionHistory entry={entry} />
+          {entry.review_status === "changes_requested" && onSupplement ? <>
+            <blockquote><b>{entry.reviewer_name ? `${entry.reviewer_name}的回复` : "导师回复"}</b><span>{entry.reviewer_note || "请按要求补充内容、证据或附件。"}</span></blockquote>
+            <p>完整原记录和版本历史继续保留；补证编辑统一在下方对应表单完成。</p>
+            <button className="primary student-progress-supplement" type="button" onClick={() => onSupplement(entry)}>前往这条补证表单</button>
+          </> : <>
+            <p>{entry.summary || entry.evidence}</p>
+            {entry.paper ? <dl className="student-progress-entry-paper"><div><dt>论文阶段</dt><dd>{paperStageMeta[entry.paper.stage].label}</dd></div><div><dt>下一步</dt><dd>{entry.paper.next_action}</dd></div><div><dt>准备完成</dt><dd>{entry.paper.next_action_due_date}</dd></div></dl> : null}
+            {entry.project ? <StudentProjectDetail project={entry.project} /> : null}
+            {entry.evidence ? <div className="student-progress-evidence"><span>可核验证据</span><p>{entry.evidence}</p></div> : null}
+            {entry.attachments?.length ? <div className="student-attachment-list" aria-label="提交附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>V{attachment.revision_number || 1} · {fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
+            {entry.reviewer_note ? <blockquote><b>{entry.reviewer_name ? `${entry.reviewer_name}的回复` : "导师回复"}</b><span>{entry.reviewer_note}</span></blockquote> : null}
+            <StudentRevisionHistory entry={entry} />
+          </>}
         </article>
       </details>; })}
       {!visibleEntries.length ? <div className="student-portal-empty">这个分类还没有记录。提交后会直接出现在这里。</div> : null}
@@ -1867,15 +1943,16 @@ function StudentProgressOverview({ student, fixedFilter }: { student: Student; f
   </section>;
 }
 
-function StudentProgressPanel({ student, papers, onRefresh, onToast }: {
+function StudentProgressPanel({ student, papers, onRefresh, onToast, returnedOnly = false }: {
   student: Student;
   papers: StudentPaper[];
   onRefresh: () => Promise<void>;
   onToast: (message: string) => void;
+  returnedOnly?: boolean;
 }) {
   const [busy, setBusy] = useState<number | null>(null);
   const entries = [...student.progress]
-    .filter((entry) => entry.kind === "论文")
+    .filter((entry) => entry.kind === "论文" && (!returnedOnly || entry.review_status === "changes_requested"))
     .sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
 
   async function resubmit(event: FormEvent<HTMLFormElement>, entry: StudentProgress) {
@@ -1886,6 +1963,7 @@ function StudentProgressPanel({ student, papers, onRefresh, onToast }: {
       return;
     }
     formData.set("id", String(entry.id));
+    formData.set("expectedRevision", String(entry.current_revision));
     formData.set("title", entry.title);
     setBusy(entry.id);
     try {
@@ -1902,13 +1980,14 @@ function StudentProgressPanel({ student, papers, onRefresh, onToast }: {
     } finally { setBusy(null); }
   }
 
-  return <section className="student-portal-panel student-progress-feed">
-    <div className="student-portal-panel-head"><div><span>我的论文</span><h2>论文进展</h2><p>最近写了什么、导师怎么回复，都按时间放在这里。</p></div><b>{entries.length}</b></div>
-    <div className="student-paper-register">{papers.map((paper) => { const due = paperDeadlineState(paper.planned_submission_date); const deadlineLabel = paper.status === "published" ? "已发表" : paper.status === "accepted" ? "已录用" : due.label; return <article key={paper.id}>
+  if (returnedOnly && !entries.length) return null;
+  return <section className={`student-portal-panel student-progress-feed${returnedOnly ? " returned-only" : ""}`}>
+    <div className="student-portal-panel-head"><div><span>{returnedOnly ? "需要补充" : "我的论文"}</span><h2>{returnedOnly ? "论文补证" : "论文进展"}</h2><p>{returnedOnly ? "在这里修改退回内容；重新提交会生成新版本。" : "最近写了什么、导师怎么回复，都按时间放在这里。"}</p></div><b>{entries.length}</b></div>
+    {!returnedOnly ? <div className="student-paper-register">{papers.map((paper) => { const due = paperDeadlineState(paper.planned_submission_date); const deadlineLabel = paper.status === "published" ? "已发表" : paper.status === "accepted" ? "已录用" : due.label; return <article key={paper.id}>
       <div><span className={`paper-stage stage-${paper.current_stage}`}>{paperStageMeta[paper.current_stage].label}</span><em className={paper.status === "active" && due.overdue ? "overdue" : ""}>{deadlineLabel}</em></div>
       <h3>{paper.title}</h3><p>{paper.paper_type}{paper.target_venue ? ` · ${paper.target_venue}` : " · 目标期刊/会议待定"}</p>
       <footer><span>{paper.update_count} 次更新</span><span>{paper.pending_count ? `${paper.pending_count} 条待反馈` : "无待反馈"}</span></footer>
-    </article>; })}{!papers.length ? <div className="student-portal-empty">还没有论文。点上方“记论文进展”，可以直接新建。</div> : null}</div>
+    </article>; })}{!papers.length ? <div className="student-portal-empty">还没有论文。点上方“记论文进展”，可以直接新建。</div> : null}</div> : null}
     <div className="student-progress-feed-list">{entries.map((entry) => <article id={`student-action-entry-${entry.id}`} tabIndex={-1} key={entry.id}>
       <div><span className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</span><time>{shortDate(entry.submitted_at)}</time></div>
       <h3>{entry.paper?.title || entry.title}</h3><small>{entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version} · V${entry.current_revision}` : `历史论文进展 · V${entry.current_revision}`}</small><p>{entry.summary}</p>
@@ -1921,7 +2000,7 @@ function StudentProgressPanel({ student, papers, onRefresh, onToast }: {
         <label>改完后的内容<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label>
         <label>可核验证据<textarea name="evidence" rows={3} defaultValue={entry.evidence} placeholder="也可改为提供 GitHub 链接或附件" /></label>
         {entry.kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required defaultValue={entry.literature_ref} /></label> : <input type="hidden" name="literatureRef" value={entry.literature_ref || ""} />}
-        {entry.paper ? <><input type="hidden" name="paperId" value={entry.paper.id} /><label>论文阶段<select name="paperStage" defaultValue={entry.paper.stage}>{paperStages.map((stage) => <option key={stage} value={stage}>{paperStageMeta[stage].label}</option>)}</select></label><label>稿件版本<input name="manuscriptVersion" required defaultValue={entry.paper.manuscript_version} /></label><label>下一行动<textarea name="nextAction" rows={2} required defaultValue={entry.paper.next_action} /></label><label>行动期限<input name="nextActionDueDate" type="date" required defaultValue={entry.paper.next_action_due_date} /></label><label>阻塞问题（可选）<textarea name="blocker" rows={2} defaultValue={entry.paper.blocker} /></label><label>稿件编号 / DOI（可选）<input name="submissionIdentifier" defaultValue={entry.paper.submission_identifier} /></label></> : null}
+        {entry.paper ? <>{entry.paper.id ? <input type="hidden" name="paperId" value={entry.paper.id} /> : <><input type="hidden" name="paperTitle" value={entry.paper.title} /><input type="hidden" name="paperType" value={entry.paper.paper_type} /><input type="hidden" name="targetVenue" value={entry.paper.target_venue} /><input type="hidden" name="plannedSubmissionDate" value={entry.paper.planned_submission_date || ""} /></>}<label>论文阶段<select name="paperStage" defaultValue={entry.paper.stage}>{paperStages.map((stage) => <option key={stage} value={stage}>{paperStageMeta[stage].label}</option>)}</select></label><label>稿件版本<input name="manuscriptVersion" required defaultValue={entry.paper.manuscript_version} /></label><label>下一行动<textarea name="nextAction" rows={2} required defaultValue={entry.paper.next_action} /></label><label>行动期限<input name="nextActionDueDate" type="date" required defaultValue={entry.paper.next_action_due_date} /></label><label>阻塞问题（可选）<textarea name="blocker" rows={2} defaultValue={entry.paper.blocker} /></label><label>稿件编号 / DOI（可选）<input name="submissionIdentifier" defaultValue={entry.paper.submission_identifier} /></label></> : null}
         <label>私有 GitHub 链接（可选）<input name="gitUrl" type="url" defaultValue={entry.git_url || ""} placeholder="https://github.com/…" /></label>
         <label>补充附件（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件，单个不超过 50 MB，总计不超过 80 MB</small></label>
         <button className="primary" disabled={busy === entry.id}>{busy === entry.id ? "提交中…" : "重新提交"}</button>
@@ -1930,14 +2009,15 @@ function StudentProgressPanel({ student, papers, onRefresh, onToast }: {
   </section>;
 }
 
-function StudentProjectProgressPanel({ student, onRefresh, onToast }: {
+function StudentProjectProgressPanel({ student, onRefresh, onToast, returnedOnly = false }: {
   student: Student;
   onRefresh: () => Promise<void>;
   onToast: (message: string) => void;
+  returnedOnly?: boolean;
 }) {
   const [busy, setBusy] = useState<number | null>(null);
   const entries = [...student.progress]
-    .filter((entry) => entry.kind === "项目")
+    .filter((entry) => entry.kind === "项目" && (!returnedOnly || entry.review_status === "changes_requested"))
     .sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
 
   async function resubmit(event: FormEvent<HTMLFormElement>, entry: StudentProgress) {
@@ -1948,6 +2028,7 @@ function StudentProjectProgressPanel({ student, onRefresh, onToast }: {
       return;
     }
     formData.set("id", String(entry.id));
+    formData.set("expectedRevision", String(entry.current_revision));
     formData.set("title", entry.title);
     setBusy(entry.id);
     try {
@@ -1961,8 +2042,9 @@ function StudentProjectProgressPanel({ student, onRefresh, onToast }: {
     } finally { setBusy(null); }
   }
 
-  return <section className="student-portal-panel student-project-feed">
-    <div className="student-portal-panel-head"><div><span>我的课题</span><h2>课题进展</h2><p>平时做完的实验、数据和阶段结果都记在这里。</p></div><b>{entries.length}</b></div>
+  if (returnedOnly && !entries.length) return null;
+  return <section className={`student-portal-panel student-project-feed${returnedOnly ? " returned-only" : ""}`}>
+    <div className="student-portal-panel-head"><div><span>{returnedOnly ? "需要补充" : "我的课题"}</span><h2>{returnedOnly ? "课题补证" : "课题进展"}</h2><p>{returnedOnly ? "在这里修改退回内容；重新提交会生成新版本。" : "平时做完的实验、数据和阶段结果都记在这里。"}</p></div><b>{entries.length}</b></div>
     <div className="student-progress-feed-list">{entries.map((entry) => <article id={`student-action-entry-${entry.id}`} tabIndex={-1} key={entry.id}>
       <div><span className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</span><time>{shortDate(entry.submitted_at)}</time></div>
       <h3>{entry.title}</h3><small>{entry.project?.milestone_title ? `${entry.project.milestone_title} · V${entry.current_revision}` : `课题进展 · V${entry.current_revision}`}</small><p>{entry.summary}</p>
@@ -2001,9 +2083,10 @@ function guidanceDueLabel(note: StudentGuidanceNote) {
   return `${days} 天后到期`;
 }
 
-function StudentGuidanceInbox({ compact = false, onToast }: {
+function StudentGuidanceInbox({ compact = false, onToast, onRefresh }: {
   compact?: boolean;
   onToast: (message: string) => void;
+  onRefresh: () => Promise<void>;
 }) {
   const [notes, setNotes] = useState<StudentGuidanceNote[]>([]);
   const [completionNotes, setCompletionNotes] = useState<Record<number, string>>({});
@@ -2012,16 +2095,20 @@ function StudentGuidanceInbox({ compact = false, onToast }: {
   const [message, setMessage] = useState("");
 
   const load = useCallback(async () => {
-    const response = await fetch("/api/student-guidance", { cache: "no-store" });
-    const payload = await response.json() as { notes?: StudentGuidanceNote[]; error?: string };
-    if (!response.ok) throw new Error(payload.error || "导师指导读取失败");
-    setNotes(payload.notes ?? []);
+    setLoading(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/student-guidance", { cache: "no-store" });
+      const payload = await response.json() as { notes?: StudentGuidanceNote[]; error?: string };
+      if (!response.ok) throw new Error(payload.error || "导师指导读取失败");
+      setNotes(payload.notes ?? []);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void load()
-      .catch((error: Error) => setMessage(error.message))
-      .finally(() => setLoading(false)), 0);
+    const timer = window.setTimeout(() => void load().catch((error: Error) => setMessage(error.message)), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
 
@@ -2035,14 +2122,18 @@ function StudentGuidanceInbox({ compact = false, onToast }: {
         body: JSON.stringify({
           id: note.id,
           action,
+          expectedVersion: note.version,
           completionNote: action === "complete" ? completionNotes[note.id] || "" : "",
         }),
       });
       const payload = await response.json() as { message?: string; error?: string };
-      if (!response.ok) throw new Error(payload.error || "导师指导更新失败");
+      if (!response.ok) {
+        if (response.status === 409) await Promise.all([load(), onRefresh()]);
+        throw new Error(payload.error || "导师指导更新失败");
+      }
       setCompletionNotes((current) => ({ ...current, [note.id]: "" }));
       onToast(payload.message || (action === "complete" ? "指导事项已完成" : "已确认收到"));
-      await load();
+      await Promise.all([load(), onRefresh()]);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "导师指导更新失败");
     } finally {
@@ -2054,13 +2145,14 @@ function StudentGuidanceInbox({ compact = false, onToast }: {
   const visibleNotes = compact ? openNotes.slice(0, 3) : notes;
   if (compact && !loading && !openNotes.length && !message) return null;
 
-  return <section className={`student-portal-panel student-guidance-inbox${compact ? " compact" : ""}`}>
+  return <section className={`student-portal-panel student-guidance-inbox${compact ? " compact" : ""}`} id={compact ? undefined : "student-guidance-inbox"} tabIndex={compact ? undefined : -1}>
     <div className="student-portal-panel-head"><div><span>导师指导</span><h2>{compact ? "导师给你的下一步" : "收到的导师指导"}</h2><p>{compact ? "先确认收到，再完成导师布置的具体行动。" : "指导内容、行动期限和完成回报都保留在同一条记录中。"}</p></div><strong>{openNotes.length}<small>项进行中</small></strong></div>
     {loading ? <div className="student-portal-empty">正在读取导师指导…</div> : <div className="student-guidance-inbox-list">
-      {visibleNotes.map((note) => <article key={note.id} className={note.status}>
+      {visibleNotes.map((note) => <article key={note.id} id={`student-guidance-${note.id}`} tabIndex={-1} className={note.status}>
         <header><div><span>{note.mentor_name} · {shortDate(note.created_at)}</span><strong>{note.title || "导师指导"}</strong></div><em>{guidanceDueLabel(note)}</em></header>
         <p>{note.content}</p>
         {note.next_action ? <div className="student-guidance-next"><span>下一项可交付行动</span><strong>{note.next_action}</strong>{note.due_date ? <small>期限 {note.due_date}</small> : null}{note.acceptance_criteria ? <div className="student-guidance-criteria"><span>完成标准</span><p>{note.acceptance_criteria}</p></div> : null}</div> : null}
+        {note.events?.length ? <details className="student-guidance-history"><summary>查看状态与完成说明历史（{note.events.length}）</summary><ol>{note.events.map((event) => <li key={event.id}><span>{event.actor_name || (event.actor_type === "student" ? "学生" : event.actor_type === "staff" ? "导师" : "系统")} · {shortDate(event.created_at)}</span><strong>{event.action === "created" ? "创建指导" : event.action === "acknowledged" ? "确认收到" : event.action === "completed" ? "提交/确认完成" : "重新打开"}</strong>{event.note ? <p>{event.note}</p> : null}</li>)}</ol></details> : null}
         {note.status === "open" ? <footer>
           {!note.acknowledged_at ? <button type="button" disabled={busy === note.id} onClick={() => void update(note, "acknowledge")}>确认收到</button> : <span className="student-guidance-ack">✓ 已确认收到</span>}
           {note.student_reported_at && note.verification_mode === "mentor_verify" ? <span className="student-guidance-awaiting">✓ 已提交完成说明，等待导师验收{note.completion_note ? `：${note.completion_note}` : ""}</span> : null}
@@ -2071,11 +2163,14 @@ function StudentGuidanceInbox({ compact = false, onToast }: {
       {!visibleNotes.length ? <div className="student-portal-empty">目前没有导师指导事项。</div> : null}
     </div>}
     {compact && notes.length > visibleNotes.length ? <a className="student-guidance-more" href={studentNavigationHref({ view: "mentor" })}>查看全部导师指导 ›</a> : null}
-    {message ? <p className="student-meeting-message" role="status">{message}</p> : null}
+    {message ? <p className="student-meeting-message" role={notes.length ? "status" : "alert"}>{message}<button type="button" onClick={() => void load().catch((error: Error) => setMessage(error.message))}>{notes.length ? "刷新状态" : "重新读取"}</button></p> : null}
   </section>;
 }
 
-function StudentMeetingRequests({ onToast }: { onToast: (message: string) => void }) {
+function StudentMeetingRequests({ onToast, onRefresh }: {
+  onToast: (message: string) => void;
+  onRefresh: () => Promise<void>;
+}) {
   const [requests, setRequests] = useState<MeetingRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<number | "create" | null>(null);
@@ -2083,14 +2178,20 @@ function StudentMeetingRequests({ onToast }: { onToast: (message: string) => voi
   const minimumDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 
   const load = useCallback(async () => {
-    const response = await fetch("/api/meeting-requests", { cache: "no-store" });
-    const payload = (await response.json()) as { requests?: MeetingRequest[]; error?: string };
-    if (!response.ok) throw new Error(payload.error || "预约读取失败");
-    setRequests(payload.requests ?? []);
+    setLoading(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/meeting-requests", { cache: "no-store" });
+      const payload = (await response.json()) as { requests?: MeetingRequest[]; error?: string };
+      if (!response.ok) throw new Error(payload.error || "预约读取失败");
+      setRequests(payload.requests ?? []);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void load().catch((error: Error) => setMessage(error.message)).finally(() => setLoading(false)), 0);
+    const timer = window.setTimeout(() => void load().catch((error: Error) => setMessage(error.message)), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
 
@@ -2101,7 +2202,7 @@ function StudentMeetingRequests({ onToast }: { onToast: (message: string) => voi
     setBusy("create"); setMessage("");
     try {
       const response = await fetch("/api/meeting-requests", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": mutationKeyForForm(form) },
         body: JSON.stringify({
           preferredDate: values.preferredDate,
           preferredTime: values.preferredTime,
@@ -2112,9 +2213,10 @@ function StudentMeetingRequests({ onToast }: { onToast: (message: string) => voi
       });
       const payload = (await response.json()) as { error?: string; message?: string };
       if (!response.ok) throw new Error(payload.error || "预约提交失败");
+      clearMutationKey(form);
       form.reset();
       onToast(payload.message || "会议预约已提交");
-      await load();
+      await Promise.all([load(), onRefresh()]);
     } catch (error) { setMessage(error instanceof Error ? error.message : "预约提交失败"); }
     finally { setBusy(null); }
   }
@@ -2128,9 +2230,12 @@ function StudentMeetingRequests({ onToast }: { onToast: (message: string) => voi
         body: JSON.stringify({ id: item.id, action: "cancel", expectedVersion: item.version }),
       });
       const payload = (await response.json()) as { error?: string; message?: string };
-      if (!response.ok) throw new Error(payload.error || "取消预约失败");
+      if (!response.ok) {
+        if (response.status === 409) await Promise.all([load(), onRefresh()]);
+        throw new Error(payload.error || "取消预约失败");
+      }
       onToast(payload.message || "预约已取消");
-      await load();
+      await Promise.all([load(), onRefresh()]);
     } catch (error) { setMessage(error instanceof Error ? error.message : "取消预约失败"); }
     finally { setBusy(null); }
   }
@@ -2144,8 +2249,8 @@ function StudentMeetingRequests({ onToast }: { onToast: (message: string) => voi
       <label>还有什么要说明（可选）<textarea name="note" rows={3} maxLength={2000} placeholder="简单写几句即可，不要放保密材料" /></label>
       <button className="primary" disabled={busy === "create"}>{busy === "create" ? "提交中…" : "发给导师"}</button>
     </form>
-    {message ? <p className="student-meeting-message" role="status">{message}</p> : null}
-    <div className="student-meeting-history"><h3>我的预约</h3>{loading ? <p>正在读取…</p> : requests.map((item) => <article key={item.id}>
+    {message ? <p className="student-meeting-message" role={requests.length ? "status" : "alert"}>{message}<button type="button" onClick={() => void load().catch((error: Error) => setMessage(error.message))}>{requests.length ? "刷新状态" : "重新读取"}</button></p> : null}
+    <div className="student-meeting-history"><h3>我的预约</h3>{loading ? <p>正在读取…</p> : requests.map((item) => <article key={item.id} id={`student-meeting-${item.id}`} tabIndex={-1}>
       <div><span className={`meeting-state ${item.status}`}>{meetingStatusLabels[item.status]}</span><time>{item.preferred_date} {item.preferred_time}</time></div>
       <strong>{item.topic}</strong><small>{item.duration_minutes} 分钟{item.handled_by_name ? ` · ${item.handled_by_name} 处理` : ""}</small>
       {item.response_note ? <p>{item.response_note}</p> : null}
@@ -2263,12 +2368,14 @@ export function ProgressModal({ students, papers = [], fixedKind, onClose, onSav
   }, [onClose]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setFormError("");
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     formData.set("kind", fixedKind ?? kind);
     try {
-      const response = await fetch("/api/progress", { method: "POST", body: formData });
+      const response = await fetch("/api/progress", { method: "POST", headers: { "Idempotency-Key": mutationKeyForForm(form) }, body: formData });
       const result = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(result.error || "提交失败");
+      clearMutationKey(form);
       await onSaved();
     } catch (submitError) { setFormError(submitError instanceof Error ? submitError.message : "提交失败"); setBusy(false); }
   }
@@ -2562,7 +2669,26 @@ function ProposalDetail({ proposal, canReview, onToast, onRefresh }: {
 
 function FeishuModal({ viewer, onClose, onLogout }: { viewer: DashboardData["viewer"]; onClose: () => void; onLogout: () => Promise<void> }) {
   const roleLabel = viewer.role === "superadmin" ? "超级管理员" : viewer.role === "admin" ? "管理员（导师）" : "学生";
-  return <div className="modal-layer" role="presentation"><div className="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="feishu-dialog-title"><button className="close" aria-label="关闭" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2 id="feishu-dialog-title">{viewer.name}，飞书身份已验证</h2><p>当前角色：{roleLabel}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按学生个人周期发送，并保留送达与失败台账</small></span><em className="done">已接入</em></div><div><b>3</b><span><strong>智能纪要个人进展</strong><small>自动识别学生姓名并把科研部分拆成独立进展</small></span><em className="done">已接入</em></div></div><div className="safe-banner">普通聊天会在接收时立即过滤且不落库；纪要只能在学生归属明确时自动建个人进展，正式评价由对应主导师或超级管理员完成。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled])") ?? []);
+    focusable()[0]?.focus();
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => { document.removeEventListener("keydown", onKeyDown); previousFocus?.focus(); };
+  }, [onClose]);
+  return <div className="modal-layer" role="presentation"><div className="modal compact-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="feishu-dialog-title"><button className="close" aria-label="关闭" onClick={onClose}>×</button><div className="modal-title"><span>飞书企业自建应用</span><h2 id="feishu-dialog-title">{viewer.name}，飞书身份已验证</h2><p>当前角色：{roleLabel}。系统权限由服务端校验。</p></div><div className="integration-list"><div><b>1</b><span><strong>飞书免登录</strong><small>由飞书工作台获取一次性授权码并建立安全会话</small></span><em className="done">已接入</em></div><div><b>2</b><span><strong>消息与卡片提醒</strong><small>按学生个人周期发送，并保留送达与失败台账</small></span><em className="done">已接入</em></div><div><b>3</b><span><strong>智能纪要个人进展</strong><small>自动识别学生姓名并把科研部分拆成独立进展</small></span><em className="done">已接入</em></div></div><div className="safe-banner">普通聊天会在接收时立即过滤且不落库；纪要只能在学生归属明确时自动建个人进展，正式评价由对应主导师或超级管理员完成。</div><div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出飞书账号</button></div></div></div>;
 }
 
 function MeetingView({ viewer, students, meetingRequests, meetingLoadError, onRemind, onToast, onMeetingChange }: {

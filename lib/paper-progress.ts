@@ -46,9 +46,18 @@ export function isIsoDate(value: string) {
 
 export function paperDeadlineState(value: string | null, reference = new Date()) {
   if (!value) return { label: "未设投稿日期", overdue: false, days: null as number | null };
-  const target = new Date(`${value}T00:00:00+08:00`);
-  const current = new Date(reference);
-  const days = Math.ceil((target.getTime() - current.getTime()) / 86_400_000);
+  const currentKey = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(reference);
+  const [targetYear, targetMonth, targetDay] = value.split("-").map(Number);
+  const [currentYear, currentMonth, currentDay] = currentKey.split("-").map(Number);
+  const days = Math.round((
+    Date.UTC(targetYear, targetMonth - 1, targetDay)
+    - Date.UTC(currentYear, currentMonth - 1, currentDay)
+  ) / 86_400_000);
   if (days < 0) return { label: `逾期 ${Math.abs(days)} 天`, overdue: true, days };
   if (days === 0) return { label: "今天到期", overdue: false, days };
   return { label: `${days} 天后`, overdue: false, days };

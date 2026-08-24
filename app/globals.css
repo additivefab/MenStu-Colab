@@ -780,6 +780,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-next-action-card > strong { max-width: 720px; margin-top: 4px; font-size: clamp(22px, 3vw, 30px); line-height: 1.4; letter-spacing: -.025em; overflow-wrap: anywhere; }
 .student-next-action-card > p { max-width: 680px; margin: 0; color: #4d5850; font-size: 15px; line-height: 1.75; }
 .student-next-action-card > small { color: #616a63; font-size: 12px; line-height: 1.6; }
+.student-next-action-card > .student-next-action-more,
+.student-next-action-card > .student-next-action-waiting { width: fit-content; padding: 5px 9px; border-radius: 999px; background: #eaf3f8; color: #315b72; font-weight: 750; }
+.student-next-action-card > .student-next-action-waiting { background: #f1f2ef; color: #59615b; }
 .student-next-action-card > button { min-height: 48px; margin-top: 17px; padding: 0 20px; justify-self: start; border: 1px solid var(--blue); border-radius: 10px; color: #fff; background: var(--blue); font-size: 14px; font-weight: 850; }
 .student-quick-progress { margin-top: 18px; scroll-margin-top: 76px; overflow: hidden; border: 1px solid #d9deda; border-radius: 14px; background: #fff; box-shadow: 0 2px 12px #20232108; }
 .student-quick-progress > header { padding: 20px 24px; display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; color: #fff; background: linear-gradient(125deg, #1c4778, #2f72b8); }
@@ -824,6 +827,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-research-track { min-width: 0; padding: 19px; display: flex; flex-direction: column; border: 1px solid #dfe7f0; border-radius: 16px; background: #fff; }
 .student-research-track.paper-track { box-shadow: inset 0 3px #3979bd; }
 .student-research-track.project-track { box-shadow: inset 0 3px #31906b; }
+.student-paper-selector { margin-bottom: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.student-paper-selector > button { min-width: 0; min-height: 68px; padding: 10px 12px; display: grid; gap: 3px; border: 1px solid #dce5ef; border-radius: 11px; color: #42566d; background: #f7f9fc; text-align: left; }
+.student-paper-selector > button.active { border-color: #4b82bd; background: #edf5fd; box-shadow: inset 0 0 0 1px #4b82bd; }
+.student-paper-selector span { color: #637993; font-size: 11px; font-weight: 800; }
+.student-paper-selector strong { overflow: hidden; font-size: 13px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.student-paper-selector small { color: #758397; font-size: 11px; }
 .student-research-track-head { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 11px; }
 .student-research-track-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; color: #2c68aa; background: #e9f3ff; font-size: 13px; font-weight: 850; }
 .project-track .student-research-track-icon { color: #26765b; background: #e8f6ef; }
@@ -1078,6 +1087,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-guidance-next span { color: #39759f; font-size: 11px; font-weight: 850; letter-spacing: .06em; }
 .student-guidance-next strong { color: #2d4453; font-size: 11px; line-height: 1.55; }
 .student-guidance-next small { color: #7d8b94; font-size: 11px; }
+.student-guidance-history { border: 1px solid #e4e9e5; border-radius: 9px; background: #fbfcfb; }
+.student-guidance-history > summary { padding: 9px 11px; color: #527064; font-size: 11px; font-weight: 800; cursor: pointer; }
+.student-guidance-history ol { margin: 0; padding: 0 12px 10px 30px; }
+.student-guidance-history li { padding: 7px 0; color: #53645b; font-size: 11px; }
+.student-guidance-history li > span,
+.student-guidance-history li > strong { display: block; }
+.student-guidance-history li > span { color: #89938d; }
+.student-guidance-history li > p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .student-guidance-inbox-list article > footer { display: grid; grid-template-columns: auto minmax(160px, 1fr) auto; align-items: end; gap: 9px; }
 .student-guidance-inbox-list footer > button { min-height: 36px; padding: 0 11px; border: 1px solid #d8ded9; border-radius: 8px; color: #50635a; background: #fff; font-size: 11px; font-weight: 800; }
 .student-guidance-inbox-list footer > button.primary { border-color: #2d73ad; color: #fff; background: #2d73ad; }
@@ -1133,6 +1150,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-progress-feed-list label, .student-meeting-form label, .staff-meeting-actions label { display: grid; gap: 5px; color: #68778a; font-size: 12px; font-weight: 700; }
 .student-progress-feed-list input, .student-progress-feed-list select, .student-progress-feed-list textarea, .student-meeting-form input, .student-meeting-form select, .student-meeting-form textarea, .staff-meeting-actions input, .staff-meeting-actions textarea { width: 100%; min-height: 44px; padding: 10px 11px; border: 1px solid #d9e1ea; border-radius: 9px; color: #28384e; background: #fbfcfe; font-size: 14px; font-family: inherit; resize: vertical; }
 .student-progress-feed-list form button { justify-self: start; min-height: 40px; }
+.student-progress-supplement { min-height: 42px; margin-top: 12px; }
+.student-portal-panel.returned-only { margin-top: 14px; border-color: #ead9b8; }
 .student-portal-empty { padding: 32px 10px; color: #8c98a8; font-size: 11px; text-align: center; }
 .student-meeting-form { margin: 0; padding: 19px 24px; border-bottom: 1px solid #edf1f5; }
 .student-meeting-form > div { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -2546,6 +2565,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   input[type="number"],
   input[type="date"],
   input[type="datetime-local"],
+  input[type="time"],
+  input[type="file"],
   select,
   textarea { font-size: 16px; }
   .modal input,
@@ -2559,6 +2580,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .student-guidance-compose textarea,
   .student-guidance-list textarea,
   .student-guidance-inbox-list footer input { font-size: 16px; }
+  .student-guidance-inbox-list footer button,
+  .student-meeting-message button,
+  .student-progress-supplement { min-height: 44px; }
   .student-section-nav a { font-size: 13px; }
   .review-actions button { font-size: 14px; }
   .student-workbench-sidebar nav > a { font-size: 12px; }

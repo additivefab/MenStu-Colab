@@ -2,6 +2,7 @@ import { ensureDatabase, getD1, riskFromDate } from "../../../lib/database";
 import { getStudentScope, scopeSql } from "../../../lib/authorization";
 import { requireAppUser } from "../../../lib/feishu-auth";
 import { evidenceDisplayRef, type ProgressAssessment, type ReviewStatus } from "../../../lib/progress-evidence";
+import { deriveStudentNextAction } from "../../../lib/student-next-action";
 
 type StudentRow = {
   id: string;
@@ -44,6 +45,7 @@ type ProgressRow = {
   reviewed_at: string | null;
   current_revision: number;
   paper_id: number | null;
+  paper_candidate_id: number | null;
   paper_title: string | null;
   paper_type: string | null;
   paper_stage: string | null;
@@ -54,6 +56,11 @@ type ProgressRow = {
   next_action: string | null;
   next_action_due_date: string | null;
   blocker: string | null;
+  candidate_title: string | null;
+  candidate_paper_type: string | null;
+  candidate_target_venue: string | null;
+  candidate_planned_submission_date: string | null;
+  candidate_submission_identifier: string | null;
   project_milestone_id: number | null;
   project_milestone_title: string | null;
   project_milestone_target_date: string | null;
@@ -156,14 +163,25 @@ type WorkflowTask = {
   context?: string;
   nextAction?: string;
   acceptanceCriteria?: string;
+  version?: number;
 };
+
+function privateDashboardResponse(payload: Record<string, unknown>) {
+  return Response.json(payload, {
+    headers: {
+      "Cache-Control": "private, no-store",
+      Vary: "Cookie",
+    },
+  });
+}
 
 function revisionSnapshot(value: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const snapshot = { ...parsed as Record<string, unknown> };
+    delete snapshot._operationToken;
+    return snapshot;
   } catch {
     return {};
   }
@@ -239,9 +257,21 @@ export async function GET(request: Request) {
         p.literature_ref, p.git_url, p.status, p.review_status, p.assessment,
         p.reviewer_note, p.reviewed_by_user_id, p.review_claimed_at, p.submitted_by_user_id,
         reviewer.display_name AS reviewer_name, p.submitted_at, p.reviewed_at, p.current_revision,
-        pd.paper_id, paper.title AS paper_title, paper.paper_type, pd.stage AS paper_stage,
-        paper.target_venue, paper.planned_submission_date, paper.submission_identifier,
-        pd.manuscript_version, pd.next_action, pd.next_action_due_date, pd.blocker,
+        pd.paper_id, candidate.progress_entry_id AS paper_candidate_id,
+        COALESCE(paper.title, candidate.title) AS paper_title,
+        COALESCE(paper.paper_type, candidate.paper_type) AS paper_type,
+        COALESCE(pd.stage, candidate.stage) AS paper_stage,
+        COALESCE(paper.target_venue, candidate.target_venue) AS target_venue,
+        COALESCE(paper.planned_submission_date, candidate.planned_submission_date) AS planned_submission_date,
+        COALESCE(paper.submission_identifier, candidate.submission_identifier) AS submission_identifier,
+        COALESCE(pd.manuscript_version, candidate.manuscript_version) AS manuscript_version,
+        COALESCE(pd.next_action, candidate.next_action) AS next_action,
+        COALESCE(pd.next_action_due_date, candidate.next_action_due_date) AS next_action_due_date,
+        COALESCE(pd.blocker, candidate.blocker) AS blocker,
+        candidate.title AS candidate_title, candidate.paper_type AS candidate_paper_type,
+        candidate.target_venue AS candidate_target_venue,
+        candidate.planned_submission_date AS candidate_planned_submission_date,
+        candidate.submission_identifier AS candidate_submission_identifier,
         ppd.milestone_id AS project_milestone_id,
         ppd.milestone_title AS project_milestone_title,
         ppd.milestone_target_date AS project_milestone_target_date,
@@ -255,8 +285,12 @@ export async function GET(request: Request) {
         LEFT JOIN app_users reviewer ON reviewer.id = p.reviewed_by_user_id
         LEFT JOIN paper_progress_details pd ON pd.progress_entry_id = p.id
         LEFT JOIN student_papers paper ON paper.id = pd.paper_id
+        LEFT JOIN paper_submission_candidates candidate ON candidate.progress_entry_id = p.id
         LEFT JOIN project_progress_details ppd ON ppd.progress_entry_id = p.id
         WHERE p.student_id IN (${placeholders})
+          AND EXISTS (SELECT 1 FROM progress_revisions current_revision
+            WHERE current_revision.progress_entry_id = p.id
+              AND current_revision.revision_number = p.current_revision)
         ORDER BY p.submitted_at DESC, p.id DESC LIMIT 1000`)
           .bind(...studentIds).all<ProgressRow>(),
         d1.prepare(`SELECT paper.id, paper.student_id, s.display_name AS student_name,
@@ -323,8 +357,8 @@ export async function GET(request: Request) {
       );
       return {
         ...entry,
-        paper: entry.paper_id ? {
-          id: entry.paper_id,
+        paper: entry.paper_id || entry.paper_candidate_id ? {
+          id: entry.paper_id ?? 0,
           title: entry.paper_title ?? "未命名论文",
           paper_type: entry.paper_type ?? "期刊论文",
           stage: entry.paper_stage ?? "planning",
@@ -434,7 +468,86 @@ export async function GET(request: Request) {
     }));
 
     if (viewer.role === "student") {
-      return Response.json({
+      const student = students[0];
+      const [guidance, meetings] = student ? await Promise.all([
+        d1.prepare(`SELECT id, title, next_action, due_date, status,
+          acknowledged_at, student_reported_at
+          FROM student_guidance_notes
+          WHERE student_id = ? AND status = 'open'
+          ORDER BY created_at DESC, id DESC LIMIT 200`)
+          .bind(student.id).all<{
+            id: number; title: string; next_action: string; due_date: string | null;
+            status: string; acknowledged_at: string | null; student_reported_at: string | null;
+          }>(),
+        d1.prepare(`SELECT id, topic, preferred_date, preferred_time, status
+          FROM meeting_requests
+          WHERE student_id = ? AND requested_by_user_id = ?
+            AND status IN ('requested', 'confirmed')
+          ORDER BY preferred_date, preferred_time, id LIMIT 50`)
+          .bind(student.id, viewer.id).all<{
+            id: number; topic: string; preferred_date: string; preferred_time: string; status: string;
+          }>(),
+      ]) : [{ results: [] }, { results: [] }];
+      const derivedStudentNextAction = student ? deriveStudentNextAction({
+        now: new Date(),
+        cadenceDays: student.cadenceDays,
+        currentFocus: student.currentFocus,
+        progress: student.progress.map((entry) => ({
+          id: entry.id,
+          kind: entry.kind,
+          title: entry.title,
+          submittedAt: entry.submitted_at,
+          reviewStatus: entry.review_status,
+          reviewerNote: entry.reviewer_note,
+          paper: entry.paper ? {
+            id: entry.paper.id ?? 0,
+            title: entry.paper.title,
+            nextAction: entry.paper.next_action,
+            nextActionDueDate: entry.paper.next_action_due_date,
+            blocker: entry.paper.blocker,
+          } : null,
+          project: entry.project ? {
+            milestoneId: entry.project.milestone_id,
+            nextAction: entry.project.next_action,
+            nextActionDueDate: entry.project.next_action_due_date,
+            blocker: entry.project.blocker,
+          } : null,
+        })),
+        papers: papers.map((paper) => ({
+          id: paper.id,
+          title: paper.title,
+          status: paper.status,
+          currentStage: paper.current_stage,
+        })),
+        milestones: student.milestones.map((milestone) => ({
+          id: milestone.id,
+          title: milestone.title,
+          targetDate: milestone.target_date,
+          status: milestone.status,
+        })),
+        guidance: guidance.results.map((note) => ({
+          id: note.id,
+          title: note.title,
+          nextAction: note.next_action,
+          dueDate: note.due_date,
+          status: note.status,
+          acknowledgedAt: note.acknowledged_at,
+          studentReportedAt: note.student_reported_at,
+        })),
+        meetings: meetings.results.map((meeting) => ({
+          id: meeting.id,
+          topic: meeting.topic,
+          preferredDate: meeting.preferred_date,
+          preferredTime: meeting.preferred_time,
+          status: meeting.status,
+        })),
+      }) : null;
+      const studentNextAction = derivedStudentNextAction ? {
+        primary: derivedStudentNextAction.primary,
+        additionalActionCount: derivedStudentNextAction.additionalActionCount,
+        waitingCount: derivedStudentNextAction.waitingCount,
+      } : null;
+      return privateDashboardResponse({
         viewer: {
           id: viewer.id,
           name: viewer.displayName,
@@ -487,6 +600,7 @@ export async function GET(request: Request) {
         papers,
         pending: [],
         workflowTasks: [],
+        studentNextAction,
         metrics: {
           total: 1,
           doctors: 0,
@@ -525,14 +639,14 @@ export async function GET(request: Request) {
           }>(),
         d1.prepare(`SELECT n.id, n.student_id, n.mentor_user_id, s.display_name,
             COALESCE(NULLIF(n.title, ''), NULLIF(n.next_action, ''), '导师指导') AS title,
-            n.content, n.next_action, n.acceptance_criteria, n.completion_note, n.due_date
+            n.content, n.next_action, n.acceptance_criteria, n.completion_note, n.due_date, n.version
           FROM student_guidance_notes n JOIN students s ON s.id = n.student_id
           WHERE n.student_id IN (${placeholders}) AND n.status = 'open'
             AND n.verification_mode = 'mentor_verify' AND n.student_reported_at IS NOT NULL
           ORDER BY n.student_reported_at, n.updated_at`).bind(...studentIds).all<{
             id: number; student_id: string; mentor_user_id: number; display_name: string;
             title: string; content: string; next_action: string; acceptance_criteria: string;
-            completion_note: string; due_date: string | null;
+            completion_note: string; due_date: string | null; version: number;
           }>(),
       ]);
       workflowTasks.push(
@@ -567,6 +681,7 @@ export async function GET(request: Request) {
             context: item.content,
             nextAction: item.next_action,
             acceptanceCriteria: item.acceptance_criteria,
+            version: item.version,
           })),
       );
     }
@@ -577,7 +692,7 @@ export async function GET(request: Request) {
     }, {});
 
     const actionablePendingCount = pending.filter((entry) => entry.can_finalize).length;
-    return Response.json({
+    return privateDashboardResponse({
       viewer: {
         id: viewer.id,
         name: viewer.displayName,

@@ -6,6 +6,15 @@ import { legacyProgressStatus, type ProgressAssessment, type ReviewStatus } from
 
 const finalActions = new Set(["substantive", "supporting", "supplement", "rejected"]);
 const REVIEW_LEASE_MINUTES = 30;
+const SYNCHRONIZE_CURRENT_REVISION_SQL = `UPDATE progress_revisions SET
+  review_status = (SELECT review_status FROM progress_entries WHERE id = ?),
+  assessment = (SELECT assessment FROM progress_entries WHERE id = ?),
+  reviewer_note = (SELECT reviewer_note FROM progress_entries WHERE id = ?),
+  reviewed_by_user_id = (SELECT reviewed_by_user_id FROM progress_entries WHERE id = ?),
+  reviewed_at = (SELECT reviewed_at FROM progress_entries WHERE id = ?)
+  WHERE progress_entry_id = ? AND revision_number = ?
+    AND EXISTS (SELECT 1 FROM progress_entries current_parent
+      WHERE current_parent.id = ? AND current_parent.current_revision = ?)`;
 
 type EntryRow = {
   id: number;
@@ -21,7 +30,17 @@ type EntryRow = {
   revision_reviewed_by_user_id: number | null;
   revision_snapshot_json: string | null;
   paper_id: number | null;
+  paper_candidate_id: number | null;
   paper_stage: string | null;
+  candidate_title: string | null;
+  candidate_paper_type: string | null;
+  candidate_target_venue: string | null;
+  candidate_planned_submission_date: string | null;
+  candidate_manuscript_version: string | null;
+  candidate_next_action: string | null;
+  candidate_next_action_due_date: string | null;
+  candidate_blocker: string | null;
+  candidate_submission_identifier: string | null;
   project_milestone_id: number | null;
   project_proposal_version: number | null;
   completion_requested: number | null;
@@ -108,7 +127,16 @@ export async function POST(request: Request) {
       pr.review_status AS revision_review_status,
       pr.reviewed_by_user_id AS revision_reviewed_by_user_id,
       pr.snapshot_json AS revision_snapshot_json,
-      ppd.paper_id, ppd.stage AS paper_stage,
+      ppd.paper_id, candidate.progress_entry_id AS paper_candidate_id,
+      COALESCE(ppd.stage, candidate.stage) AS paper_stage,
+      candidate.title AS candidate_title, candidate.paper_type AS candidate_paper_type,
+      candidate.target_venue AS candidate_target_venue,
+      candidate.planned_submission_date AS candidate_planned_submission_date,
+      candidate.manuscript_version AS candidate_manuscript_version,
+      candidate.next_action AS candidate_next_action,
+      candidate.next_action_due_date AS candidate_next_action_due_date,
+      candidate.blocker AS candidate_blocker,
+      candidate.submission_identifier AS candidate_submission_identifier,
       jpd.milestone_id AS project_milestone_id,
       jpd.proposal_version AS project_proposal_version,
       jpd.completion_requested,
@@ -120,20 +148,15 @@ export async function POST(request: Request) {
       LEFT JOIN progress_revisions pr
         ON pr.progress_entry_id = p.id AND pr.revision_number = p.current_revision
       LEFT JOIN paper_progress_details ppd ON ppd.progress_entry_id = p.id
+      LEFT JOIN paper_submission_candidates candidate ON candidate.progress_entry_id = p.id
       LEFT JOIN project_progress_details jpd ON jpd.progress_entry_id = p.id
       LEFT JOIN research_milestones m ON m.id = jpd.milestone_id
       LEFT JOIN research_proposals rp ON rp.id = m.proposal_id
       WHERE p.id = ?`).bind(id).first<EntryRow>();
     if (!entry) return Response.json({ error: "记录不存在" }, { status: 404 });
     const synchronizeCurrentRevision = async () => {
-      await d1.prepare(`UPDATE progress_revisions SET
-        review_status = (SELECT review_status FROM progress_entries WHERE id = ?),
-        assessment = (SELECT assessment FROM progress_entries WHERE id = ?),
-        reviewer_note = (SELECT reviewer_note FROM progress_entries WHERE id = ?),
-        reviewed_by_user_id = (SELECT reviewed_by_user_id FROM progress_entries WHERE id = ?),
-        reviewed_at = (SELECT reviewed_at FROM progress_entries WHERE id = ?)
-        WHERE progress_entry_id = ? AND revision_number = ?`)
-        .bind(id, id, id, id, id, id, entry.current_revision).run();
+      await d1.prepare(SYNCHRONIZE_CURRENT_REVISION_SQL)
+        .bind(id, id, id, id, id, id, entry.current_revision, id, entry.current_revision).run();
     };
     if (!entry.revision_review_status) {
       return Response.json({ error: "当前修订记录缺失，请先修复数据后再审核" }, { status: 409 });
@@ -299,7 +322,7 @@ export async function POST(request: Request) {
       ? paperAuthorityStatus(entry.paper_stage)
       : null;
     const reviewedPaperSnapshot = paperSnapshot(entry.revision_snapshot_json);
-    if (assessment && entry.kind === "论文" && (!entry.paper_id || !paperStatus)) {
+    if (assessment && entry.kind === "论文" && (!(entry.paper_id || entry.paper_candidate_id) || !paperStatus)) {
       return Response.json({ error: "论文进展详情不完整，无法回写论文阶段" }, { status: 409 });
     }
 
@@ -446,6 +469,37 @@ export async function POST(request: Request) {
           auth.user.id,
         ));
     }
+    let paperPromotionResultIndex: number | null = null;
+    if (assessment && entry.kind === "论文" && !entry.paper_id && entry.paper_candidate_id && paperStatus) {
+      paperPromotionResultIndex = statements.length;
+      statements.push(
+        d1.prepare(`INSERT INTO student_papers
+          (student_id, title, paper_type, target_venue, planned_submission_date,
+           current_stage, submission_identifier, status, latest_progress_at,
+           created_by_user_id, updated_at)
+          SELECT p.student_id, candidate.title, candidate.paper_type, candidate.target_venue,
+            candidate.planned_submission_date, candidate.stage, candidate.submission_identifier,
+            ?, p.submitted_at, p.submitted_by_user_id, CURRENT_TIMESTAMP
+          FROM paper_submission_candidates candidate
+          JOIN progress_entries p ON p.id = candidate.progress_entry_id
+          WHERE candidate.progress_entry_id = ? AND candidate.promoted_paper_id IS NULL
+            AND p.current_revision = ? AND p.review_status = 'accepted'
+            AND p.reviewed_by_user_id = ?`)
+          .bind(paperStatus, id, entry.current_revision, auth.user.id),
+        d1.prepare(`UPDATE paper_submission_candidates SET
+          promoted_paper_id = last_insert_rowid(), updated_at = CURRENT_TIMESTAMP
+          WHERE progress_entry_id = ? AND promoted_paper_id IS NULL AND changes() > 0`)
+          .bind(id),
+        d1.prepare(`INSERT INTO paper_progress_details
+          (progress_entry_id, paper_id, stage, manuscript_version, next_action,
+           next_action_due_date, blocker)
+          SELECT progress_entry_id, promoted_paper_id, stage, manuscript_version,
+            next_action, next_action_due_date, blocker
+          FROM paper_submission_candidates
+          WHERE progress_entry_id = ? AND promoted_paper_id IS NOT NULL AND changes() > 0`)
+          .bind(id),
+      );
+    }
     let milestoneResultIndex: number | null = null;
     if (completingMilestone && entry.project_milestone_id && entry.proposal_id) {
       milestoneResultIndex = statements.length;
@@ -492,6 +546,9 @@ export async function POST(request: Request) {
     }
     if (milestoneResultIndex !== null && !results[milestoneResultIndex]?.meta.changes) {
       return Response.json({ error: "审核已保存，但关联节点状态已变化，请刷新确认" }, { status: 409 });
+    }
+    if (paperPromotionResultIndex !== null && !results[paperPromotionResultIndex]?.meta.changes) {
+      return Response.json({ error: "审核已保存，但论文候选晋升异常，请刷新确认" }, { status: 409 });
     }
     return Response.json({
       message: guidance ? "已退回补充并把指导发送给学生" : "审核已保存并写入证据审计记录",

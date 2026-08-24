@@ -33,4 +33,8 @@ test("paper deadline state distinguishes upcoming and overdue work", () => {
     paperDeadlineState("2026-08-20", new Date("2026-08-23T00:00:00+08:00")),
     { label: "逾期 3 天", overdue: true, days: -3 },
   );
+  assert.deepEqual(
+    paperDeadlineState("2026-08-23", new Date("2026-08-23T18:30:00+08:00")),
+    { label: "今天到期", overdue: false, days: 0 },
+  );
 });

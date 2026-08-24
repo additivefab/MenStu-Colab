@@ -26,7 +26,7 @@ export async function GET() {
   try {
     await ensureDatabase();
     const d1 = getD1();
-    const [schema, students, bindings, users] = await Promise.all([
+    const [schema, students, bindings, users, cleanup] = await Promise.all([
       getDatabaseSchemaStatus(),
       d1.prepare(`SELECT id, display_name, degree, grade_year
         FROM students WHERE active = 1 ORDER BY id`).all<{
@@ -43,6 +43,9 @@ export async function GET() {
         SUM(CASE WHEN active = 1 AND role IN ('superadmin', 'mentor') THEN 1 ELSE 0 END) AS staff,
         SUM(CASE WHEN active = 1 AND role = 'student' AND student_id IS NOT NULL THEN 1 ELSE 0 END) AS student_logins
         FROM app_users`).first<{ superadmins: number; staff: number; student_logins: number }>(),
+      d1.prepare(`SELECT COUNT(*) AS count FROM progress_file_cleanup_queue
+        WHERE reason != 'upload_intent' OR updated_at <= datetime('now', '-30 minutes')`)
+        .first<{ count: number }>(),
     ]);
 
     const activeStudents = students.results;
@@ -58,6 +61,7 @@ export async function GET() {
     const superadminCount = Number(users?.superadmins ?? 0);
     const staffCount = Number(users?.staff ?? 0);
     const studentLoginCount = Number(users?.student_logins ?? 0);
+    const cleanupCount = Number(cleanup?.count ?? 0);
     const feishu = getFeishuConfig();
 
     const checks: ReadinessCheck[] = [
@@ -94,6 +98,12 @@ export async function GET() {
         label: "附件对象存储",
         status: isProgressFileStorageConfigured() ? "pass" : "fail",
         detail: isProgressFileStorageConfigured() ? "R2 绑定 FILES 可用" : "R2 绑定 FILES 不可用",
+      },
+      {
+        id: "file_cleanup_queue",
+        label: "附件补偿清理",
+        status: cleanupCount ? "warning" : "pass",
+        detail: cleanupCount ? `有 ${cleanupCount} 个对象等待后台重试清理` : "没有待清理的孤儿对象",
       },
       {
         id: "operators",

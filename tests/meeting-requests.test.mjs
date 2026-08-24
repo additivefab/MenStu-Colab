@@ -22,7 +22,10 @@ test("meeting request route enforces ownership, reviewer scope, transitions, ori
   assert.match(source, /拒绝预约时必须填写回复意见/);
   assert.match(source, /预约时间必须晚于当前时间/);
   assert.match(source, /未来 180 天/);
-  assert.match(source, /同一时间已有待处理或已确认的预约/);
+  assert.match(source, /该时间段与已有待处理或已确认预约重叠/);
+  assert.match(source, /AND NOT EXISTS \(/);
+  assert.match(source, /existing\.duration_minutes/);
+  assert.match(source, /Idempotency-Key/);
   assert.match(source, /已有 5 条有效预约/);
   assert.match(source, /new Set\(\[15, 30, 45, 60\]\)/);
   assert.match(source, /expectedVersion/);

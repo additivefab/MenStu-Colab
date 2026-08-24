@@ -9,6 +9,13 @@ const verificationModes = new Set(["self_report", "mentor_verify"]);
 
 class InputError extends Error {}
 
+function guidanceConflictResponse() {
+  return Response.json(
+    { error: "指导已在其他页面更新，请刷新后重试；当前填写内容仍保留" },
+    { status: 409 },
+  );
+}
+
 function clean(value: unknown, label: string, maxLength: number) {
   const text = String(value ?? "").trim();
   if (text.length > maxLength) throw new InputError(`${label}不能超过 ${maxLength} 个字符`);
@@ -22,6 +29,7 @@ async function readStudentWorkspace(studentId: string) {
       n.content, n.next_action, n.due_date, n.status, n.created_at, n.updated_at,
       n.acceptance_criteria, n.verification_mode, n.acknowledged_at,
       n.student_reported_at, n.mentor_verified_at, n.completed_at, n.completion_note,
+      n.version,
       u.display_name AS mentor_name, completed_by.display_name AS completed_by_name,
       p.title AS source_title, p.kind AS source_kind
       FROM student_guidance_notes n
@@ -84,7 +92,9 @@ export async function GET(request: Request) {
     if (!(await canViewStudent(auth.user, studentId))) {
       return Response.json({ error: "无权查看该学生的指导与飞书总结" }, { status: 403 });
     }
-    return Response.json(await readStudentWorkspace(studentId));
+    return Response.json(await readStudentWorkspace(studentId), {
+      headers: { "Cache-Control": "private, no-store", Vary: "Cookie" },
+    });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "导师指导读取失败" }, { status: 500 });
   }
@@ -186,12 +196,16 @@ export async function PATCH(request: Request) {
       20,
     );
     const completionNote = clean(body.completionNote, "完成说明", 1000);
+    const expectedVersion = Number(body.expectedVersion);
     if (!Number.isInteger(id) || !guidanceActions.has(action)) {
       throw new InputError("导师指导状态参数无效");
     }
+    if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
+      throw new InputError("缺少有效的指导版本，请刷新后重试");
+    }
     const d1 = getD1();
     const note = await d1.prepare(`SELECT id, student_id, mentor_user_id, status, acknowledged_at,
-      verification_mode, student_reported_at
+      verification_mode, student_reported_at, mentor_verified_at, completion_note, version
       FROM student_guidance_notes WHERE id = ?`)
       .bind(id).first<{
         id: number;
@@ -201,6 +215,9 @@ export async function PATCH(request: Request) {
         acknowledged_at: string | null;
         verification_mode: "self_report" | "mentor_verify";
         student_reported_at: string | null;
+        mentor_verified_at: string | null;
+        completion_note: string;
+        version: number;
       }>();
     if (!note) return Response.json({ error: "导师指导不存在" }, { status: 404 });
     if (!(await canViewStudent(auth.user, note.student_id))) {
@@ -226,17 +243,23 @@ export async function PATCH(request: Request) {
       }
     }
     const actorType = isStudent ? "student" : "staff";
+    if (note.version !== expectedVersion) {
+      return guidanceConflictResponse();
+    }
 
     if (action === "acknowledge") {
       const [updated] = await d1.batch([
         d1.prepare(`UPDATE student_guidance_notes SET acknowledged_at = CURRENT_TIMESTAMP,
-          updated_at = CURRENT_TIMESTAMP WHERE id = ? AND acknowledged_at IS NULL`).bind(id),
+          updated_at = CURRENT_TIMESTAMP, version = version + 1
+          WHERE id = ? AND acknowledged_at IS NULL AND version = ?`).bind(id, expectedVersion),
         d1.prepare(`INSERT INTO student_guidance_events
           (guidance_note_id, actor_user_id, actor_type, action, note)
           SELECT ?, ?, ?, 'acknowledged', '' WHERE changes() > 0`).bind(id, auth.user.id, actorType),
       ]);
+      if (!updated.meta.changes) return guidanceConflictResponse();
       return Response.json({
-        message: updated.meta.changes ? "已向导师确认收到这条指导" : "这条指导已确认收到",
+        message: "已向导师确认收到这条指导",
+        version: expectedVersion + 1,
       });
     }
 
@@ -247,16 +270,19 @@ export async function PATCH(request: Request) {
           d1.prepare(`UPDATE student_guidance_notes SET
             acknowledged_at = COALESCE(acknowledged_at, CURRENT_TIMESTAMP),
             student_reported_at = CURRENT_TIMESTAMP, completion_note = ?,
-            updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'open'`)
-            .bind(completionNote, id),
+            updated_at = CURRENT_TIMESTAMP, version = version + 1
+            WHERE id = ? AND status = 'open' AND version = ?`)
+            .bind(completionNote, id, expectedVersion),
           d1.prepare(`INSERT INTO student_guidance_events
             (guidance_note_id, actor_user_id, actor_type, action, note)
             SELECT ?, ?, 'student', 'completed', ? WHERE changes() > 0`)
             .bind(id, auth.user.id, `学生提交完成说明：${completionNote}`),
         ]);
+        if (!updated.meta.changes) return guidanceConflictResponse();
         return Response.json({
-          message: updated.meta.changes ? "完成说明已提交，等待导师验收" : "这条指导已等待导师验收",
+          message: "完成说明已提交，等待导师验收",
           awaitingMentorVerification: true,
+          version: expectedVersion + 1,
         });
       }
       const [updated] = await d1.batch([
@@ -265,36 +291,37 @@ export async function PATCH(request: Request) {
           completed_at = CURRENT_TIMESTAMP, completed_by_user_id = ?,
           completion_note = CASE WHEN ? = '' THEN completion_note ELSE ? END,
           mentor_verified_at = CASE WHEN ? = 'staff' THEN CURRENT_TIMESTAMP ELSE mentor_verified_at END,
-          updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'open'
+          updated_at = CURRENT_TIMESTAMP, version = version + 1
+          WHERE id = ? AND status = 'open' AND version = ?
             AND (? = 0 OR student_reported_at IS NOT NULL)`)
-          .bind(auth.user.id, completionNote, completionNote, actorType, id,
+          .bind(auth.user.id, completionNote, completionNote, actorType, id, expectedVersion,
             !isStudent && note.verification_mode === "mentor_verify" ? 1 : 0),
         d1.prepare(`INSERT INTO student_guidance_events
           (guidance_note_id, actor_user_id, actor_type, action, note)
           SELECT ?, ?, ?, 'completed', ? WHERE changes() > 0`)
           .bind(id, auth.user.id, actorType, completionNote),
       ]);
-      if (!updated.meta.changes && !isStudent && note.verification_mode === "mentor_verify") {
-        return Response.json({ error: "指导状态已变化，请刷新后重新验收" }, { status: 409 });
-      }
+      if (!updated.meta.changes) return guidanceConflictResponse();
       return Response.json({
-        message: updated.meta.changes
-          ? (isStudent ? "指导事项已完成，导师可以看到完成记录" : "已完成导师验收")
-          : "指导事项已经完成",
+        message: isStudent ? "指导事项已完成，导师可以看到完成记录" : "已完成导师验收",
+        version: expectedVersion + 1,
       });
     }
 
     const [updated] = await d1.batch([
       d1.prepare(`UPDATE student_guidance_notes SET status = 'open', completed_at = NULL,
         completed_by_user_id = NULL, completion_note = '', student_reported_at = NULL,
-        mentor_verified_at = NULL, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND (status = 'completed' OR student_reported_at IS NOT NULL)`).bind(id),
+        mentor_verified_at = NULL, updated_at = CURRENT_TIMESTAMP, version = version + 1
+        WHERE id = ? AND (status = 'completed' OR student_reported_at IS NOT NULL)
+          AND version = ?`).bind(id, expectedVersion),
       d1.prepare(`INSERT INTO student_guidance_events
         (guidance_note_id, actor_user_id, actor_type, action, note)
         SELECT ?, ?, 'staff', 'reopened', '' WHERE changes() > 0`).bind(id, auth.user.id),
     ]);
+    if (!updated.meta.changes) return guidanceConflictResponse();
     return Response.json({
-      message: updated.meta.changes ? "指导事项已重新打开" : "指导事项仍在进行中",
+      message: "指导事项已重新打开",
+      version: expectedVersion + 1,
     });
   } catch (error) {
     return Response.json(

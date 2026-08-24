@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-export const CURRENT_SCHEMA_VERSION = 18;
+export const CURRENT_SCHEMA_VERSION = 19;
 
 const REQUIRED_TABLES = [
   "students",
@@ -20,8 +20,10 @@ const REQUIRED_TABLES = [
   "notification_deliveries",
   "progress_audit_events",
   "progress_attachments",
+  "progress_file_cleanup_queue",
   "progress_revisions",
   "student_papers",
+  "paper_submission_candidates",
   "paper_progress_details",
   "research_proposals",
   "research_milestones",
@@ -48,7 +50,7 @@ export function getD1() {
 }
 
 async function ensureColumn(
-  table: "app_user_role_events" | "progress_entries" | "progress_attachments" | "progress_evidence_sources" | "research_milestones" | "student_guidance_notes" | "notification_deliveries",
+  table: "app_user_role_events" | "progress_entries" | "progress_attachments" | "progress_evidence_sources" | "research_milestones" | "student_guidance_notes" | "notification_deliveries" | "meeting_requests",
   column: string,
   definition: string,
 ) {
@@ -149,6 +151,8 @@ async function migrateDatabase(previousVersion: number | null) {
       reviewer_note TEXT NOT NULL DEFAULT '',
       reviewed_at TEXT,
       current_revision INTEGER NOT NULL DEFAULT 1,
+      idempotency_key TEXT NOT NULL DEFAULT '',
+      request_hash TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS app_users (
@@ -201,6 +205,7 @@ async function migrateDatabase(previousVersion: number | null) {
       completed_at TEXT,
       completed_by_user_id INTEGER REFERENCES app_users(id),
       completion_note TEXT NOT NULL DEFAULT '',
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
@@ -256,6 +261,8 @@ async function migrateDatabase(previousVersion: number | null) {
       response_note TEXT NOT NULL DEFAULT '',
       handled_at TEXT,
       version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+      idempotency_key TEXT NOT NULL DEFAULT '',
+      request_hash TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
@@ -322,6 +329,17 @@ async function migrateDatabase(previousVersion: number | null) {
       uploaded_by_user_id INTEGER NOT NULL REFERENCES app_users(id),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS progress_file_cleanup_queue (
+      storage_key TEXT PRIMARY KEY,
+      progress_entry_id INTEGER REFERENCES progress_entries(id) ON DELETE SET NULL,
+      student_id TEXT NOT NULL,
+      revision_number INTEGER NOT NULL DEFAULT 1,
+      reason TEXT NOT NULL DEFAULT 'compensation_failed',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS progress_revisions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       progress_entry_id INTEGER NOT NULL REFERENCES progress_entries(id),
@@ -347,6 +365,22 @@ async function migrateDatabase(previousVersion: number | null) {
       status TEXT NOT NULL DEFAULT 'active',
       latest_progress_at TEXT,
       created_by_user_id INTEGER NOT NULL REFERENCES app_users(id),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS paper_submission_candidates (
+      progress_entry_id INTEGER PRIMARY KEY REFERENCES progress_entries(id),
+      title TEXT NOT NULL,
+      paper_type TEXT NOT NULL,
+      target_venue TEXT NOT NULL DEFAULT '',
+      planned_submission_date TEXT NOT NULL,
+      stage TEXT NOT NULL,
+      manuscript_version TEXT NOT NULL DEFAULT '',
+      next_action TEXT NOT NULL,
+      next_action_due_date TEXT NOT NULL,
+      blocker TEXT NOT NULL DEFAULT '',
+      submission_identifier TEXT NOT NULL DEFAULT '',
+      promoted_paper_id INTEGER REFERENCES student_papers(id),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
@@ -516,10 +550,13 @@ async function migrateDatabase(previousVersion: number | null) {
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_audit_entry_created ON progress_audit_events(progress_entry_id, created_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_attachments_storage_key ON progress_attachments(storage_key)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_attachments_entry_created ON progress_attachments(progress_entry_id, created_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_cleanup_updated ON progress_file_cleanup_queue(updated_at)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_cleanup_entry ON progress_file_cleanup_queue(progress_entry_id)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_revisions_entry_number ON progress_revisions(progress_entry_id, revision_number)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_revisions_entry_created ON progress_revisions(progress_entry_id, created_at)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_papers_student_status ON student_papers(student_id, status, updated_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_student_papers_stage_due ON student_papers(current_stage, planned_submission_date)"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_candidates_promoted ON paper_submission_candidates(promoted_paper_id)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_paper_progress_paper_created ON paper_progress_details(paper_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_paper_progress_due ON paper_progress_details(next_action_due_date, stage)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_research_proposals_student_unique ON research_proposals(student_id)"),
@@ -557,6 +594,8 @@ async function migrateDatabase(previousVersion: number | null) {
   await ensureColumn("progress_entries", "reviewed_by_user_id", "INTEGER REFERENCES app_users(id)");
   await ensureColumn("progress_entries", "review_claimed_at", "TEXT");
   await ensureColumn("progress_entries", "current_revision", "INTEGER NOT NULL DEFAULT 1");
+  await ensureColumn("progress_entries", "idempotency_key", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("progress_entries", "request_hash", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn("progress_entries", "updated_at", "TEXT");
   await ensureColumn("progress_attachments", "revision_number", "INTEGER NOT NULL DEFAULT 1");
   await ensureColumn("progress_evidence_sources", "revision_number", "INTEGER NOT NULL DEFAULT 1");
@@ -574,12 +613,17 @@ async function migrateDatabase(previousVersion: number | null) {
   await ensureColumn("student_guidance_notes", "completed_at", "TEXT");
   await ensureColumn("student_guidance_notes", "completed_by_user_id", "INTEGER REFERENCES app_users(id)");
   await ensureColumn("student_guidance_notes", "completion_note", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("student_guidance_notes", "version", "INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1)");
   await ensureColumn("notification_deliveries", "attempt_token", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn("notification_deliveries", "provider_message_id", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("meeting_requests", "idempotency_key", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("meeting_requests", "request_hash", "TEXT NOT NULL DEFAULT ''");
 
   await d1.batch([
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_attachments_entry_revision ON progress_attachments(progress_entry_id, revision_number)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_evidence_entry_revision ON progress_evidence_sources(progress_entry_id, revision_number)"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_submitter_idempotency ON progress_entries(submitted_by_user_id, idempotency_key) WHERE idempotency_key <> ''"),
+    d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_meeting_requester_idempotency ON meeting_requests(requested_by_user_id, idempotency_key) WHERE idempotency_key <> ''"),
     d1.prepare(`UPDATE progress_entries SET
       review_status = CASE status
         WHEN 'substantive' THEN 'accepted'
