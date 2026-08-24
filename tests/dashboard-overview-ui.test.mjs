@@ -112,6 +112,6 @@ test("overview UI keeps old views, accessible drawer, responsive cards, and read
   assert.match(table, /onClick=\{\(event\) => \{[\s\S]*onOpen\(student\.studentId\)/);
   assert.match(table, /event\.key !== "Enter" && event\.key !== " "/);
   assert.match(mobile, /group-overview-mobile-list/);
-  assert.match(css, /@media \(max-width: 1120px\)/);
+  assert.match(css, /@media \(max-width: 1280px\)/);
   assert.match(css, /\.group-overview-mobile-list\s*\{\s*display: grid/);
 });
