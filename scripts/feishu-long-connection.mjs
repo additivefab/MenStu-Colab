@@ -4,11 +4,16 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 
 import {
   detectMeetingSummary,
+  detectSummaryReplyRequest,
   detectSummaryImportCommand,
   extractFeishuDocxDocumentIds,
   extractFeishuMinuteTokens,
   extractFeishuMessageText,
+  feishuMentionsBot,
+  hasUsableMeetingSummaryText,
+  isFeishuMentionOnly,
 } from "../lib/feishu-events.ts";
+import { formatFeishuImportFeedback } from "../lib/feishu-import-feedback.ts";
 
 const appId = process.env.FEISHU_APP_ID?.trim() ?? "";
 const appSecret = process.env.FEISHU_APP_SECRET?.trim() ?? "";
@@ -26,6 +31,7 @@ const historyScans = new Map();
 const minuteArtifacts = new Map();
 const docxSummaries = new Map();
 const maxHistoryMessages = 10_000;
+let botIdentityPromise;
 
 const apiClient = new Lark.Client({
   appId,
@@ -36,6 +42,78 @@ const apiClient = new Lark.Client({
 
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function resolveBotIdentity() {
+  if (botIdentityPromise) return botIdentityPromise;
+  botIdentityPromise = apiClient.request({
+    url: "/open-apis/bot/v3/info",
+    method: "GET",
+  }).then((response) => {
+    if ((response.code ?? 0) !== 0) throw new Error(`飞书机器人接口返回 code ${response.code}`);
+    if (!response.bot?.open_id) throw new Error("飞书机器人接口未返回身份");
+    return {
+      openId: response.bot.open_id,
+      name: response.bot.app_name || "",
+    };
+  }).catch((error) => {
+    console.warn(`[探研] 暂时无法确认机器人身份 · ${error instanceof Error ? error.message : "未知错误"}`);
+    setTimeout(() => {
+      botIdentityPromise = undefined;
+      void resolveBotIdentity();
+    }, 60_000);
+    return { openId: "", name: "" };
+  });
+  return botIdentityPromise;
+}
+
+function messageMentionsBot(message, identity) {
+  return feishuMentionsBot(message?.mentions, identity.openId);
+}
+
+function eventIsAutomated(event) {
+  const senderType = (event.sender?.sender_type || "").toLowerCase();
+  return senderType === "app" || senderType === "bot" || senderType === "assistant";
+}
+
+function eventComesFromBot(event, identity) {
+  const senderOpenId = event.sender?.sender_id?.open_id || "";
+  const senderAppId = event.sender?.sender_id?.app_id || "";
+  if (identity.openId) return senderOpenId === identity.openId || senderAppId === appId;
+  return eventIsAutomated(event);
+}
+
+function apiItemComesFromCurrentBot(item, identity) {
+  const senderId = item?.sender?.id || "";
+  const openBotId = item?.sender?.open_bot_id || "";
+  return Boolean(
+    senderId === appId
+    || (identity.openId && (senderId === identity.openId || openBotId === identity.openId)),
+  );
+}
+
+function apiItemIsAutomated(item) {
+  const senderType = (item?.sender?.sender_type || "").toLowerCase();
+  return senderType === "app" || senderType === "bot" || senderType === "assistant";
+}
+
+async function replyToMessage(messageId, text, phase = "result") {
+  if (!messageId || !text) return false;
+  try {
+    const response = await apiClient.im.v1.message.reply({
+      path: { message_id: messageId },
+      data: {
+        msg_type: "text",
+        content: JSON.stringify({ text: text.slice(0, 2_000) }),
+        uuid: createHmac("sha256", appSecret).update(`reply:${messageId}:${phase}`).digest("hex").slice(0, 32),
+      },
+    });
+    if (response.code && response.code !== 0) throw new Error(`飞书消息接口返回 code ${response.code}`);
+    return Boolean(response.data?.message_id);
+  } catch (error) {
+    console.warn(`[探研] 导入结果暂时无法回复到群里 · ${error instanceof Error ? error.message : "未知错误"}`);
+    return false;
+  }
 }
 
 function relaySignature(rawBody, timestamp, nonce) {
@@ -96,7 +174,17 @@ function postRelayWithCurl(rawBody, timestamp, nonce, signature) {
       if (!Number.isInteger(status) || status < 200 || status >= 300) {
         return reject(new Error(`站点返回 HTTP ${status || "未知"}`));
       }
-      resolve();
+      const responseBody = markerIndex >= 0 ? stdout.slice(0, markerIndex).trim() : "";
+      if (!responseBody) return reject(new Error("站点响应内容为空"));
+      try {
+        const parsed = JSON.parse(responseBody);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return reject(new Error("站点响应格式异常"));
+        }
+        resolve(parsed);
+      } catch {
+        reject(new Error("站点响应格式异常"));
+      }
     });
     child.stdin.on("error", () => {});
     child.stdin.end(rawBody);
@@ -107,7 +195,7 @@ async function forwardOnce(event) {
   const rawBody = JSON.stringify(event);
   const timestamp = String(Math.floor(Date.now() / 1000));
   const nonce = randomBytes(18).toString("base64url");
-  await postRelayWithCurl(rawBody, timestamp, nonce, relaySignature(rawBody, timestamp, nonce));
+  return await postRelayWithCurl(rawBody, timestamp, nonce, relaySignature(rawBody, timestamp, nonce));
 }
 
 async function forwardWithRetry(event) {
@@ -118,14 +206,15 @@ async function forwardWithRetry(event) {
     for (const delay of [0, 1_000, 3_000, 8_000, 15_000]) {
       if (delay) await sleep(delay);
       try {
-        await forwardOnce(event);
-        console.info(`[探研] 已暂存候选总结 · ${messageId.slice(-10)}`);
-        return;
+        const result = await forwardOnce(event);
+        console.info(`[探研] 已处理候选总结 · ${messageId.slice(-10)} · ${result.outcome || "ok"}`);
+        return result;
       } catch (error) {
         lastError = error;
       }
     }
     console.error(`[探研] 候选总结转发失败 · ${messageId.slice(-10)} · ${lastError?.message || "未知错误"}`);
+    return { outcome: "relay_failed" };
   })().finally(() => pending.delete(messageId));
   pending.set(messageId, task);
   return task;
@@ -208,7 +297,6 @@ async function fetchDocxSummary(documentId) {
 }
 
 async function enrichDocxMessage(event, text) {
-  if (!detectMeetingSummary(text)) return null;
   const documentId = extractFeishuDocxDocumentIds(text)[0];
   if (!documentId) return null;
   const summary = await fetchDocxSummary(documentId);
@@ -227,8 +315,11 @@ async function enrichDocxMessage(event, text) {
   };
 }
 
-async function enrichMeetingMessage(event, text) {
-  return await enrichMinuteMessage(event, text) || await enrichDocxMessage(event, text);
+async function enrichMeetingMessage(event, text, options = {}) {
+  const minuteMessage = await enrichMinuteMessage(event, text);
+  if (minuteMessage) return minuteMessage;
+  if (options.allowBareDocx === false && !detectMeetingSummary(text)) return null;
+  return await enrichDocxMessage(event, text);
 }
 
 function historySender(sender) {
@@ -251,6 +342,8 @@ function historyEvent(commandEvent, item) {
     sender: historySender(item.sender),
     message: {
       message_id: messageId,
+      root_id: item.root_id || "",
+      parent_id: item.parent_id || "",
       chat_id: item.chat_id || commandEvent.message?.chat_id || "",
       chat_type: "group",
       message_type: item.msg_type || "",
@@ -260,11 +353,71 @@ function historyEvent(commandEvent, item) {
   };
 }
 
-async function scanChatHistory(commandEvent) {
+async function fetchReferencedCandidate(commandEvent, identity) {
+  const commandMessage = commandEvent.message;
+  const commandChatId = commandMessage?.chat_id || "";
+  let referenceId = commandMessage?.parent_id || commandMessage?.root_id || "";
+  const visited = new Set();
+
+  for (let depth = 0; referenceId && depth < 3 && !visited.has(referenceId); depth += 1) {
+    visited.add(referenceId);
+    const response = await apiClient.im.v1.message.get({ path: { message_id: referenceId } });
+    if (response.code && response.code !== 0) {
+      throw new Error(`飞书消息读取接口返回 code ${response.code}`);
+    }
+    const items = response.data?.items || [];
+    const item = items.find((candidate) => candidate.message_id === referenceId) || items[0];
+    if (!item || item.deleted) return null;
+    if (commandChatId && item.chat_id && commandChatId !== item.chat_id) return null;
+
+    const parentId = item.parent_id || "";
+    const rootId = item.root_id && item.root_id !== item.message_id ? item.root_id : "";
+    const text = extractFeishuMessageText(item.body?.content || "");
+    const hasSourceLink = extractFeishuMinuteTokens(text).length > 0 || extractFeishuDocxDocumentIds(text).length > 0;
+    if (apiItemComesFromCurrentBot(item, identity)) {
+      referenceId = parentId || rootId;
+      continue;
+    }
+
+    if (
+      detectMeetingSummary(text)
+      || hasSourceLink
+    ) {
+      return { event: historyEvent(commandEvent, item), text };
+    }
+
+    referenceId = parentId || rootId;
+  }
+  return null;
+}
+
+async function processCandidate(candidateEvent, text, feedbackMessageId) {
+  const hasSourceLink = extractFeishuMinuteTokens(text).length > 0 || extractFeishuDocxDocumentIds(text).length > 0;
+  const enrichedEvent = await enrichMeetingMessage(candidateEvent, text);
+  const hasUsableInlineSummary = hasUsableMeetingSummaryText(text);
+  if (!enrichedEvent && hasSourceLink && !hasUsableInlineSummary) {
+    await replyToMessage(
+      feedbackMessageId,
+      "链接已识别，但暂时没读取到可导入的内容。请确认机器人有这份记录或文档的访问权限。",
+    );
+    return { outcome: "source_unreadable" };
+  }
+  if (!enrichedEvent && !detectMeetingSummary(text)) {
+    await replyToMessage(
+      feedbackMessageId,
+      "我读了你回复的消息，但没有识别出可导入的内容。请回复真正的原消息，或直接发送来源链接。",
+    );
+    return { outcome: "not_summary" };
+  }
+  const result = await forwardWithRetry(enrichedEvent || candidateEvent);
+  await replyToMessage(feedbackMessageId, formatFeishuImportFeedback(result));
+  return result;
+}
+
+async function scanChatHistory(commandEvent, identity) {
   const chatId = commandEvent.message?.chat_id || "";
   if (!chatId) {
-    console.error("[探研] 无法扫描群历史：当前命令缺少群聊 ID。");
-    return;
+    throw new Error("当前命令缺少群聊 ID");
   }
 
   let pageToken;
@@ -294,10 +447,13 @@ async function scanChatHistory(commandEvent) {
       }
       scanned += 1;
       if (!item.message_id || item.deleted) continue;
+      if (apiItemComesFromCurrentBot(item, identity)) continue;
       const text = extractFeishuMessageText(item.body?.content || "");
+      const hasSourceLink = extractFeishuMinuteTokens(text).length > 0 || extractFeishuDocxDocumentIds(text).length > 0;
+      if (apiItemIsAutomated(item) && !hasSourceLink && text.length < 120) continue;
       if (detectSummaryImportCommand(text)) continue;
       const candidateEvent = historyEvent(commandEvent, item);
-      const enrichedEvent = await enrichMeetingMessage(candidateEvent, text);
+      const enrichedEvent = await enrichMeetingMessage(candidateEvent, text, { allowBareDocx: false });
       if (!enrichedEvent && !detectMeetingSummary(text)) continue;
       matched += 1;
       await forwardWithRetry(enrichedEvent || candidateEvent);
@@ -308,39 +464,94 @@ async function scanChatHistory(commandEvent) {
   }
 
   console.info(`[探研] 群历史扫描完成 · 扫描 ${scanned} 条 · 识别 ${matched} 份纪要${truncated ? " · 已达安全上限" : ""}`);
+  return { scanned, matched, truncated };
 }
 
-function startHistoryScan(event) {
+function startHistoryScan(event, identity) {
   const chatId = event.message?.chat_id || "";
-  if (!chatId || historyScans.has(chatId)) return;
-  const task = scanChatHistory(event)
+  const messageId = event.message?.message_id || "";
+  if (!chatId) return;
+  if (historyScans.has(chatId)) {
+    void replyToMessage(messageId, "这个群的历史总结正在扫描，不需要重复发起。完成后我会回复结果。", "busy");
+    return;
+  }
+  const task = (async () => {
+    await replyToMessage(messageId, "开始扫描当前群的历史总结，完成后我会回复识别结果。", "reading");
+    const result = await scanChatHistory(event, identity);
+    await replyToMessage(
+      messageId,
+      `历史扫描完成：查看 ${result.scanned} 条消息，识别 ${result.matched} 份纪要${result.truncated ? "；已到安全上限" : ""}。`,
+    );
+  })()
     .catch((error) => {
       console.error(`[探研] 群历史扫描失败 · ${error instanceof Error ? error.message : "未知错误"}`);
+      void replyToMessage(messageId, "历史总结扫描暂时失败，请稍后再试；原消息不会丢失。");
     })
     .finally(() => historyScans.delete(chatId));
   historyScans.set(chatId, task);
 }
 
-async function handleGroupMessage(event, text) {
-  const enrichedEvent = await enrichMeetingMessage(event, text);
-  if (enrichedEvent) {
-    await forwardWithRetry(enrichedEvent);
-    return;
+async function handleReferencedImport(event, identity) {
+  const messageId = event.message?.message_id || "";
+  await replyToMessage(messageId, "收到，我正在读取你回复的那条消息。", "reading");
+  try {
+    const candidate = await fetchReferencedCandidate(event, identity);
+    if (!candidate) {
+      await replyToMessage(
+        messageId,
+        "我没能从回复上下文里找到可导入的内容。请直接回复原消息只 @我，或把来源链接发到群里。",
+      );
+      return;
+    }
+    await processCandidate(candidate.event, candidate.text, messageId);
+  } catch (error) {
+    console.warn(`[探研] 回复上下文暂不可读取 · ${error instanceof Error ? error.message : "未知错误"}`);
+    await replyToMessage(messageId, "我看到了你的回复，但暂时读不到原消息。请稍后重试，或直接发送总结链接。");
   }
-  if (detectMeetingSummary(text)) await forwardWithRetry(event);
+}
+
+async function handleDirectImport(event, text) {
+  const messageId = event.message?.message_id || "";
+  if (extractFeishuMinuteTokens(text).length || extractFeishuDocxDocumentIds(text).length) {
+    await replyToMessage(messageId, "链接收到，我正在读取其中的内容。", "reading");
+  } else {
+    await replyToMessage(messageId, "总结收到，我正在识别学生并写入系统。", "reading");
+  }
+  await processCandidate(event, text, messageId);
 }
 
 const eventDispatcher = new Lark.EventDispatcher({}).register({
   "im.message.receive_v1": async (event) => {
     const message = event.message;
     if (!message || message.chat_type !== "group") return;
+    const identity = await resolveBotIdentity();
+    if (eventComesFromBot(event, identity)) return;
     const text = extractFeishuMessageText(message.content || "");
+    const hasSourceLink = extractFeishuMinuteTokens(text).length > 0 || extractFeishuDocxDocumentIds(text).length > 0;
+    if (eventIsAutomated(event) && !hasSourceLink && text.length < 120) return;
     if (detectSummaryImportCommand(text)) {
-      startHistoryScan(event);
+      startHistoryScan(event, identity);
       return;
     }
-    if (!detectMeetingSummary(text) && extractFeishuMinuteTokens(text).length === 0) return;
-    void handleGroupMessage(event, text);
+    const hasReference = Boolean(message.parent_id || message.root_id);
+    const mentionedBot = messageMentionsBot(message, identity);
+    if (detectSummaryReplyRequest(text, { hasReference, mentionedBot })) {
+      void handleReferencedImport(event, identity);
+      return;
+    }
+    if (
+      detectMeetingSummary(text)
+      || hasSourceLink
+    ) {
+      void handleDirectImport(event, text);
+      return;
+    }
+    if (mentionedBot && isFeishuMentionOnly(text)) {
+      void replyToMessage(
+        message.message_id,
+        "我可以直接理解导入上下文：回复一条原消息只 @我即可；来源链接也可以直接发，不用再写“导入这个总结”。",
+      );
+    }
   },
 });
 
@@ -358,8 +569,9 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 }
 
 async function startBridge() {
+  const identity = await resolveBotIdentity();
   await wsClient.start({ eventDispatcher });
-  console.info("[探研] 飞书长连接客户端已启动；普通群消息会在本机过滤，不会上传；支持妙记 AI 产物、智能纪要文档与“导入所有总结”。");
+  console.info(`[探研] 飞书长连接客户端已启动；机器人身份${identity.openId ? "已确认" : "暂未确认、将自动重试"}；支持回复总结仅 @机器人、链接直传、结果回执与“导入所有总结”。`);
 }
 
 startBridge().catch(() => {

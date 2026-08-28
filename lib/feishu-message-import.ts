@@ -1,5 +1,9 @@
 import { ensureDatabase, getD1 } from "./database";
-import { detectMeetingSummary, extractFeishuMessageText } from "./feishu-events";
+import {
+  detectMeetingSummary,
+  extractFeishuMessageText,
+  extractFeishuSummarySourceFingerprint,
+} from "./feishu-events";
 import { splitMeetingProgressByStudent } from "./feishu-progress-extraction";
 import { sha256Text } from "./progress-evidence";
 import { importedProgressSnapshot, removeImportedProgress } from "./progress-import";
@@ -11,6 +15,8 @@ export type FeishuMessageEvent = {
   };
   message?: {
     message_id?: string;
+    root_id?: string;
+    parent_id?: string;
     chat_id?: string;
     chat_type?: string;
     message_type?: string;
@@ -110,13 +116,15 @@ async function autoCreateStudentProgress(importId: number, extractedText: string
 export async function stageFeishuMeetingSummary(eventId: string, event: FeishuMessageEvent | undefined) {
   const message = event?.message;
   if (!eventId || !message?.message_id || !message.chat_id || message.chat_type !== "group") {
-    return { staged: false, filtered: true };
+    return { staged: false, filtered: true, outcome: "filtered" as const };
   }
 
   const rawContent = typeof message.content === "string" ? message.content : "";
   const extractedText = extractFeishuMessageText(rawContent);
   const detectedReason = detectMeetingSummary(extractedText);
-  if (!detectedReason) return { staged: false, filtered: true };
+  if (!detectedReason) return { staged: false, filtered: true, outcome: "filtered" as const };
+  const sourceFingerprint = extractFeishuSummarySourceFingerprint(rawContent);
+  const storedEventId = sourceFingerprint ? `source:${await sha256Text(sourceFingerprint)}` : eventId;
 
   const senderIds = event?.sender?.sender_id;
   const senderId = senderIds?.open_id ?? senderIds?.user_id ?? senderIds?.app_id ?? senderIds?.union_id ?? "";
@@ -127,7 +135,7 @@ export async function stageFeishuMeetingSummary(eventId: string, event: FeishuMe
      raw_content, extracted_text, detected_reason, message_created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(
-      eventId,
+      storedEventId,
       message.message_id,
       message.chat_id,
       senderId,
@@ -141,13 +149,26 @@ export async function stageFeishuMeetingSummary(eventId: string, event: FeishuMe
     .run();
 
   const source = await d1.prepare(`SELECT id, status FROM feishu_meeting_summary_imports
-    WHERE message_id = ?`).bind(message.message_id)
+    WHERE message_id = ? OR event_id = ?
+    ORDER BY CASE WHEN message_id = ? THEN 0 ELSE 1 END LIMIT 1`)
+    .bind(message.message_id, storedEventId, message.message_id)
     .first<{ id: number; status: "pending" | "confirmed" | "ignored" }>();
   if (!source || source.status === "ignored") {
-    return { staged: (result.meta.changes ?? 0) > 0, filtered: false, autoAssigned: false };
+    return {
+      staged: (result.meta.changes ?? 0) > 0,
+      filtered: false,
+      autoAssigned: false,
+      outcome: "ignored" as const,
+    };
   }
   if (source.status === "confirmed") {
-    return { staged: false, filtered: false, autoAssigned: true, studentNames: [] as string[] };
+    return {
+      staged: false,
+      filtered: false,
+      autoAssigned: true,
+      studentNames: [] as string[],
+      outcome: "duplicate" as const,
+    };
   }
   const automatic = await autoCreateStudentProgress(
     source.id,
@@ -158,5 +179,6 @@ export async function stageFeishuMeetingSummary(eventId: string, event: FeishuMe
     staged: (result.meta.changes ?? 0) > 0,
     filtered: false,
     ...automatic,
+    outcome: automatic.autoAssigned ? "imported" as const : "needs_review" as const,
   };
 }

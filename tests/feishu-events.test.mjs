@@ -4,10 +4,15 @@ import test from "node:test";
 
 import {
   detectMeetingSummary,
+  detectSummaryReplyRequest,
   detectSummaryImportCommand,
   extractFeishuDocxDocumentIds,
   extractFeishuMinuteTokens,
   extractFeishuMessageText,
+  extractFeishuSummarySourceFingerprint,
+  feishuMentionsBot,
+  hasUsableMeetingSummaryText,
+  isFeishuMentionOnly,
   parseFeishuEvent,
 } from "../lib/feishu-events.ts";
 import { splitMeetingProgressByStudent } from "../lib/feishu-progress-extraction.ts";
@@ -43,6 +48,32 @@ test("recognizes the explicit current-group history import command", () => {
   assert.equal(detectSummaryImportCommand("帮我看看以前的消息"), null);
 });
 
+test("understands a bot mention as an import request only when it replies to context", () => {
+  assert.equal(feishuMentionsBot([{ id: { open_id: "ou_bot" } }], "ou_bot"), true);
+  assert.equal(feishuMentionsBot([{ id: "ou_bot" }], "ou_bot"), true);
+  assert.equal(feishuMentionsBot([{ id: { open_id: "ou_other" } }], "ou_bot"), false);
+  assert.equal(
+    detectSummaryReplyRequest("@成员", { hasReference: true, mentionedBot: true }),
+    "回复并@机器人",
+  );
+  assert.equal(
+    detectSummaryReplyRequest("@成员 帮我导入这个总结", { hasReference: true, mentionedBot: true }),
+    "帮我导入这个总结",
+  );
+  assert.equal(
+    detectSummaryReplyRequest("@成员 把这个导进系统", { hasReference: true, mentionedBot: true }),
+    "把这个导进系统",
+  );
+  assert.equal(detectSummaryReplyRequest("@成员", { hasReference: false, mentionedBot: true }), null);
+  assert.equal(detectSummaryReplyRequest("@成员", { hasReference: true, mentionedBot: false }), null);
+  assert.equal(
+    detectSummaryReplyRequest("@成员 这周大家哪天开会", { hasReference: true, mentionedBot: true }),
+    null,
+  );
+  assert.equal(isFeishuMentionOnly("@成员，"), true);
+  assert.equal(isFeishuMentionOnly("@成员 导入"), false);
+});
+
 test("extracts only valid Feishu Minutes tokens from links", () => {
   assert.deepEqual(
     extractFeishuMinuteTokens("纪要：https://example.feishu.cn/minutes/obcnq3b9jl72l83w4f14xxxx"),
@@ -70,6 +101,31 @@ test("extracts only valid Feishu Docx document IDs from links", () => {
   assert.deepEqual(extractFeishuDocxDocumentIds("https://example.feishu.cn/wiki/Dz1udaUpEo5fL1xW1Zqc2NKdnB0"), []);
 });
 
+test("fingerprints enriched sources independently of the sharing message", () => {
+  const docxA = JSON.stringify({
+    document_id: "Dz1udaUpEo5fL1xW1Zqc2NKdnB0",
+    original_content: "第一次分享",
+    ai_summary: "会议总结：确认实验方案并安排下一步任务。",
+  });
+  const docxB = JSON.stringify({
+    original_content: "第二次分享",
+    ai_summary: "会议总结：确认实验方案并安排下一步任务。",
+    document_id: "Dz1udaUpEo5fL1xW1Zqc2NKdnB0",
+  });
+  assert.equal(extractFeishuSummarySourceFingerprint(docxA), extractFeishuSummarySourceFingerprint(docxB));
+
+  const minuteA = JSON.stringify({
+    minute_token: "obcnq3b9jl72l83w4f14xxxx",
+    ai_artifacts: { summary: "确定方案", todos: [{ content: "补实验", is_done: false }] },
+  });
+  const minuteB = JSON.stringify({
+    minute_token: "obcnq3b9jl72l83w4f14xxxx",
+    ai_artifacts: { todos: [{ is_done: false, content: "补实验" }], summary: "确定方案" },
+  });
+  assert.equal(extractFeishuSummarySourceFingerprint(minuteA), extractFeishuSummarySourceFingerprint(minuteB));
+  assert.equal(extractFeishuSummarySourceFingerprint(JSON.stringify({ text: "普通消息" })), null);
+});
+
 test("rejects a Feishu event with an invalid signature", async () => {
   const request = encryptedRequest({ type: "url_verification" }, "test-encrypt-key");
   request.headers.set("x-lark-signature", "invalid");
@@ -78,7 +134,13 @@ test("rejects a Feishu event with an invalid signature", async () => {
 
 test("filters ordinary messages and recognizes structured meeting summaries", () => {
   assert.equal(detectMeetingSummary("大家下午三点见，材料已发群里"), null);
+  assert.equal(detectMeetingSummary("导入这份总结"), null);
+  assert.equal(detectMeetingSummary("会议纪要在哪里？"), null);
+  assert.equal(detectMeetingSummary("妙记打不开，怎么处理？"), null);
   assert.equal(detectMeetingSummary("AI 总结：本次讨论确认下一步实验方案"), "AI 总结");
+  assert.equal(detectMeetingSummary("AI 总结：讨论如何优化模型，张三负责实验。"), "AI 总结");
+  assert.equal(hasUsableMeetingSummaryText("智能纪要：https://example.feishu.cn/docx/Dz1udaUpEo5fL1xW1Zqc2NKdnB0"), false);
+  assert.equal(hasUsableMeetingSummaryText("AI 总结：本次讨论确认下一步实验方案"), true);
   const structured = "会议时间：今天。讨论内容：完成对照实验。".repeat(8);
   assert.equal(detectMeetingSummary(structured), "会议时间+讨论内容");
   assert.match(
