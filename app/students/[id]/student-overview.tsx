@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { AiRecordActions, DeletedAiRecords } from "../../../components/ai-record-actions";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { paperDeadlineState, paperStageMeta, paperStages, type PaperStage } from "../../../lib/paper-progress";
 
@@ -196,6 +197,7 @@ type GuidanceNote = {
 };
 
 type MeetingSummary = {
+  current_revision: number;
   link_id: number;
   import_id: number;
   progress_entry_id: number;
@@ -302,6 +304,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   const [outputs, setOutputs] = useState<ResearchOutput[]>([]);
   const [papers, setPapers] = useState<StudentPaper[]>([]);
   const [guidanceNotes, setGuidanceNotes] = useState<GuidanceNote[]>([]);
+  const [canManageAiRecords, setCanManageAiRecords] = useState(false);
   const [meetingSummaries, setMeetingSummaries] = useState<MeetingSummary[]>([]);
   const [viewerRole, setViewerRole] = useState<ViewerRole | null>(null);
   const [loading, setLoading] = useState(true);
@@ -351,7 +354,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       const [proposals, outputPayload, guidancePayload] = await Promise.all([
         proposalResponse.json() as Promise<{ proposals?: Proposal[]; error?: string }>,
         outputResponse.json() as Promise<{ outputs?: ResearchOutput[]; error?: string }>,
-        guidanceResponse.json() as Promise<{ notes?: GuidanceNote[]; meetingSummaries?: MeetingSummary[]; error?: string }>,
+        guidanceResponse.json() as Promise<{ notes?: GuidanceNote[]; meetingSummaries?: MeetingSummary[]; canManageAiRecords?: boolean; error?: string }>,
       ]);
       if (!proposalResponse.ok) throw new Error(proposals.error || "研究方案读取失败");
       if (!outputResponse.ok) throw new Error(outputPayload.error || "科研成果读取失败");
@@ -380,6 +383,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       setPapers((dashboard.papers ?? []).filter((paper) => paper.student_id === studentId));
       setGuidanceNotes(guidancePayload.notes ?? []);
       setMeetingSummaries(guidancePayload.meetingSummaries ?? []);
+      setCanManageAiRecords(guidancePayload.canManageAiRecords === true);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "学生信息读取失败");
     } finally {
@@ -920,10 +924,11 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       <div className="student-ai-summary-list">
         {meetingSummaries.map((item) => <details key={item.link_id}>
           <summary><span className="student-ai-mark">AI</span><div><small>{dateText(item.message_created_at)} · {item.source_label || "飞书智能纪要"}</small><strong>{item.title}</strong><p>{item.summary}</p></div><span className="student-ai-saved">✓ 已保存</span><i>点开查看</i></summary>
-          <div className="student-ai-summary-body"><div className="student-ai-summary-content"><span>完整总结</span><p>{item.summary}</p></div><dl><div><dt>导入识别</dt><dd>{item.detected_reason || "飞书 AI 总结"}</dd></div><div><dt>证据说明</dt><dd>{item.evidence || "飞书智能纪要自动归档"}</dd></div><div><dt>审核状态</dt><dd>{reviewLabels[item.review_status]}{item.assessment ? ` · ${item.assessment === "substantive" ? "实质性进展" : "支持性工作"}` : ""}</dd></div><div><dt>保存时间</dt><dd>{dateText(item.saved_at)}</dd></div>{item.content_sha256 ? <div><dt>内容指纹</dt><dd>{item.content_sha256.slice(0, 12)}</dd></div> : null}</dl>{item.reviewer_note ? <blockquote><b>导师反馈</b><p>{item.reviewer_note}</p></blockquote> : null}<footer><span>已作为个人进展 #{item.progress_entry_id} 保存</span><a href={`#progress-${item.progress_entry_id}`}>查看对应证据链 ↓</a></footer></div>
+          <div className="student-ai-summary-body"><div className="student-ai-summary-content"><span>完整总结</span><p>{item.summary}</p></div><dl><div><dt>导入识别</dt><dd>{item.detected_reason || "飞书 AI 总结"}</dd></div><div><dt>证据说明</dt><dd>{item.evidence || "飞书智能纪要自动归档"}</dd></div><div><dt>审核状态</dt><dd>{reviewLabels[item.review_status]}{item.assessment ? ` · ${item.assessment === "substantive" ? "实质性进展" : "支持性工作"}` : ""}</dd></div><div><dt>保存时间</dt><dd>{dateText(item.saved_at)}</dd></div>{item.content_sha256 ? <div><dt>内容指纹</dt><dd>{item.content_sha256.slice(0, 12)}</dd></div> : null}</dl>{item.reviewer_note ? <blockquote><b>导师反馈</b><p>{item.reviewer_note}</p></blockquote> : null}<footer><span>已作为个人进展 #{item.progress_entry_id} 保存</span><a href={`#progress-${item.progress_entry_id}`}>查看对应证据链 ↓</a>{canManageAiRecords ? <AiRecordActions record={{ id: item.progress_entry_id, title: item.title, current_revision: item.current_revision, review_status: item.review_status }} onChanged={load} /> : null}</footer></div>
         </details>)}
         {!meetingSummaries.length ? <div className="student-ai-summary-empty"><i>AI</i><div><strong>尚无已归属的飞书 AI 总结</strong><p>在飞书导入并识别到该学生后，总结会自动保存并出现在这里。</p></div></div> : null}
       </div>
+      {canManageAiRecords ? <DeletedAiRecords studentId={studentId} onChanged={load} /> : null}
     </section>
 
     <section className="student-paper-landscape" id="papers">
@@ -1003,7 +1008,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         <div className="student-section-head"><div><span>EVIDENCE & REVIEW</span><h2>个人进展与证据链</h2><p>飞书智能纪要和学生主动提交均归入这里；来源、审核和评价分开记录。</p></div><em>{student.progress.length}</em></div>
         <div className="student-progress-timeline">{student.progress.map((entry) => <article key={entry.id} id={`progress-${entry.id}`} tabIndex={-1}>
           <div className="student-timeline-marker"><i /><span>{dateText(entry.submitted_at)}</span></div>
-          <div className="student-timeline-card"><div><span className={`status-pill review-${entry.review_status}`}>{reviewLabels[entry.review_status]}</span><small>{entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.kind} · #{entry.id}</small></div><h3>{entry.paper?.title || entry.title}</h3><p>{entry.summary}</p><dl><div><dt>核验证据</dt><dd>{entry.evidence || "尚未填写"}</dd></div>{entry.paper ? <><div><dt>论文下一行动</dt><dd>{entry.paper.next_action} · {entry.paper.next_action_due_date}</dd></div>{entry.paper.blocker ? <div><dt>论文当前阻塞</dt><dd>{entry.paper.blocker}</dd></div> : null}{entry.paper.submission_identifier ? <div><dt>稿件编号 / DOI</dt><dd>{entry.paper.submission_identifier}</dd></div> : null}</> : null}{entry.project ? <><div><dt>关联课题节点</dt><dd>{entry.project.milestone_title || "未关联培养节点"}{entry.project.milestone_target_date ? ` · 目标 ${entry.project.milestone_target_date}` : ""}</dd></div><div><dt>课题下一行动</dt><dd>{entry.project.next_action} · {entry.project.next_action_due_date}</dd></div>{entry.project.blocker ? <div><dt>课题当前阻塞</dt><dd>{entry.project.blocker}</dd></div> : null}</> : null}{entry.assessment ? <div><dt>审核判断</dt><dd>{entry.assessment === "substantive" ? "实质性进展" : "支持性工作"}{entry.reviewer_name ? ` · ${entry.reviewer_name}` : ""}</dd></div> : null}{entry.reviewer_note ? <div><dt>审核意见</dt><dd>{entry.reviewer_note}</dd></div> : null}</dl>
+          <div className="student-timeline-card"><div><span className={`status-pill review-${entry.review_status}`}>{reviewLabels[entry.review_status]}</span><small>{entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.kind} · #{entry.id}</small></div><h3>{entry.paper?.title || entry.title}</h3><p>{entry.summary}</p>{entry.ai_summary_origin && canManageAiRecords ? <AiRecordActions record={entry} onChanged={load} /> : null}<dl><div><dt>核验证据</dt><dd>{entry.evidence || "尚未填写"}</dd></div>{entry.paper ? <><div><dt>论文下一行动</dt><dd>{entry.paper.next_action} · {entry.paper.next_action_due_date}</dd></div>{entry.paper.blocker ? <div><dt>论文当前阻塞</dt><dd>{entry.paper.blocker}</dd></div> : null}{entry.paper.submission_identifier ? <div><dt>稿件编号 / DOI</dt><dd>{entry.paper.submission_identifier}</dd></div> : null}</> : null}{entry.project ? <><div><dt>关联课题节点</dt><dd>{entry.project.milestone_title || "未关联培养节点"}{entry.project.milestone_target_date ? ` · 目标 ${entry.project.milestone_target_date}` : ""}</dd></div><div><dt>课题下一行动</dt><dd>{entry.project.next_action} · {entry.project.next_action_due_date}</dd></div>{entry.project.blocker ? <div><dt>课题当前阻塞</dt><dd>{entry.project.blocker}</dd></div> : null}</> : null}{entry.assessment ? <div><dt>审核判断</dt><dd>{entry.assessment === "substantive" ? "实质性进展" : "支持性工作"}{entry.reviewer_name ? ` · ${entry.reviewer_name}` : ""}</dd></div> : null}{entry.reviewer_note ? <div><dt>审核意见</dt><dd>{entry.reviewer_note}</dd></div> : null}</dl>
             <div className="student-evidence-sources" aria-label="证据来源">{entry.evidence_sources.filter((source) => source.source_type !== "attachment").map((source) => <span key={source.id}><b>{source.label}</b>{source.source_ref ? source.source_type === "git" || source.source_type === "url" ? <a href={source.source_ref} target="_blank" rel="noreferrer">打开 ↗</a> : <small>{source.source_ref}</small> : null}{source.content_sha256 ? <em>指纹 {source.content_sha256}</em> : null}</span>)}{!entry.evidence_sources.some((source) => source.source_type !== "attachment") ? <span><b>历史文本证据</b><small>补证时将建立结构化来源</small></span> : null}</div>
             {entry.attachments?.length ? <div className="student-attachment-list" aria-label="提交附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><b>{attachment.file_name}</b><small>{Math.max(1, Math.round(attachment.size_bytes / 1024))} KB · 指纹 {attachment.content_sha256}</small></a>)}</div> : null}
             {entry.audit.length ? <details className="student-progress-audit"><summary>查看审核轨迹（{entry.audit.length}）</summary>{entry.audit.map((event) => <div key={event.id}><i /><span><strong>{event.actor_name || (event.actor_type === "system" ? "系统" : "未知人员")} · {reviewLabels[event.to_status as ReviewStatus] || event.action}</strong><small>{dateText(event.created_at)}{event.note ? ` · ${event.note}` : ""}</small></span></div>)}</details> : null}

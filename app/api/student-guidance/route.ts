@@ -35,12 +35,12 @@ async function readStudentWorkspace(studentId: string) {
       FROM student_guidance_notes n
       JOIN app_users u ON u.id = n.mentor_user_id
       LEFT JOIN app_users completed_by ON completed_by.id = n.completed_by_user_id
-      LEFT JOIN progress_entries p ON p.id = n.source_progress_entry_id
+      LEFT JOIN progress_entries p ON p.id = n.source_progress_entry_id AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)
       WHERE n.student_id = ?
       ORDER BY CASE n.status WHEN 'open' THEN 0 ELSE 1 END, n.created_at DESC, n.id DESC
       LIMIT 200`).bind(studentId).all(),
     d1.prepare(`SELECT l.id AS link_id, i.id AS import_id, l.progress_entry_id,
-      p.title, p.summary, p.evidence, p.review_status, p.assessment, p.reviewer_note,
+      p.title, p.summary, p.evidence, p.current_revision, p.review_status, p.assessment, p.reviewer_note,
       p.submitted_at, i.detected_reason, i.message_created_at, i.received_at,
       l.created_at AS saved_at,
       (SELECT e.source_type FROM progress_evidence_sources e
@@ -55,7 +55,7 @@ async function readStudentWorkspace(studentId: string) {
       FROM feishu_meeting_summary_links l
       JOIN feishu_meeting_summary_imports i ON i.id = l.import_id
       JOIN progress_entries p ON p.id = l.progress_entry_id
-      WHERE l.student_id = ? AND i.status = 'confirmed'
+      WHERE l.student_id = ? AND i.status = 'confirmed' AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)
       ORDER BY i.message_created_at DESC, l.id DESC
       LIMIT 200`).bind(studentId).all(),
   ]);
@@ -92,7 +92,9 @@ export async function GET(request: Request) {
     if (!(await canViewStudent(auth.user, studentId))) {
       return Response.json({ error: "无权查看该学生的指导与飞书总结" }, { status: 403 });
     }
-    return Response.json(await readStudentWorkspace(studentId), {
+    return Response.json({ ...await readStudentWorkspace(studentId),
+      canManageAiRecords: await canReviewStudent(auth.user, studentId),
+    }, {
       headers: { "Cache-Control": "private, no-store", Vary: "Cookie" },
     });
   } catch (error) {
@@ -141,7 +143,7 @@ export async function POST(request: Request) {
     if (sourceProgressEntryId !== null) {
       const source = await d1.prepare(`SELECT p.id FROM progress_entries p
         JOIN feishu_meeting_summary_links l ON l.progress_entry_id = p.id
-        WHERE p.id = ? AND p.student_id = ? AND l.student_id = ?`)
+        WHERE p.id = ? AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id) AND p.student_id = ? AND l.student_id = ?`)
         .bind(sourceProgressEntryId, studentId, studentId).first();
       if (!source) throw new InputError("关联的飞书总结不属于该学生");
     }

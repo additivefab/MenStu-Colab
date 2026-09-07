@@ -22,6 +22,7 @@ export function substantiveProgressSql(studentCount: number) {
     JOIN progress_revisions r
       ON r.progress_entry_id = p.id AND r.revision_number = p.current_revision
     WHERE p.student_id IN (${ids})
+      AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)
       AND p.review_status = 'accepted' AND p.assessment = 'substantive' AND p.status = 'substantive'
       AND r.review_status = 'accepted' AND r.assessment = 'substantive'
       AND r.reviewed_at IS NOT NULL
@@ -61,6 +62,7 @@ export function acceptedTrackProgressSql(studentCount: number) {
       AND current_proposal.student_id = p.student_id AND current_proposal.status = 'approved'
       AND current_proposal.current_version = jpd.proposal_version
     WHERE p.student_id IN (${ids})
+      AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)
       AND p.review_status = 'accepted' AND r.review_status = 'accepted'
       AND (p.assessment = 'substantive' OR p.assessment = 'supporting')
       AND r.assessment = p.assessment
@@ -85,6 +87,7 @@ export function latestSubmittedSql(studentCount: number) {
     JOIN progress_revisions r
       ON r.progress_entry_id = p.id AND r.revision_number = p.current_revision
     WHERE p.student_id IN (${ids})
+      AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)
       AND p.review_status != 'rejected' AND r.review_status != 'rejected'
       AND r.review_status = p.review_status
   )
@@ -119,6 +122,7 @@ export function outstandingProgressSql(studentCount: number) {
     AND current_proposal.student_id = p.student_id AND current_proposal.status = 'approved'
     AND current_proposal.current_version = jpd.proposal_version
   WHERE p.student_id IN (${ids})
+      AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)
     AND p.review_status IN ('submitted', 'in_review', 'changes_requested')
     AND r.review_status = p.review_status
     AND (ppd.progress_entry_id IS NULL OR current_paper.id IS NOT NULL)

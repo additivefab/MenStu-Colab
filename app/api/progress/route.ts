@@ -711,7 +711,7 @@ export async function PATCH(request: Request) {
       LEFT JOIN student_papers sp ON sp.id = pd.paper_id
       LEFT JOIN paper_submission_candidates candidate ON candidate.progress_entry_id = p.id
       LEFT JOIN project_progress_details ppd ON ppd.progress_entry_id = p.id
-      WHERE p.id = ?`).bind(id).first<{
+      WHERE p.id = ? AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)`).bind(id).first<{
         id: number; student_id: string; kind: string; title: string; review_status: string;
         current_revision: number;
         paper_id: number | null; paper_stage: string | null; manuscript_version: string | null;

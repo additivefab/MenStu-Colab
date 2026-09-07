@@ -152,7 +152,7 @@ export async function POST(request: Request) {
       LEFT JOIN project_progress_details jpd ON jpd.progress_entry_id = p.id
       LEFT JOIN research_milestones m ON m.id = jpd.milestone_id
       LEFT JOIN research_proposals rp ON rp.id = m.proposal_id
-      WHERE p.id = ?`).bind(id).first<EntryRow>();
+      WHERE p.id = ? AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)`).bind(id).first<EntryRow>();
     if (!entry) return Response.json({ error: "记录不存在" }, { status: 404 });
     const synchronizeCurrentRevision = async () => {
       await d1.prepare(SYNCHRONIZE_CURRENT_REVISION_SQL)
@@ -438,8 +438,9 @@ export async function POST(request: Request) {
     }
     if (assessment === "substantive") {
       statements.push(d1.prepare(`UPDATE students SET last_substantive_at = (
-        SELECT MAX(submitted_at) FROM progress_entries
-        WHERE student_id = ? AND review_status = 'accepted' AND assessment = 'substantive'
+        SELECT MAX(p.submitted_at) FROM progress_entries p
+        WHERE p.student_id = ? AND p.review_status = 'accepted' AND p.assessment = 'substantive'
+          AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)
       ) WHERE id = ? AND EXISTS (SELECT 1 FROM progress_entries
         WHERE id = ? AND current_revision = ? AND review_status = 'accepted'
           AND assessment = 'substantive' AND reviewed_by_user_id = ?)`)
@@ -557,6 +558,9 @@ export async function POST(request: Request) {
       guidanceCreated: Boolean(guidance),
     });
   } catch (error) {
+    if (error instanceof Error && error.message.includes("AI_RECORD_DELETED")) {
+      return Response.json({ error: "这条 AI 记录已被删除，请刷新页面" }, { status: 409 });
+    }
     return Response.json({ error: error instanceof Error ? error.message : "审核失败" }, { status: 500 });
   }
 }

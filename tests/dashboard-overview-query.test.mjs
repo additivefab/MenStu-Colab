@@ -25,6 +25,7 @@ import {
 function database() {
   const db = new DatabaseSync(":memory:");
   db.exec(`
+    CREATE TABLE progress_deletions (progress_entry_id INTEGER PRIMARY KEY);
     CREATE TABLE progress_entries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id TEXT NOT NULL,

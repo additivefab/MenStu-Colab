@@ -822,3 +822,10 @@ export const progressEvidenceSources = sqliteTable(
     index("idx_progress_evidence_import").on(table.sourceImportId),
   ],
 );
+
+export const progressDeletions = sqliteTable("progress_deletions", {
+  progressEntryId: integer("progress_entry_id").primaryKey().references(() => progressEntries.id),
+  deletedByUserId: integer("deleted_by_user_id").notNull().references(() => appUsers.id),
+  deletedAt: text("deleted_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  operationId: text("operation_id").notNull(),
+});

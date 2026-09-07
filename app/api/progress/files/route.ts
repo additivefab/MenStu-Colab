@@ -29,7 +29,7 @@ export async function GET(request: Request) {
       a.content_type, a.size_bytes, a.content_sha256
       FROM progress_attachments a
       JOIN progress_entries p ON p.id = a.progress_entry_id
-      WHERE a.id = ?`).bind(id).first<AttachmentRow>();
+      WHERE a.id = ? AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)`).bind(id).first<AttachmentRow>();
     if (!row) return Response.json({ error: "附件不存在" }, { status: 404 });
     if (!(await canViewStudent(auth.user, row.student_id))) {
       return Response.json({ error: "无权访问该附件" }, { status: 403 });

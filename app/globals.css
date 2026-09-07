@@ -2761,3 +2761,21 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-progress-overview-head > strong small { font-size: 12px; font-weight: 400; }
 .student-supplement-section { margin-top: 16px; padding: 0 16px; border: 1px solid #e0e5eb; border-radius: 10px; background: #fff; }
 .student-supplement-section > summary { color: #925f14; font-weight: 600; }
+
+/* AI record cleanup uses the existing compact action style. */
+.ai-record-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ai-record-actions button, .ai-deleted-records > button { padding: 7px 12px; border: 1px solid #dce1e7; border-radius: 7px; background: #fff; color: #384658; font: inherit; font-size: 14px; cursor: pointer; }
+.ai-record-actions button:focus-visible, .ai-deleted-records button:focus-visible { outline: 2px solid #4b73ac; outline-offset: 3px; }
+.ai-record-actions button.ai-record-delete { color: #ac3434; border-color: #e9c9c9; background: #fff; }
+.ai-record-actions button:disabled { opacity: .55; cursor: wait; }
+.ai-record-confirm { width: 100%; padding: 12px; background: #faf7f7; border: 1px solid #e9dddd; border-radius: 8px; }
+.ai-record-confirm p, .ai-record-error { margin: 0 0 10px; font-size: 14px; line-height: 1.6; }
+.ai-record-confirm > div { display: flex; gap: 8px; }
+.ai-record-error { color: #ac3434; }
+.mentor-progress-decision > .ai-record-actions { margin: 0 0 16px; }
+.student-ai-summary-body footer .ai-record-actions { margin-left: auto; flex-shrink: 0; }
+.ai-deleted-records { margin: 16px 0 0; }
+.ai-deleted-records > div { margin-top: 12px; padding: 0 16px; border: 1px solid #e2e6eb; border-radius: 8px; background: #fff; }
+.ai-deleted-records article { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; }
+.ai-deleted-records article + article { border-top: 1px solid #e8ebef; }
+.ai-deleted-records small { display: block; margin-top: 5px; color: #687585; font-size: 13px; }

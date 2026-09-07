@@ -2,6 +2,7 @@
 
 import { FormEvent, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { paperDeadlineState, paperStageMeta, paperStages, paperTypes, type PaperStage } from "../lib/paper-progress";
+import { AiRecordActions } from "../components/ai-record-actions";
 import { MentorGroupOverview } from "../components/dashboard-overview/mentor-group-overview";
 import { clearMutationKey, mutationKeyForForm } from "../lib/client-idempotency";
 
@@ -64,6 +65,7 @@ type StudentProgress = {
   reviewed_at: string | null;
   current_revision: number;
   ai_summary_origin: boolean;
+  can_delete_ai?: boolean;
   paper: {
     id: number;
     title: string;
@@ -166,6 +168,7 @@ type PendingEntry = {
   project: StudentProgress["project"];
   current_revision: number;
   ai_summary_origin: boolean;
+  can_delete_ai?: boolean;
   revisions: ProgressRevision[];
   can_finalize: boolean;
   can_decide: boolean;
@@ -1035,6 +1038,7 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
           note={reviewNotes[selected.entry.id] || ""}
           onNote={(value) => setReviewNotes((current) => ({ ...current, [selected.entry.id]: value }))}
           onReview={(action, guidance) => onReview(selected.entry, action, guidance)}
+          onChanged={onRefresh}
         /> : null}
         {selected?.kind === "workflow" ? <article className="mentor-workflow-detail">
           <span className={`mentor-task-category ${selected.category}`}>{mentorTaskLabels[selected.category]}</span>
@@ -1068,12 +1072,13 @@ function isAiSummaryCandidate(entry: PendingEntry) {
   return entry.ai_summary_origin;
 }
 
-function MentorProgressDecision({ entry, busy, note, onNote, onReview }: {
+function MentorProgressDecision({ entry, busy, note, onNote, onReview, onChanged }: {
   entry: PendingEntry;
   busy: boolean;
   note: string;
   onNote: (value: string) => void;
   onReview: (action: string, guidance?: ReviewGuidance) => Promise<void>;
+  onChanged: () => Promise<void>;
 }) {
   const [guidanceOpen, setGuidanceOpen] = useState(false);
   const [nextAction, setNextAction] = useState(entry.paper?.next_action || entry.project?.next_action || "");
@@ -1090,6 +1095,7 @@ function MentorProgressDecision({ entry, busy, note, onNote, onReview }: {
   }
   return <article className="mentor-progress-decision">
     <header><div><span>{aiCandidate ? "AI 纪要候选" : entry.kind} · 当前 V{entry.current_revision}</span><h2>{entry.paper?.title || entry.title}</h2><p>{entry.display_name} · {shortDate(entry.submitted_at)}提交</p></div><a href={`/students/${encodeURIComponent(entry.student_id)}#evidence`}>完整档案 ↗</a></header>
+    {aiCandidate && entry.can_delete_ai ? <AiRecordActions record={entry} onChanged={onChanged} /> : null}
     {aiCandidate ? <div className="mentor-ai-candidate-note"><b>AI 已从组会纪要提取候选进展</b><span>以下内容尚未生效；只有您的勾选或退回指导会形成正式记录。</span></div> : null}
     <div className="mentor-decision-status"><span className={`status-pill ${entry.review_status === "in_review" ? "reviewing" : "pending"}`}>{entry.claim_stale ? "接手已超时" : entry.review_status === "in_review" ? `${entry.reviewer_name || "导师"}审核中` : "等待判断"}</span><small>正式判断将写入版本与审计记录</small></div>
     <section className="mentor-version-diff">

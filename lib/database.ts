@@ -1,12 +1,14 @@
 import { env } from "cloudflare:workers";
+import { createProgressDeletionsSql, protectDeletedProgressSql } from "./ai-record-deletion";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-export const CURRENT_SCHEMA_VERSION = 19;
+export const CURRENT_SCHEMA_VERSION = 20;
 
 const REQUIRED_TABLES = [
   "students",
   "progress_entries",
+  "progress_deletions",
   "app_users",
   "app_sessions",
   "mentor_student_assignments",
@@ -519,6 +521,7 @@ async function migrateDatabase(previousVersion: number | null) {
       created_by_user_id INTEGER REFERENCES app_users(id),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
+    d1.prepare(createProgressDeletionsSql),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_student_submitted ON progress_entries(student_id, submitted_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_status ON progress_entries(status, submitted_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_feishu_open_id ON app_users(feishu_open_id)"),
@@ -701,6 +704,7 @@ async function migrateDatabase(previousVersion: number | null) {
       WHERE NOT EXISTS (
         SELECT 1 FROM progress_revisions r WHERE r.progress_entry_id = p.id
       )`),
+    d1.prepare(protectDeletedProgressSql),
     d1.prepare("UPDATE app_users SET email = '' WHERE email != ''"),
     d1.prepare(`INSERT INTO app_schema_meta (id, version, updated_at)
       VALUES (1, ?, CURRENT_TIMESTAMP)

@@ -45,8 +45,10 @@ export async function GET(request: Request) {
     const d1 = getD1();
     const imports = await d1.prepare(`SELECT id, message_id, message_type, extracted_text,
       detected_reason, status, message_created_at, received_at
-      FROM feishu_meeting_summary_imports
-      WHERE status != 'ignored'
+      FROM feishu_meeting_summary_imports i
+      WHERE status != 'ignored' AND (status != 'confirmed' OR EXISTS (
+        SELECT 1 FROM feishu_meeting_summary_links active_link WHERE active_link.import_id = i.id
+          AND NOT EXISTS (SELECT 1 FROM progress_deletions d WHERE d.progress_entry_id = active_link.progress_entry_id)))
       ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, message_created_at DESC
       LIMIT 60`).all<ImportRow>();
     const importIds = imports.results.map((item) => item.id);
@@ -56,7 +58,8 @@ export async function GET(request: Request) {
       const result = await d1.prepare(`SELECT l.id, l.import_id, l.student_id,
         s.display_name AS student_name, l.progress_entry_id, l.created_at
         FROM feishu_meeting_summary_links l JOIN students s ON s.id = l.student_id
-        WHERE l.import_id IN (${placeholders}) ORDER BY l.created_at DESC`)
+        WHERE l.import_id IN (${placeholders})
+          AND NOT EXISTS (SELECT 1 FROM progress_deletions d WHERE d.progress_entry_id = l.progress_entry_id) ORDER BY l.created_at DESC`)
         .bind(...importIds).all<LinkRow>();
       links = result.results;
     }

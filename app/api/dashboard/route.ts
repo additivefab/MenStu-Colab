@@ -219,8 +219,8 @@ export async function GET(request: Request) {
     const studentStatement = d1.prepare(`SELECT
       s.id, s.display_name, s.degree, s.grade_year, s.stage, s.cadence_days,
       s.current_focus, s.last_substantive_at, s.tracking_started_at,
-      (SELECT p.title FROM progress_entries p WHERE p.student_id = s.id AND p.status = 'substantive' ORDER BY p.submitted_at DESC LIMIT 1) AS latest_title,
-      (SELECT p.kind FROM progress_entries p WHERE p.student_id = s.id AND p.status = 'substantive' ORDER BY p.submitted_at DESC LIMIT 1) AS latest_kind,
+      (SELECT p.title FROM progress_entries p WHERE p.student_id = s.id AND p.status = 'substantive' AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id) ORDER BY p.submitted_at DESC LIMIT 1) AS latest_title,
+      (SELECT p.kind FROM progress_entries p WHERE p.student_id = s.id AND p.status = 'substantive' AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id) ORDER BY p.submitted_at DESC LIMIT 1) AS latest_kind,
       (SELECT rp.status FROM research_proposals rp WHERE rp.student_id = s.id LIMIT 1) AS proposal_status,
       (SELECT rp.title FROM research_proposals rp WHERE rp.student_id = s.id LIMIT 1) AS proposal_title,
       (SELECT rp.current_version FROM research_proposals rp WHERE rp.student_id = s.id LIMIT 1) AS proposal_version,
@@ -290,6 +290,7 @@ export async function GET(request: Request) {
         LEFT JOIN paper_submission_candidates candidate ON candidate.progress_entry_id = p.id
         LEFT JOIN project_progress_details ppd ON ppd.progress_entry_id = p.id
         WHERE p.student_id IN (${placeholders})
+          AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)
           AND EXISTS (SELECT 1 FROM progress_revisions current_revision
             WHERE current_revision.progress_entry_id = p.id
               AND current_revision.revision_number = p.current_revision)
@@ -357,6 +358,10 @@ export async function GET(request: Request) {
           revision.progress_entry_id === entry.id && revision.revision_number === entry.current_revision
         ))?.snapshot_json ?? "{}",
       );
+      const aiSummaryOrigin = entry.kind === "组会" && evidenceRows.some((source) => (
+          source.progress_entry_id === entry.id
+          && (source.source_type.startsWith("feishu_") || /智能纪要|飞书妙记/u.test(source.label))
+        ));
       return {
         ...entry,
         paper: entry.paper_id || entry.paper_candidate_id ? {
@@ -383,10 +388,9 @@ export async function GET(request: Request) {
           blocker: entry.project_blocker ?? "",
           completion_requested: Boolean(entry.project_completion_requested),
         } : null,
-        ai_summary_origin: entry.kind === "组会" && evidenceRows.some((source) => (
-          source.progress_entry_id === entry.id
-          && (source.source_type.startsWith("feishu_") || /智能纪要|飞书妙记/u.test(source.label))
-        )),
+        can_delete_ai: aiSummaryOrigin && (viewer.role === "superadmin" || viewer.role === "admin")
+          && reviewableStudentIds.has(entry.student_id),
+        ai_summary_origin: aiSummaryOrigin,
         evidence_sources: evidenceRows
           .filter((source) => source.progress_entry_id === entry.id)
           .map((source) => ({
