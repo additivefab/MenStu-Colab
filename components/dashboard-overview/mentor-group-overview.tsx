@@ -144,7 +144,7 @@ export function MentorGroupOverview({ query, onQueryChange, refreshRequest }: { 
           <OverviewTable students={filtered} selectedStudentId={selectedStudentId} onOpen={openStudent} />
           <OverviewMobileList students={filtered} onOpen={openStudent} />
         </>}
-    <details className="quiet-details group-overview-help"><summary>状态说明</summary><p>每名学生只计入一个主状态。可信进展以导师确认为准，截止日期按北京时间计算。</p></details>
+    <details className="quiet-details group-overview-help"><summary>状态说明</summary><p>每人只显示当前最需处理的状态。进展统计仅包含导师确认的实质性进展，日期按北京时间计算。</p></details>
     {selected ? <StudentOverviewDrawer student={selected} onClose={closeDrawer} /> : null}
   </section>;
 }

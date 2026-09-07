@@ -19,7 +19,7 @@ test("mentor decision inbox, leased reviews, guidance verification, agendas, and
   ]);
 
   assert.match(dashboard, /id: "inbox", label: "待我处理"/);
-  assert.match(dashboard, /id: "research", label: "研究台账"/);
+  assert.match(dashboard, /id: "research", label: "论文与课题"/);
   assert.match(dashboard, /id: "cohort", label: "课题组"/);
   assert.match(dashboard, /MentorDecisionInbox/);
   assert.match(dashboard, /className="mentor-inbox-summary"/);

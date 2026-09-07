@@ -30,8 +30,8 @@ test("server-renders the standalone student overview route", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /学生科研前景速览/);
-  assert.match(html, /正在整理学生科研前景速览/);
+  assert.match(html, /学生档案/);
+  assert.match(html, /正在加载学生档案/);
 });
 
 test("keeps the database and Feishu boundaries explicit in source", async () => {
@@ -58,7 +58,7 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   ]);
 
   assert.match(dashboard, /完整代码由本地 Agent 读取/);
-  assert.match(dashboard, /学生个人工作台/);
+  assert.match(dashboard, /学生端/);
   assert.match(dashboard, /记论文进展/);
   assert.match(dashboard, /记课题进展/);
   assert.match(dashboard, /StudentQuickProgressComposer/);
@@ -106,12 +106,12 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /课题进展/);
   assert.match(dashboard, /最近写了什么、导师怎么回复/);
   assert.match(dashboard, /稿件版本/);
-  assert.match(dashboard, /下一项可交付行动/);
+  assert.match(dashboard, /name="nextAction"/);
   assert.match(dashboard, /完整档案 ↗/);
   assert.match(dashboard, /进入学生档案/);
   assert.match(dashboard, /href=\{`\/students\/\$\{encodeURIComponent\(entry\.student_id\)\}#evidence`\}/);
-  assert.match(dashboard, /打开 \$\{student\.name\} 的科研前景速览与全部进展/);
-  assert.match(dashboard, /点击查看科研前景速览/);
+  assert.match(dashboard, /打开 \$\{student\.name\} 的档案与进展/);
+  assert.match(dashboard, /查看学生档案/);
   assert.doesNotMatch(dashboard, /import Link from "next\/link"/);
   assert.match(dashboard, /name="attachments" type="file" multiple/);
   assert.match(dashboard, /找导师聊聊/);
@@ -152,10 +152,10 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.doesNotMatch(dashboard, /value="mentor"/);
   assert.match(dashboard, /onReview=\{review\}/);
   assert.match(studentOverview, /科研培养流程图/);
-  assert.match(studentOverview, /导师决策视图/);
-  assert.match(studentOverview, /10-SECOND RESEARCH OUTLOOK/);
-  assert.match(studentOverview, /论文前景信号/);
-  assert.match(studentOverview, /项目前景信号/);
+  assert.match(studentOverview, /student-hero-profile/);
+  assert.match(studentOverview, /当前进展/);
+  assert.match(studentOverview, /论文进展/);
+  assert.match(studentOverview, /课题进展/);
   assert.match(studentOverview, /导师现在处理/);
   assert.match(studentOverview, /不对学生能力或人格作自动评级/);
   assert.match(studentOverview, /project: \{/);
@@ -177,7 +177,7 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(studentOverview, /✓ 已保存/);
   assert.match(studentOverview, /点开查看/);
   assert.match(studentOverview, /\/api\/student-guidance/);
-  assert.match(studentOverview, /论文推进图谱/);
+  assert.match(studentOverview, /论文进展/);
   assert.match(studentOverview, /paper-stage-roadmap/);
   assert.match(studentOverview, /确认进展/);
   assert.match(studentOverview, /需要指导/);

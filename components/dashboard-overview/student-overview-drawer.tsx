@@ -75,14 +75,14 @@ export function StudentOverviewDrawer({ student, onClose }: { student: MentorOve
       <section className="group-overview-drawer-section">
         <header><div><h3>论文与课题</h3></div></header>
         <div className="group-overview-track-cards">
-          <article><span>论文轨</span><strong>{student.paperPosition?.title || "尚无论文主线"}</strong><small>{student.paperPosition ? `${student.paperPosition.stage} · ${student.paperPosition.status}` : "需要在学生档案中补齐"}</small></article>
-          <article><span>课题轨</span><strong>{student.projectPosition?.title || "尚无确认课题"}</strong><small>{student.projectPosition ? `${student.projectPosition.stage} · ${student.projectPosition.status}` : "需要补齐方案或培养节点"}</small></article>
+          <article><span>论文</span><strong>{student.paperPosition?.title || "尚未登记论文"}</strong><small>{student.paperPosition ? `${student.paperPosition.stage} · ${student.paperPosition.status}` : "可在学生档案中填写"}</small></article>
+          <article><span>课题</span><strong>{student.projectPosition?.title || "尚无确认课题"}</strong><small>{student.projectPosition ? `${student.projectPosition.stage} · ${student.projectPosition.status}` : "需要补齐方案或培养节点"}</small></article>
         </div>
       </section>
 
       <section className="group-overview-drawer-section">
-        <header><div><h3>最近可信进展</h3></div><strong>{student.recentSubstantive.length}</strong></header>
-        <div className="group-overview-trusted-list">{student.recentSubstantive.map((progress) => <article key={progress.id}><time>{overviewDate(progress.confirmedAt)}</time><div><strong>{progress.title}</strong><small>{progress.kind} · 已确认为实质性进展</small></div></article>)}{!student.recentSubstantive.length ? <p>尚无导师确认的实质性进展。{student.latestSubmittedAt ? `最近有效提交在 ${overviewDate(student.latestSubmittedAt)}，仍未计入可信进展。` : ""}</p> : null}</div>
+        <header><div><h3>最近确认进展</h3></div><strong>{student.recentSubstantive.length}</strong></header>
+        <div className="group-overview-trusted-list">{student.recentSubstantive.map((progress) => <article key={progress.id}><time>{overviewDate(progress.confirmedAt)}</time><div><strong>{progress.title}</strong><small>{progress.kind} · 已确认为实质性进展</small></div></article>)}{!student.recentSubstantive.length ? <p>尚无导师确认的实质性进展。{student.latestSubmittedAt ? `最近提交于 ${overviewDate(student.latestSubmittedAt)}，尚未计入进展统计。` : ""}</p> : null}</div>
       </section>
 
       <footer>

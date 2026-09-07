@@ -28,7 +28,7 @@ export function OverviewMetrics({
       })}
     </div>
     <aside>
-      <span>本周可信推进</span>
+      <span>本周确认进展</span>
       <strong>{data.weeklySubstantiveStudentCount}<small> / {data.total} 人</small></strong>
 
     </aside>

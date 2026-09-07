@@ -702,11 +702,11 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
 
     let tone: "insufficient" | "attention" | "review" | "steady" = "steady";
     let label = "稳步推进";
-    let title = "研究主线已有可追踪进展，按下一节点与投稿计划继续推进";
+    let title = "按计划完成下一步工作";
     if (missingCore && insights.missingInformation.length >= 3) {
       tone = "insufficient";
       label = "信息不足";
-      title = "先补齐研究方案、论文线或关键证据，再形成可靠的前景判断";
+      title = "请补充研究方案、论文信息或进展材料";
     } else if (needsIntervention) {
       tone = "attention";
       label = "需导师介入";
@@ -714,11 +714,11 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     } else if (summary.pending > 0 || proposal?.status === "submitted") {
       tone = "review";
       label = "等待导师判断";
-      title = "关键材料已经提交，当前速度取决于导师完成判断";
+      title = "材料已提交，等待导师审核";
     } else if (!summary.substantive) {
       tone = "insufficient";
-      label = "正在形成";
-      title = "研究结构已经建立，仍需首条实质性证据验证推进质量";
+      label = "待确认进展";
+      title = "尚无导师确认的实质性进展";
     }
 
     const actionableProgress = progress
@@ -746,7 +746,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       action = {
         label: "导师现在处理",
         title: `审核${actionableProgress.kind === "项目" ? "项目" : actionableProgress.kind === "论文" ? "论文" : "科研"}进展：${actionableProgress.paper?.title || actionableProgress.title}`,
-        detail: actionableProgress.claim_stale ? "原审核接手已超时，可重新领取后完成判断。" : "核对新增结论与证据，形成正式进展判断。",
+        detail: actionableProgress.claim_stale ? "审核已超时，可重新接手。" : "查看提交材料，确认进展或退回修改。",
         href: "#formal-review",
       };
     } else if (guidanceToVerify) {
@@ -776,17 +776,17 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       tone,
       label,
       title,
-      detail: `${recentSubstantive} 条近 8 周实质性进展 · ${summary.pending} 条待导师处理 · ${summary.evidencePercent}% 历史进展有证据留痕`,
+      detail: `${recentSubstantive} 条近 8 周实质性进展 · ${summary.pending} 条待导师处理 · ${summary.evidencePercent}% 历史进展附有材料`,
       action,
       recentSubstantive,
       paper: {
         tone: paperBlocker || paperDeadline?.overdue ? "attention" : focusPaper ? "active" : "empty",
-        label: focusPaper ? paperStageMeta[focusPaper.current_stage].label : "论文线未建立",
-        title: focusPaper?.title || latestPaperProgress?.paper?.title || "尚无可判断的论文台账",
+        label: focusPaper ? paperStageMeta[focusPaper.current_stage].label : "尚无论文",
+        title: focusPaper?.title || latestPaperProgress?.paper?.title || "尚未登记论文",
         recent: latestConfirmedPaper?.summary || "尚无已确认的论文实质性结论",
         next: paperTerminal && focusPaper
           ? `${paperStatusLabels[focusPaper.status]}，后续只需登记正式成果或归档信息`
-          : paperBlocker || latestPaperProgress?.paper?.next_action || "建立论文题目、目标去向和第一项可交付行动",
+          : paperBlocker || latestPaperProgress?.paper?.next_action || "填写论文题目、投稿目标和下一步工作",
         meta: focusPaper && focusPaper.status !== "active"
           ? `${paperStatusLabels[focusPaper.status]} · 不按计划投稿日期预警`
           : paperBlocker
@@ -813,8 +813,8 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     };
   }, [guidanceNotes, insights, papers, proposal, student, summary]);
 
-  if (loading) return <main className="student-page"><div className="student-page-state"><i /><strong>正在整理学生科研前景速览…</strong></div></main>;
-  if (error || !student) return <main className="student-page"><div className="student-page-state error"><strong>暂时无法打开学生页面</strong><p>{error}</p><Link href="/">返回科研进展驾驶舱</Link></div></main>;
+  if (loading) return <main className="student-page"><div className="student-page-state"><i /><strong>正在加载学生档案…</strong></div></main>;
+  if (error || !student) return <main className="student-page"><div className="student-page-state error"><strong>暂时无法打开学生页面</strong><p>{error}</p><Link href="/">返回首页</Link></div></main>;
 
   const flow = [
     { label: "学生身份", value: `${student.gradeYear}级${student.degree}`, note: student.stage, tone: "blue" },
@@ -827,32 +827,32 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   const pendingGuidance = student.progress.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review");
 
   return <main className="student-page">
-    <nav className="student-page-nav"><Link href="/">← 返回驾驶舱</Link><span>探研 · 学生科研前景速览</span></nav>
+    <nav className="student-page-nav"><Link href="/">← 返回首页</Link><span>探研 · 学生档案</span></nav>
 
     <header className="student-hero">
-      <div className="student-hero-profile"><div className="student-hero-avatar">{student.name.slice(-2)}</div><div><p>导师决策视图 · {student.gradeYear}级{student.degree}</p><h1>{student.name}</h1><div className="student-hero-tags"><span className={`risk ${student.risk.level}`}>{student.risk.level}</span><span>{student.stage}</span><span>{papers.length} 篇论文</span></div></div></div>
+      <div className="student-hero-profile"><div className="student-hero-avatar">{student.name.slice(-2)}</div><div><p>{student.gradeYear}级{student.degree}</p><h1>{student.name}</h1><div className="student-hero-tags"><span className={`risk ${student.risk.level}`}>{student.risk.level}</span><span>{student.stage}</span><span>{papers.length} 篇论文</span></div></div></div>
       <div className="student-hero-focus"><span>当前研究重点</span><strong>{student.currentFocus || "尚未填写"}</strong><small>{student.cadenceDays} 天更新周期 · 最近实质性进展 {dateText(student.lastSubstantiveAt)}</small></div>
-      <div className="student-hero-evidence" aria-label={`历史进展证据留痕率 ${summary.evidencePercent}%`}>
-        <div style={{ background: `conic-gradient(#75d7ad ${summary.evidencePercent * 3.6}deg, rgba(255,255,255,.13) 0)` }}><span><strong>{summary.evidencePercent}%</strong><small>证据留痕</small></span></div>
+      <div className="student-hero-evidence" aria-label={`附材料的进展占比 ${summary.evidencePercent}%`}>
+        <div style={{ background: `conic-gradient(#75d7ad ${summary.evidencePercent * 3.6}deg, rgba(255,255,255,.13) 0)` }}><span><strong>{summary.evidencePercent}%</strong><small>附有材料</small></span></div>
         <p>{summary.sourceCount} 个来源 · {summary.attachmentCount} 个附件</p>
       </div>
     </header>
 
     <nav className="student-section-nav" aria-label="学生档案章节">
-      <a href="#outlook">前景速览</a><a href="#guidance">导师指导</a><a href="#ai-summaries">AI 总结</a><a href="#papers">论文图谱</a><a href="#workflow">培养流程</a><a href="#evidence">进展证据</a><a href="#outputs">科研成果</a><a href="#proposal">研究方案</a><a href="#audit">审计记录</a>
+      <a href="#outlook">概况</a><a href="#guidance">导师指导</a><a href="#ai-summaries">AI 总结</a><a href="#papers">论文</a><a href="#workflow">培养流程</a><a href="#evidence">进展证据</a><a href="#outputs">科研成果</a><a href="#proposal">研究方案</a><a href="#audit">审计记录</a>
     </nav>
 
     <section className={`student-outlook-brief ${outlook.tone}`} id="outlook" aria-labelledby="student-outlook-title">
       <header className="student-outlook-head">
-        <div><span>10-SECOND RESEARCH OUTLOOK</span><div className="student-outlook-status"><i />{outlook.label}</div><h2 id="student-outlook-title">{outlook.title}</h2><p>{outlook.detail}</p></div>
-        <aside><span>{outlook.action.label}</span><strong>{outlook.action.title}</strong><p>{outlook.action.detail}</p><a href={outlook.action.href}>直接查看关键位置 ↓</a></aside>
+        <div><span>当前进展</span><div className="student-outlook-status"><i />{outlook.label}</div><h2 id="student-outlook-title">{outlook.title}</h2><p>{outlook.detail}</p></div>
+        <aside><span>{outlook.action.label}</span><strong>{outlook.action.title}</strong><p>{outlook.action.detail}</p><a href={outlook.action.href}>查看详情 ↓</a></aside>
       </header>
       <div className="student-outlook-tracks">
-        <article className={outlook.paper.tone}><header><span>论文前景信号</span><b>{outlook.paper.label}</b></header><h3>{outlook.paper.title}</h3><dl><div><dt>最近确认结论</dt><dd>{outlook.paper.recent}</dd></div><div><dt>关键下一步</dt><dd>{outlook.paper.next}</dd></div><div><dt>时间与阻塞</dt><dd>{outlook.paper.meta}</dd></div></dl><a href="#papers">查看论文质量门 →</a></article>
-        <article className={outlook.project.tone}><header><span>项目前景信号</span><b>{outlook.project.label}</b></header><h3>{outlook.project.title}</h3><dl><div><dt>最近确认结论</dt><dd>{outlook.project.recent}</dd></div><div><dt>关键下一步</dt><dd>{outlook.project.next}</dd></div><div><dt>节点与期限</dt><dd>{outlook.project.meta}</dd></div></dl><a href="#proposal">查看方案与节点 →</a></article>
-        <article className="evidence"><header><span>判断可信度</span><b>{summary.evidencePercent}% 有证据留痕</b></header><h3>{summary.substantive} 条实质性进展，近 8 周 {outlook.recentSubstantive} 条</h3><dl><div><dt>待导师处理</dt><dd>{summary.pending} 条进展 · {guidanceNotes.filter((note) => note.status === "open").length} 项指导</dd></div><div><dt>档案缺口</dt><dd>{insights.missingInformation.length ? insights.missingInformation.join("、") : "核心档案完整"}</dd></div></dl><a href="#evidence">核对关键证据 →</a></article>
+        <article className={outlook.paper.tone}><header><span>论文进展</span><b>{outlook.paper.label}</b></header><h3>{outlook.paper.title}</h3><dl><div><dt>最近确认进展</dt><dd>{outlook.paper.recent}</dd></div><div><dt>下一步</dt><dd>{outlook.paper.next}</dd></div><div><dt>期限与困难</dt><dd>{outlook.paper.meta}</dd></div></dl><a href="#papers">查看论文详情 →</a></article>
+        <article className={outlook.project.tone}><header><span>课题进展</span><b>{outlook.project.label}</b></header><h3>{outlook.project.title}</h3><dl><div><dt>最近确认进展</dt><dd>{outlook.project.recent}</dd></div><div><dt>下一步</dt><dd>{outlook.project.next}</dd></div><div><dt>节点与期限</dt><dd>{outlook.project.meta}</dd></div></dl><a href="#proposal">查看方案与节点 →</a></article>
+        <article className="evidence"><header><span>提交材料</span><b>{summary.evidencePercent}% 附有材料</b></header><h3>{summary.substantive} 条实质性进展，近 8 周 {outlook.recentSubstantive} 条</h3><dl><div><dt>待导师处理</dt><dd>{summary.pending} 条进展 · {guidanceNotes.filter((note) => note.status === "open").length} 项指导</dd></div><div><dt>档案缺口</dt><dd>{insights.missingInformation.length ? insights.missingInformation.join("、") : "核心档案完整"}</dd></div></dl><a href="#evidence">查看提交材料 →</a></article>
       </div>
-      <footer><span>前景信号只使用研究方案、论文阶段、培养节点和已留痕证据，不对学生能力或人格作自动评级。</span><small>下次更新窗口：{insights.updateWindow} · {student.cadenceDays} 天个人周期</small></footer>
+      <footer><span>根据已提交的方案、论文和进展记录汇总，不对学生能力或人格作自动评级。</span><small>下次更新：{insights.updateWindow} · {student.cadenceDays} 天个人周期</small></footer>
     </section>
 
     <section className="student-guidance-workbench" id="guidance">
@@ -866,7 +866,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         <label>指导主题（可选）<input name="title" maxLength={200} placeholder="自由填写，例如：下一轮实验设计建议" /></label>
         <label>关联飞书 AI 总结<select name="sourceProgressEntryId" defaultValue=""><option value="">不关联具体总结</option>{meetingSummaries.map((item) => <option key={item.progress_entry_id} value={item.progress_entry_id}>{dateText(item.message_created_at)} · {item.title}</option>)}</select></label>
         <label className="wide">导师想说的话<textarea name="content" rows={6} required maxLength={3000} placeholder="自由记录研究判断、方法建议、问题讨论、阅读建议、实验思路或任何需要学生关注的内容。" /></label>
-        <label>下一项可交付行动<input name="nextAction" maxLength={800} placeholder="例如：补做消融实验并更新结果表" /></label>
+        <label>下一步<input name="nextAction" maxLength={800} placeholder="例如：补做消融实验并更新结果表" /></label>
         <label>建议完成期限<input name="dueDate" type="date" /></label>
         <label>完成确认方式<select name="verificationMode" defaultValue="self_report"><option value="self_report">学生自行确认完成</option><option value="mentor_verify">学生提交，导师验收</option></select></label>
         <label>验收标准<textarea name="acceptanceCriteria" rows={2} maxLength={1200} placeholder="选择导师验收且布置行动时，请写清可判断的完成标准" /></label>
@@ -927,7 +927,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     </section>
 
     <section className="student-paper-landscape" id="papers">
-      <div className="student-section-head"><div><span>PAPER LANDSCAPE</span><h2>论文推进图谱</h2><p>把每篇论文放在统一的九阶段门上，导师可以一眼看到当前位置、质量门、下一行动和投稿压力。</p></div><em>{papers.length}</em></div>
+      <div className="student-section-head"><div><h2>论文进展</h2><p>查看论文阶段、下一步工作和投稿日期。</p></div><em>{papers.length}</em></div>
       <div className="student-paper-landscape-list">
         {papers.map((paper) => {
           const currentIndex = paperStages.indexOf(paper.current_stage);
@@ -941,10 +941,10 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
             <ol className="paper-stage-roadmap" aria-label={`${paper.title}论文阶段`}>
               {paperStages.map((stage, index) => <li key={stage} className={index < currentIndex ? "done" : index === currentIndex ? "current" : "upcoming"}><i>{index < currentIndex ? "✓" : index + 1}</i><span>{paperStageMeta[stage].label}</span></li>)}
             </ol>
-            <div className="student-paper-decision"><div><span>当前质量门</span><strong>{paperStageMeta[paper.current_stage].gate}</strong></div><div><span>下一项可交付行动</span><strong>{latestUpdate?.paper?.next_action || "等待学生提交下一项具体行动"}</strong><small>{latestUpdate?.paper?.next_action_due_date || "期限待设置"}</small></div><div className={latestUpdate?.paper?.blocker ? "blocked" : ""}><span>阻塞与导师介入</span><strong>{latestUpdate?.paper?.blocker || "当前未报告阻塞"}</strong><small>{latestUpdate?.reviewer_note || "可在导师指导工作台中形成意见"}</small></div></div>
+            <div className="student-paper-decision"><div><span>本阶段要求</span><strong>{paperStageMeta[paper.current_stage].gate}</strong></div><div><span>下一步</span><strong>{latestUpdate?.paper?.next_action || "等待学生提交下一项具体行动"}</strong><small>{latestUpdate?.paper?.next_action_due_date || "期限待设置"}</small></div><div className={latestUpdate?.paper?.blocker ? "blocked" : ""}><span>需要协助</span><strong>{latestUpdate?.paper?.blocker || "暂无"}</strong><small>{latestUpdate?.reviewer_note || "可在导师指导中填写意见"}</small></div></div>
           </article>;
         })}
-        {!papers.length ? <div className="student-paper-empty"><span>论文台账尚未建立</span><strong>学生首次提交论文进度时，会在这里生成九阶段推进图谱。</strong><p>项目进展不会混入论文图谱。</p></div> : null}
+        {!papers.length ? <div className="student-paper-empty"><span>暂无论文</span><strong>导师确认后，论文及其进展会显示在这里。</strong></div> : null}
       </div>
     </section>
 
@@ -957,7 +957,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       <article><span>全部个人进展</span><strong>{student.progress.length}</strong><small>只包含 {student.name} 的记录</small></article>
       <article><span>实质性进展</span><strong>{summary.substantive}</strong><small>影响最近进展日期与预警</small></article>
       <article><span>培养节点</span><strong>{summary.completedMilestones}/{summary.totalMilestones}</strong><small>完成数 / 总数</small></article>
-      <article><span>科研成果与资产</span><strong>{outputs.length}</strong><small>论文、数据、软件、专利及交付物</small></article>
+      <article><span>科研成果</span><strong>{outputs.length}</strong><small>论文、数据、软件、专利及交付物</small></article>
     </section>
 
     <section className="student-insight-grid">
@@ -975,7 +975,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     </section>
 
     <section className="student-page-panel student-output-panel" id="outputs">
-        <div className="student-section-head"><div><span>RESEARCH OUTPUTS</span><h2>科研成果与资产</h2><p>成果有独立生命周期，不再混入日常进展；每次变更都保留审计记录。</p></div>{viewerRole === "superadmin" || viewerRole === "admin" ? <button className="student-output-add" type="button" onClick={() => setOutputOpen((current) => !current)}>{outputOpen ? "收起" : "＋ 登记成果"}</button> : <em>{outputs.length}</em>}</div>
+        <div className="student-section-head"><div><h2>科研成果</h2><p>登记论文、数据、软件等成果。</p></div>{viewerRole === "superadmin" || viewerRole === "admin" ? <button className="student-output-add" type="button" onClick={() => setOutputOpen((current) => !current)}>{outputOpen ? "收起" : "＋ 登记成果"}</button> : <em>{outputs.length}</em>}</div>
       {outputOpen && (viewerRole === "superadmin" || viewerRole === "admin") ? <form className="student-output-form" onSubmit={createOutput}>
         <label>成果类型<select name="outputType" required defaultValue="paper">{Object.entries(outputTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label>当前阶段<select name="lifecycleStatus" required defaultValue="planned">{Object.entries(outputLifecycleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
@@ -1035,7 +1035,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     <details className="student-context-dock">
       <summary><span>AI</span><strong>科研上下文</strong><small>{pendingGuidance.length} 待审 · {meetingSummaries.length} 份总结</small><i>⌃</i></summary>
       <aside aria-label={`${student.name}科研上下文面板`}>
-        <header><div><span>AI RESEARCH CONTEXT</span><h2>{student.name} · 深度工作区</h2></div><em>账号隔离</em></header>
+        <header><div><h2>{student.name} · 研究资料</h2></div><em>账号隔离</em></header>
         <nav aria-label="科研上下文快捷入口"><a href="#guidance">导师指导</a><a href="#ai-summaries">AI 总结</a><a href="#evidence">证据链</a><a href="#outputs">成果</a></nav>
         <section><span>当前研究重点</span><strong>{student.currentFocus || "尚未填写"}</strong><small>{student.stage} · {student.gradeYear}级{student.degree}</small></section>
         <div className="student-context-dock-grid"><div><span>待审核</span><strong>{pendingGuidance.length}</strong></div><div><span>AI 总结</span><strong>{meetingSummaries.length}</strong></div><div><span>导师指导</span><strong>{guidanceNotes.filter((note) => note.status === "open").length}</strong></div><div><span>附件</span><strong>{summary.attachmentCount}</strong></div></div>
