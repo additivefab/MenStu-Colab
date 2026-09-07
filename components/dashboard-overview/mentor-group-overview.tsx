@@ -118,28 +118,25 @@ export function MentorGroupOverview({ query, onQueryChange, refreshRequest }: { 
   const setState = (state: OverviewState | "all") => { setStateFilter(state); updateUrl({ state }); };
   const setDegree = (degree: OverviewDegreeFilter) => { setDegreeFilter(degree); updateUrl({ degree }); };
 
-  if (loading && !data) return <section className="group-overview-loading" aria-live="polite"><span /><strong>正在生成全组权威摘要</strong><small>核对可信进展、当前期限与导师待办…</small></section>;
+  if (loading && !data) return <section className="group-overview-loading" aria-live="polite"><span /><strong>正在读取学生进度</strong><small></small></section>;
   if (error && !data) return <section className="group-overview-error" role="alert"><span>!</span><strong>全组进度暂时没有加载出来</strong><p>{error}</p><button type="button" onClick={() => void load()}>重新读取</button></section>;
   if (!data) return null;
 
-  return <section className="mentor-group-overview" aria-labelledby="mentor-group-overview-title">
-    <header className="group-overview-intro">
-      <div><span>MENTOR CONTROL TOWER</span><h2 id="mentor-group-overview-title">全组进度总览</h2><p>先看谁需要介入，再处理导师待办；每名学生只进入一个主状态。</p></div>
-      <aside><span>当前范围</span><strong>{data.total}<small> 名学生</small></strong><p>更新于 {new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit" }).format(new Date(data.generatedAt))}</p></aside>
-    </header>
+  return <section className="mentor-group-overview" aria-label="全组进度总览">
     <OverviewMetrics data={data} activeState={stateFilter} onStateChange={setState} />
-    <OverviewFilters
-      query={query}
-      state={stateFilter}
-      degree={degreeFilter}
-      visibleCount={filtered.length}
-      total={data.total}
-      onQueryChange={onQueryChange}
-      onStateChange={setState}
-      onDegreeChange={setDegree}
-      onRefresh={() => void load(true)}
-      refreshing={refreshing}
-    />
+    <div className="group-overview-toolbar">
+      <OverviewFilters
+        query={query}
+        state={stateFilter}
+        degree={degreeFilter}
+        visibleCount={filtered.length}
+        total={data.total}
+        onQueryChange={onQueryChange}
+        onStateChange={setState}
+        onDegreeChange={setDegree}
+      />
+      <span className="group-overview-sync-status" aria-live="polite">{refreshing ? "同步中…" : `更新于 ${new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit" }).format(new Date(data.generatedAt))}`}</span>
+    </div>
     {error ? <div className="group-overview-inline-error" role="status">最新同步失败，当前仍显示上一次成功结果。<button type="button" onClick={() => void load(true)}>重试</button></div> : null}
     {data.total === 0 ? <div className="group-overview-empty scope"><span>◎</span><strong>当前没有已分配学生</strong><p>系统没有返回全组数据；请由超级管理员确认导师分配范围。</p></div>
       : !filtered.length ? <div className="group-overview-empty"><span>⌕</span><strong>没有符合当前筛选的学生</strong><p>可以清空搜索，或再次点击已选状态人数恢复全部。</p><button type="button" onClick={() => { onQueryChange(""); setState("all"); setDegree("all"); }}>清空筛选</button></div>
@@ -147,7 +144,7 @@ export function MentorGroupOverview({ query, onQueryChange, refreshRequest }: { 
           <OverviewTable students={filtered} selectedStudentId={selectedStudentId} onOpen={openStudent} />
           <OverviewMobileList students={filtered} onOpen={openStudent} />
         </>}
-    <footer className="group-overview-footnote"><span>状态按 Asia/Shanghai 自然日计算</span><span>AI 候选与待审核提交不会推进可信进展</span><span>所有正式操作仍走原权限、租约与并发校验</span></footer>
+    <details className="quiet-details group-overview-help"><summary>状态说明</summary><p>每名学生只计入一个主状态。可信进展以导师确认为准，截止日期按北京时间计算。</p></details>
     {selected ? <StudentOverviewDrawer student={selected} onClose={closeDrawer} /> : null}
   </section>;
 }

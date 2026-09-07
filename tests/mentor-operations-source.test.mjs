@@ -22,7 +22,7 @@ test("mentor decision inbox, leased reviews, guidance verification, agendas, and
   assert.match(dashboard, /id: "research", label: "研究台账"/);
   assert.match(dashboard, /id: "cohort", label: "课题组"/);
   assert.match(dashboard, /MentorDecisionInbox/);
-  assert.match(dashboard, /NEXT ACTION/);
+  assert.match(dashboard, /className="mentor-inbox-summary"/);
   assert.match(dashboard, /AI 纪要候选/);
   assert.match(dashboard, /确认进展/);
   assert.match(dashboard, /需要指导/);

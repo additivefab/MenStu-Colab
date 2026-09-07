@@ -793,14 +793,11 @@ export default function Dashboard() {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">探</div>
-          <div><strong>探研</strong><span>Research Workbench</span></div>
+          <div><strong>探研</strong><span>科研进展管理</span></div>
         </div>
         <nav aria-label="主导航">
-          {visibleNavItems.map((item, index) => (
+          {visibleNavItems.map((item) => (
             <div className="nav-entry" key={item.id}>
-              {index === 0 ? <span className="nav-section-label">主线</span> : null}
-              {index === 3 ? <span className="nav-section-label">科研协作</span> : null}
-              {item.id === "settings" ? <span className="nav-section-label">系统</span> : null}
               <button className={`nav-item ${activeView === item.id ? "active" : ""}`} onClick={() => navigateMentor(item.id)}>
                 <span>{item.icon}</span>{item.label}
                 {item.id === "inbox" && data && data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + data.metrics.blocked + meetingPendingCount > 0
@@ -809,57 +806,39 @@ export default function Dashboard() {
             </div>
           ))}
         </nav>
-        {currentViewer.canSwitchPersona ? <button className="persona-switch" type="button" disabled={personaBusy} onClick={() => void switchPersona("student")}><span aria-hidden="true">⇄</span><span><strong>{personaBusy ? "正在切换…" : "打开本人学生端"}</strong><small>仅查看并操作{currentViewer.name}本人的学生档案</small></span></button> : null}
-        <div className="privacy-note"><span>AI 数据边界已启用</span><small>代码与保密项目仅限本地模型</small></div>
-        <div className="sidebar-foot">
+        {currentViewer.canSwitchPersona ? <button className="persona-switch" type="button" disabled={personaBusy} onClick={() => void switchPersona("student")}><span aria-hidden="true">⇄</span><span><strong>{personaBusy ? "正在切换…" : "本人学生端"}</strong></span></button> : null}
+        <button className="sidebar-foot" type="button" onClick={() => setFeishuOpen(true)} aria-label="查看飞书账号">
           <div className="avatar">{currentViewer.name.slice(0, 1) || "佘"}</div>
           <div><strong>{currentViewer.name || "佘阳"}</strong><span>{viewerRoleLabel}</span></div>
-        </div>
+        </button>
       </aside>
 
       <section className="workspace">
-        <div className="global-command-bar">
-          <label className="global-search">
-            <span aria-hidden="true">⌕</span>
-            <input
-              ref={globalSearchRef}
-              aria-label="全局搜索学生、阶段或研究方向"
-              value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                if (event.target.value && activeView !== "students" && activeView !== "overview") navigateMentor("students");
-              }}
-              placeholder="搜索学生、阶段或研究方向"
-            />
-            <kbd>⌘ K</kbd>
-          </label>
-          <div className="command-shortcuts" aria-label="科研工作区快捷入口">
-            <button type="button" onClick={() => navigateMentor("inbox")}>下一步行动</button>
-            <button type="button" onClick={() => navigateMentor("research")}>研究台账</button>
-            <button type="button" onClick={() => navigateMentor("meetings")}>组会议程</button>
-          </div>
-          <button className="command-sync" type="button" onClick={() => {
-            if (activeView === "overview") setOverviewRefreshRequest((current) => current + 1);
-            else void loadDashboard();
-          }} aria-label="同步最新数据" title="同步最新数据">↻</button>
-        </div>
-
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">{today}</p>
+        <header className="topbar compact-topbar">
+          <div className="workspace-heading">
             <h1>{navItems.find((item) => item.id === activeView)?.label}</h1>
-            <p className="subtitle">
-              {activeView === "overview" ? "先定位需要介入的人，再处理导师待办；状态、原因和下一动作均来自服务端权威摘要。"
-                : activeView === "inbox" ? "按判断、协调和跟进顺序处理；完成后自动进入下一项。"
-                : activeView === "research" ? "统一查看论文、课题方案与成果状态，正式判断均保留版本记录。"
-                  : activeView === "meetings" ? "从阻塞和逾期事项生成可保存议程，并追踪提醒是否送达。"
-                    : activeView === "students" ? "按学生进入完整档案与指导闭环。"
-                      : activeView === "cohort" ? "查看课题组结构、风险分布和培养节奏。"
-                        : "仅超级管理员可维护生产配置、名册与权限。"}
-            </p>
+            <p className="eyebrow">{today}</p>
           </div>
-          <div className="top-actions">
-            <button className="feishu connected" onClick={() => setFeishuOpen(true)}><i />飞书已登录</button>
+          <div className="workspace-tools">
+            <label className="global-search">
+              <span aria-hidden="true">⌕</span>
+              <input
+                ref={globalSearchRef}
+                aria-label="全局搜索学生、阶段或研究方向"
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  if (event.target.value && activeView !== "students" && activeView !== "overview") navigateMentor("students");
+                }}
+                placeholder="搜索学生或研究内容"
+              />
+              <kbd>⌘ K</kbd>
+            </label>
+            <button className="command-sync" type="button" onClick={() => {
+              if (activeView === "overview") setOverviewRefreshRequest((current) => current + 1);
+              else void loadDashboard();
+            }} aria-label="同步最新数据" title="同步最新数据">↻</button>
+            <button className="management-mobile-account" type="button" onClick={() => setFeishuOpen(true)}>账号</button>
             {data ? <button className="primary" onClick={() => setGuidanceOpen(true)}>＋ 记录指导</button> : null}
           </div>
         </header>
@@ -1022,7 +1001,7 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
 
   return <section className="mentor-inbox">
     <div className="mentor-inbox-summary">
-      <div><span>NEXT ACTION</span><h2>{tasks.filter((task) => task.category !== "waiting").length} 项需要您推进</h2><p>只呈现下一步动作；正式判断不会自动批量执行。</p></div>
+      <div><h2>{tasks.filter((task) => task.category !== "waiting").length} 项待处理</h2></div>
       <div className="mentor-inbox-filters" role="group" aria-label="待办类型">
         <button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>全部 <b>{tasks.length}</b></button>
         {(Object.keys(mentorTaskLabels) as MentorTaskCategory[]).map((category) => <button className={filter === category ? "active" : ""} key={category} onClick={() => setFilter(category)}>{mentorTaskLabels[category]} <b>{counts[category]}</b></button>)}
@@ -1403,8 +1382,13 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
       const target = document.getElementById(targetId)
         ?? (allowFallback ? document.getElementById(fallbackTargetId) : null);
       if (!target) return false;
+      let ancestor = target.parentElement;
+      while (ancestor) {
+        if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+        ancestor = ancestor.parentElement;
+      }
       if (target instanceof HTMLDetailsElement) target.open = true;
-      const supplement = intent.action === "supplement" ? target.querySelector("details") : null;
+      const supplement = intent.action === "supplement" ? target.querySelector("form")?.closest("details") : null;
       if (supplement instanceof HTMLDetailsElement) supplement.open = true;
       const focusTarget = supplement?.querySelector("summary") ?? target;
       target.scrollIntoView({ behavior: studentScrollBehavior(), block: target.id === "student-view-main" ? "start" : "center" });
@@ -1465,7 +1449,6 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
   function openGuidanceDesk(guidanceId?: number) {
     navigateStudent({ view: "mentor", focus: "guidance", guidanceId });
   }
-  const currentView = studentViewMeta[view];
   return <div className="student-workbench-shell">
     <a className="student-skip-link" href="#student-view-main">跳到当前界面</a>
     <aside className="student-workbench-sidebar">
@@ -1473,21 +1456,19 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
       <nav aria-label="我的科研导航">
         {(Object.entries(studentViewMeta) as Array<[StudentView, (typeof studentViewMeta)[StudentView]]>).map(([itemView, item]) => <a key={itemView} className={view === itemView ? "active" : ""} aria-current={view === itemView ? "page" : undefined} href={studentNavigationHref({ view: itemView })} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigateStudent({ view: itemView }); }}><i aria-hidden="true">{item.icon}</i><span>{item.label}</span></a>)}
       </nav>
-      <button className="student-workbench-create" type="button" aria-controls="student-quick-progress" aria-expanded={composerVisible} onClick={() => openComposer("论文")}><i aria-hidden="true">＋</i>提交新进展</button>
-      <div className="student-workbench-boundary"><strong>本人数据空间</strong><small>论文、课题、组会和导师回复按账号隔离</small></div>
       <button className="student-workbench-account" type="button" onClick={onFeishu}><span className="avatar">{data.viewer.name.slice(0, 1)}</span><span><strong>{data.viewer.name}</strong><small>飞书账号</small></span><i>›</i></button>
     </aside>
 
     <main className="student-portal-shell" id="student-view-main" tabIndex={-1} aria-labelledby={`student-view-${view}-title`}>
       <header className="student-portal-header">
-        <div className="student-workbench-context"><span>当前界面</span><strong>{currentView.label} · {student.currentFocus || "我的科研进展"}</strong></div>
-        <div className="student-account"><span className="student-workbench-status"><i />数据已同步</span>{data.viewer.canSwitchPersona ? <button className="student-persona-switch" type="button" disabled={personaBusy} onClick={onSwitchToManagement}>{personaBusy ? "正在切换…" : "返回管理端"}</button> : null}<button type="button" onClick={onFeishu}>飞书账号</button></div>
+        <div className="student-workbench-context"><strong>{student.currentFocus || "我的科研进展"}</strong></div>
+        <div className="student-account">{data.viewer.canSwitchPersona ? <button className="student-persona-switch" type="button" disabled={personaBusy} onClick={onSwitchToManagement}>{personaBusy ? "正在切换…" : "返回管理端"}</button> : null}<button className="student-header-account" type="button" onClick={onFeishu}>账号</button></div>
       </header>
 
       {view === "today" ? <StudentNextAction action={data.studentNextAction} student={student} papers={papers} onPaper={(paperId) => openComposer("论文", paperId)} onProject={(milestoneId) => openComposer("项目", milestoneId)} onMeeting={openMeetingDesk} onGuidance={openGuidanceDesk} onProgress={(entryId) => navigateStudent({ view: "progress", entryId })} onSupplement={openSupplement} /> : null}
 
       {view === "research" ? <>
-        <StudentViewIntro id="student-view-research-title" eyebrow="RESEARCH TRACKS" title="论文与课题，分开推进" description="选择一条研究线，只看这一类的阶段、台账、导师反馈和待补材料。" metric={`${paperReturned + projectReturned}`} metricLabel="项待补充">
+        <StudentViewIntro id="student-view-research-title" title="我的研究" metric={`${paperReturned + projectReturned}`} metricLabel="项待补充">
           <nav className="student-research-switch" aria-label="选择研究线">
             <a className={researchTrack === "paper" ? "active" : ""} aria-current={researchTrack === "paper" ? "page" : undefined} href={studentNavigationHref({ view: "research", researchTrack: "paper" })} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigateStudent({ view: "research", researchTrack: "paper" }); }}>论文研究<span>{papers.length} 篇</span></a>
             <a className={researchTrack === "project" ? "active" : ""} aria-current={researchTrack === "project" ? "page" : undefined} href={studentNavigationHref({ view: "research", researchTrack: "project" })} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigateStudent({ view: "research", researchTrack: "project" }); }}>课题研究<span>{projectEntries.length} 条</span></a>
@@ -1496,34 +1477,31 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
         <StudentResearchTracks scope={researchTrack} student={student} papers={papers} selectedPaperId={researchPaperId} onSelectPaper={(paperId) => navigateStudent({ view: "research", researchTrack: "paper", paperId })} onOpenComposer={openComposer} />
       </> : null}
 
-      {view === "progress" ? <StudentViewIntro id="student-view-progress-title" eyebrow="PROGRESS" title="提交与查看全部进展" description="论文和课题在这里提交；全部记录、审核状态和导师回复按时间统一查看。" metric={`${waitingCount}`} metricLabel="条等待导师">
+      {view === "progress" ? <StudentViewIntro id="student-view-progress-title" title="我的进展" metric={`${waitingCount}`} metricLabel="条等待导师">
         <div className="student-view-intro-actions"><button className="primary" type="button" onClick={() => openComposer("论文")}>记论文进展</button><button type="button" onClick={() => openComposer("项目")}>记课题进展</button></div>
       </StudentViewIntro> : null}
       {composer ? <div className="student-persistent-composer" hidden={view !== "progress" || !composerVisible}><StudentQuickProgressComposer key={`${composer}-${composerTargetId ?? "default"}`} kind={composer} initialTargetId={composerTargetId} student={student} papers={papers} onCancel={() => { setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); }} onSaved={async () => { const savedKind = composer; setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); onToast(`${savedKind === "论文" ? "论文" : "课题"}进展已提交，记录已更新`); await onRefresh(); }} /></div> : null}
-      {view === "progress" ? <><StudentProgressOverview student={student} onSupplement={openSupplement} /><StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} returnedOnly /><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} returnedOnly /></> : null}
+      {view === "progress" ? <><StudentProgressOverview student={student} onSupplement={openSupplement} />{paperReturned + projectReturned > 0 ? <details className="quiet-details student-supplement-section"><summary>待补充材料<span>{paperReturned + projectReturned} 条</span></summary><StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} returnedOnly /><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} returnedOnly /></details> : null}</> : null}
 
-      {view === "library" ? <><StudentViewIntro id="student-view-library-title" eyebrow="ARTIFACT LIBRARY" title="科研资料与证据来源" description="文件、DOI、Git 链接和组会来源集中检索，不再回到每条进展里翻找。" /><StudentResearchLibrary student={student} onOpenSource={openResearchSource} /></> : null}
+      {view === "library" ? <><StudentViewIntro id="student-view-library-title" title="我的资料" /><StudentResearchLibrary student={student} onOpenSource={openResearchSource} /></> : null}
 
-      {view === "mentor" ? <><StudentViewIntro id="student-view-mentor-title" eyebrow="MENTOR COLLABORATION" title="组会与导师协作" description="接收导师指导、回报完成情况、发起预约，并回看 AI 组会总结形成的进展。" /><div className="student-mentor-grid"><StudentGuidanceInbox onToast={onToast} onRefresh={onRefresh} /><StudentMeetingRequests onToast={onToast} onRefresh={onRefresh} /><StudentProgressOverview student={student} fixedFilter="组会" /></div></> : null}
+      {view === "mentor" ? <><StudentViewIntro id="student-view-mentor-title" title="导师与组会" /><div className="student-mentor-grid"><StudentGuidanceInbox onToast={onToast} onRefresh={onRefresh} /><StudentMeetingRequests onToast={onToast} onRefresh={onRefresh} /><StudentProgressOverview student={student} fixedFilter="组会" /></div></> : null}
 
-      <footer className="student-portal-boundary">这里仅显示你自己的论文、课题、组会记录和导师回复。</footer>
     </main>
   </div>;
 }
 
-function StudentViewIntro({ id, eyebrow, title, description, metric, metricLabel, children }: {
+function StudentViewIntro({ id, title, metric, metricLabel, children }: {
   id: string;
-  eyebrow: string;
   title: string;
-  description: string;
   metric?: string;
   metricLabel?: string;
   children?: ReactNode;
 }) {
   return <section className="student-view-intro">
-    <div><span>{eyebrow}</span><h1 id={id}>{title}</h1><p>{description}</p></div>
+    <div><h1 id={id}>{title}</h1></div>
     {children}
-    {metric ? <strong>{metric}<small>{metricLabel}</small></strong> : null}
+    {metric && metric !== "0" ? <strong>{metric}<small>{metricLabel}</small></strong> : null}
   </section>;
 }
 
@@ -1550,16 +1528,16 @@ function StudentNextAction({ action, student, papers, onPaper, onProject, onMeet
     waiting: false,
   };
   const actionLabel = focus.destination === "supplement"
-    ? "补充这项进展"
+    ? "补充材料"
     : focus.destination === "meeting"
       ? focus.kind === "waiting" ? "查看会议预约" : "约导师解决阻塞"
       : focus.destination === "guidance"
         ? "查看导师指导"
       : focus.destination === "paper"
-        ? "完成后记录论文进展"
+        ? "记录论文进展"
         : focus.destination === "progress"
           ? "查看已提交进展"
-          : "完成后记录课题进展";
+          : "记录课题进展";
 
   function runAction() {
     if (focus.destination === "supplement") {
@@ -1587,7 +1565,7 @@ function StudentNextAction({ action, student, papers, onPaper, onProject, onMeet
   }
 
   return <section className="student-next-action-page" aria-labelledby="student-view-today-title">
-    <header><span>NEXT ACTION</span><h1 id="student-view-today-title">下一步行动</h1></header>
+    <header><h1 id="student-view-today-title">下一步行动</h1></header>
     <article className={`student-next-action-card ${focus.attention ? "attention" : ""}`}>
       <span>{focus.kicker}</span>
       <strong>{focus.title}</strong>
@@ -1670,15 +1648,17 @@ function StudentQuickProgressComposer({ kind, initialTargetId, student, papers, 
   }
 
   return <section className="student-quick-progress" id="student-quick-progress" tabIndex={-1} aria-labelledby="student-quick-progress-title">
-    <header><div><span>{kind === "论文" ? "论文进展" : "课题进展"}</span><h2 id="student-quick-progress-title">{kind === "论文" ? "这次论文做了什么？" : "这次课题做了什么？"}</h2><p>完成内容、可核验证据和下一行动会分开保存。</p></div><button type="button" onClick={onCancel}>收起</button></header>
-    <form onSubmit={submit}>
+    <header><h2 id="student-quick-progress-title">{kind === "论文" ? "记录论文进展" : "记录课题进展"}</h2><button type="button" onClick={onCancel}>收起</button></header>
+    <form onSubmit={submit} onInvalidCapture={(event) => {
+      const details = (event.target as HTMLElement).closest("details");
+      if (details) details.open = true;
+    }}>
       {kind === "论文" ? <>
         <div className="student-quick-row"><label>哪篇论文<select value={paperSelection} onChange={(event) => { const value = event.target.value; setPaperSelection(value); setPaperStage(activePapers.find((paper) => String(paper.id) === value)?.current_stage ?? "planning"); }}>{activePapers.map((paper) => <option key={paper.id} value={paper.id}>{paper.title}</option>)}<option value="new">新建一篇论文</option></select></label><label>现在写到哪一步<select value={paperStage} onChange={(event) => setPaperStage(event.target.value as PaperStage)}>{paperStages.map((stage) => <option key={stage} value={stage}>{paperStageMeta[stage].label}</option>)}</select></label></div>
         {!selectedPaper ? <div className="student-quick-row new-paper"><label>论文题目<input name="paperTitle" required placeholder="暂定题目也可以" /></label><label>类型<select name="paperType" defaultValue="期刊论文">{paperTypes.map((type) => <option key={type}>{type}</option>)}</select></label><label>计划投稿<input name="plannedSubmissionDate" type="date" min={minimumDate} required /></label></div> : null}
         <label className="wide">这次做完了什么<textarea name="summary" rows={4} required placeholder="例如：补完了实验部分，图 3 和图 4 已经换成新结果。" /></label>
-        <div className="student-quick-row"><label>稿件版本<input name="manuscriptVersion" required placeholder="例如：v0.4、R1、commit 8f3a2c" /></label><label>稿件编号 / DOI（可选）<input name="submissionIdentifier" placeholder="投稿后填写稿件号或 DOI" /></label></div>
+        <label className="wide">稿件版本<input name="manuscriptVersion" required placeholder="例如：v0.4、R1、commit 8f3a2c" /></label>
         <div className="student-quick-row"><label>下一步<input name="nextAction" required placeholder="例如：把讨论部分改完" /></label><label>准备什么时候完成<input name="nextActionDueDate" type="date" min={minimumDate} defaultValue={nextWeek} required /></label></div>
-        <label className="wide">当前阻塞（可选）<textarea name="blocker" rows={2} placeholder="如果需要导师决策、数据或资源，请写在这里。" /></label>
       </> : <>
         <div className="student-quick-project-plan">
           <div><span>当前研究方案</span><strong>{student.proposalTitle || "尚无已确认研究方案"}</strong><small>{student.proposalVersion ? `方案 V${student.proposalVersion}` : "可先记录进展，方案确认后再关联节点"}</small></div>
@@ -1687,14 +1667,20 @@ function StudentQuickProgressComposer({ kind, initialTargetId, student, papers, 
         </div>
         <label className="wide">这次做完了什么<textarea name="summary" rows={4} required placeholder="例如：完成第一轮测试，结果表和异常样本已整理。" /></label>
         <div className="student-quick-row"><label>下一行动<input name="nextAction" required placeholder="例如：补做低温组对照实验" /></label><label>计划完成日期<input name="nextActionDueDate" type="date" min={minimumDate} defaultValue={nextWeek} required /></label></div>
-        <label className="wide">当前阻塞（可选）<textarea name="blocker" rows={2} placeholder="写清卡在数据、设备、方法还是决策。" /></label>
         <label htmlFor="student-project-completion-request" className={`student-completion-request ${projectMilestoneSelection ? "" : "disabled"}`}><input id="student-project-completion-request" name="completionRequested" type="checkbox" value="1" disabled={!projectMilestoneSelection} /><span>申请完成所选节点<small>申请不会直接改状态；导师确认为实质性进展后才完成。</small></span></label>
       </>}
-      <label className="wide student-evidence-field">可核验证据<textarea name="evidence" rows={3} placeholder={kind === "论文" ? "例如：稿件第 4–6 页、图 3/4，或评审记录位置。如果上传了附件可不填。" : "例如：实验批次 EXP-024、结果表 Sheet-2、验收记录位置。如果上传了附件可不填。"} /><small>这里不再复制“做完了什么”，请提供可查的位置、编号或材料。</small></label>
-      <label className="wide">私有 GitHub 链接（可选）<input name="gitUrl" type="url" placeholder="https://github.com/…" /></label>
-      <label className="student-quick-file">有文件就一起放上来（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件，单个不超过 50 MB，总计不超过 80 MB</small></label>
+      <label className="wide student-evidence-field">可核验证据<textarea name="evidence" rows={3} placeholder={kind === "论文" ? "例如：稿件第 4–6 页、图 3/4，或评审记录位置。如果上传了附件可不填。" : "例如：实验批次 EXP-024、结果表 Sheet-2、验收记录位置。如果上传了附件可不填。"} /><small>填写证据位置、链接或编号，也可直接上传文件。</small></label>
+      <details className="quiet-details student-optional-fields">
+        <summary>补充信息<span>阻塞、Git 链接{kind === "论文" ? "、稿件编号" : ""}</span></summary>
+        <div>
+          <label className="wide">当前阻塞（可选）<textarea name="blocker" rows={2} placeholder="需要导师决策、数据或资源时填写。" /></label>
+          <label className="wide">私有 GitHub 链接（可选）<input name="gitUrl" type="url" placeholder="https://github.com/…" /></label>
+          {kind === "论文" ? <label className="wide">稿件编号 / DOI（可选）<input name="submissionIdentifier" placeholder="投稿后填写稿件号或 DOI" /></label> : null}
+        </div>
+      </details>
+      <label className="student-quick-file">附件（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件，单个不超过 50 MB，总计不超过 80 MB</small></label>
       {formError ? <p className="form-error" role="alert">{formError}</p> : null}
-      <footer><span>不用另开窗口，提交后本页会自动更新。</span><button type="button" onClick={onCancel}>取消</button><button className="primary" disabled={busy}>{busy ? "正在提交…" : "提交"}</button></footer>
+      <footer><button type="button" onClick={onCancel}>取消</button><button className="primary" disabled={busy}>{busy ? "正在提交…" : "提交"}</button></footer>
     </form>
   </section>;
 }
@@ -1734,25 +1720,22 @@ function StudentResearchTracks({ scope, student, papers, selectedPaperId, onSele
   const rhythmLabel = !entries.length ? "还没有记录" : updateDays === 0 ? "今天已更新" : rhythmOverdue ? `超过计划 ${updateDays - student.cadenceDays} 天` : `${updateDays} 天前更新`;
 
   return <section className="student-research-tracks" id="student-research-tracks" aria-labelledby="student-research-tracks-title">
-    <header>
-      <div><span>先看现在，再看下一步</span><h2 id="student-research-tracks-title">{scope === "paper" ? "论文推进概览" : "课题推进概览"}</h2><p>{scope === "paper" ? "阶段、下一行动和投稿计划集中在这一条研究线。" : "阶段成果、培养节点和记录节奏集中在这一条研究线。"}</p></div>
-      <strong>{student.stage}<small>{student.gradeYear} 级 · {student.degree}</small></strong>
-    </header>
+    <h2 className="visually-hidden" id="student-research-tracks-title">{scope === "paper" ? "论文推进概览" : "课题推进概览"}</h2>
 
     <div className="student-research-track-grid single">
       {scope === "paper" ? <article className="student-research-track paper-track">
-        {trackingPapers.length ? <div className="student-paper-selector" role="group" aria-label="选择要查看的论文">
+        {trackingPapers.length > 1 ? <div className="student-paper-selector" role="group" aria-label="选择要查看的论文">
           {trackingPapers.map((paper) => {
             const paperUpdates = paperEntries.filter((entry) => entry.paper?.id === paper.id).length;
             const selected = paper.id === leadPaper?.id;
             return <button key={paper.id} type="button" className={selected ? "active" : ""} aria-pressed={selected} onClick={() => onSelectPaper(paper.id)}><span>{paper.status === "on_hold" ? "已暂停" : "推进中"}</span><strong>{paper.title}</strong><small>{paperUpdates} 次更新 · {paperStageMeta[paper.current_stage].label}</small></button>;
           })}
         </div> : null}
-        <div className="student-research-track-head"><span className="student-research-track-icon">文</span><div><small>论文这条线</small><strong>{leadPaper?.title || "还没有建立论文"}</strong></div><em>{selectedPaperEntries.length} 次更新</em></div>
+        <div className="student-research-track-head"><span className="student-research-track-icon">文</span><div><strong>{leadPaper?.title || "还没有建立论文"}</strong></div><em>{selectedPaperEntries.length} 次更新</em></div>
         {leadPaper ? <>
           <div className="student-paper-stage-summary"><span>当前阶段</span><strong>{paperStageMeta[leadPaper.current_stage].label}</strong><em>第 {stageIndex + 1} / {paperStages.length} 阶段</em></div>
           <div className="student-paper-stage-bar" role="progressbar" aria-label={`${leadPaper.title} 论文阶段位置`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={stagePercent}><i style={{ width: `${stagePercent}%` }} /></div>
-          <ol className="student-paper-stage-steps">{paperStages.map((stage, index) => <li key={stage} aria-current={index === stageIndex ? "step" : undefined} className={index < stageIndex ? "done" : index === stageIndex ? "current" : ""}><i /><small>{paperStageMeta[stage].label}</small></li>)}</ol>
+          <details className="quiet-details student-stage-details"><summary>查看全部阶段</summary><ol className="student-paper-stage-steps">{paperStages.map((stage, index) => <li key={stage} aria-current={index === stageIndex ? "step" : undefined} className={index < stageIndex ? "done" : index === stageIndex ? "current" : ""}><i /><small>{paperStageMeta[stage].label}</small></li>)}</ol></details>
           <p className="student-paper-stage-gate">这一阶段要做到：{paperStageMeta[leadPaper.current_stage].gate}</p>
           <div className={`student-track-next-action ${actionDeadline.overdue ? "overdue" : ""}`}><span>先做这一件事</span><strong>{nextAction}</strong><small>{nextActionDate ? `准备完成：${nextActionDate} · ${actionDeadline.label}` : "完成后记一条论文进展"}</small></div>
         </> : <div className="student-track-empty"><strong>先把论文建起来</strong><span>题目可以先写暂定名，后面随时继续更新。</span></div>}
@@ -1760,7 +1743,7 @@ function StudentResearchTracks({ scope, student, papers, selectedPaperId, onSele
       </article> : null}
 
       {scope === "project" ? <article className="student-research-track project-track">
-        <div className="student-research-track-head"><span className="student-research-track-icon">题</span><div><small>课题这条线</small><strong>{student.proposalTitle || "尚无已确认研究方案"}</strong></div><em>{student.proposalVersion ? `方案 V${student.proposalVersion}` : "待确认"}</em></div>
+        <div className="student-research-track-head"><span className="student-research-track-icon">题</span><div><strong>{student.proposalTitle || "尚无已确认研究方案"}</strong></div><em>{student.proposalVersion ? `方案 V${student.proposalVersion}` : "待确认"}</em></div>
         {planMilestones.length ? <section className="student-project-plan" aria-label="已确认研究方案与培养节点">
           <header><div><span>执行路线</span><strong>{planMilestones.filter((milestone) => milestone.status === "completed").length}/{planMilestones.length} 个节点已完成</strong></div><small>节点由导师确认，进展记录只能发起完成申请。</small></header>
           <ol>{planMilestones.map((milestone, index) => <li key={milestone.id} className={`${milestone.status} ${milestone.id === currentProjectMilestoneId ? "current" : ""}`}>
@@ -1944,7 +1927,7 @@ function StudentProgressOverview({ student, fixedFilter, onSupplement }: { stude
 
   return <section className="student-progress-overview" id="student-progress-overview" aria-labelledby="student-progress-overview-title">
     <header className="student-progress-overview-head">
-      <div><span>{fixedFilter === "组会" ? "AI MEETING NOTES" : "一页看清"}</span><h2 id="student-progress-overview-title">{fixedFilter === "组会" ? "AI 组会记录" : "我的进展"}</h2><p>{fixedFilter === "组会" ? "会议总结形成的本人进展、证据来源和导师回复。" : "论文、课题和组会，按时间放在一起。"}</p></div>
+      <h2 id="student-progress-overview-title">{fixedFilter === "组会" ? "AI 组会记录" : "进展记录"}</h2>
       <strong>{visibleEntries.length}<small>条记录</small></strong>
     </header>
 
@@ -1953,7 +1936,7 @@ function StudentProgressOverview({ student, fixedFilter, onSupplement }: { stude
     </nav> : null}
 
     <div className="student-progress-overview-list">
-      {visibleEntries.map((entry, index) => { const kind = studentProgressKindMeta(entry.kind); const context = entry.reviewer_note ? `导师已回复：${entry.reviewer_note}` : entry.kind === "组会" ? entry.evidence_sources[0]?.label || "飞书会议纪要" : entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.project ? `${entry.project.milestone_title || "未关联节点"} · V${entry.current_revision}` : "点开查看完整内容"; return <details id={`student-progress-${entry.id}`} key={`${activeFilter}-${entry.id}`} className={`student-progress-entry kind-${kind.className}`} open={index === 0}>
+      {visibleEntries.map((entry) => { const kind = studentProgressKindMeta(entry.kind); const context = entry.reviewer_note ? `导师已回复：${entry.reviewer_note}` : entry.kind === "组会" ? entry.evidence_sources[0]?.label || "飞书会议纪要" : entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.project ? `${entry.project.milestone_title || "未关联节点"} · V${entry.current_revision}` : "点开查看完整内容"; return <details id={`student-progress-${entry.id}`} key={`${activeFilter}-${entry.id}`} className={`student-progress-entry kind-${kind.className}`}>
         <summary>
           <span className="student-progress-entry-icon" aria-hidden="true">{kind.icon}</span>
           <span className="student-progress-entry-date"><time>{shortDate(entry.submitted_at)}</time><small>{kind.label}</small></span>
@@ -1963,8 +1946,7 @@ function StudentProgressOverview({ student, fixedFilter, onSupplement }: { stude
         <article>
           {entry.review_status === "changes_requested" && onSupplement ? <>
             <blockquote><b>{entry.reviewer_name ? `${entry.reviewer_name}的回复` : "导师回复"}</b><span>{entry.reviewer_note || "请按要求补充内容、证据或附件。"}</span></blockquote>
-            <p>完整原记录和版本历史继续保留；补证编辑统一在下方对应表单完成。</p>
-            <button className="primary student-progress-supplement" type="button" onClick={() => onSupplement(entry)}>前往这条补证表单</button>
+            <button className="primary student-progress-supplement" type="button" onClick={() => onSupplement(entry)}>补充材料</button>
           </> : <>
             <p>{entry.summary || entry.evidence}</p>
             {entry.paper ? <dl className="student-progress-entry-paper"><div><dt>论文阶段</dt><dd>{paperStageMeta[entry.paper.stage].label}</dd></div><div><dt>下一步</dt><dd>{entry.paper.next_action}</dd></div><div><dt>准备完成</dt><dd>{entry.paper.next_action_due_date}</dd></div></dl> : null}
@@ -2366,7 +2348,7 @@ function StudentFilters({ query, setQuery, riskFilter, setRiskFilter, degreeFilt
   degreeFilter: "全部" | Student["degree"];
   setDegreeFilter: (value: "全部" | Student["degree"]) => void;
 }) {
-  return <div className="filter-bar"><label><span aria-hidden="true">⌕</span><input aria-label="搜索学生" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索学生、阶段或研究方向" /></label><div className="filter-groups"><div className="filter-set"><span>层次</span><div className="filter-chips degree-chips" role="group" aria-label="按培养层次筛选">{(["全部", "博士", "硕士"] as const).map((degree) => <button type="button" aria-pressed={degreeFilter === degree} className={degreeFilter === degree ? "selected" : ""} key={degree} onClick={() => setDegreeFilter(degree)}>{degree}</button>)}</div></div><div className="filter-set"><span>风险</span><div className="filter-chips" role="group" aria-label="按风险筛选">{(["全部", "正常", "黄色", "橙色", "红色"] as const).map((risk) => <button type="button" aria-pressed={riskFilter === risk} className={riskFilter === risk ? "selected" : ""} key={risk} onClick={() => setRiskFilter(risk)}>{risk}</button>)}</div></div></div></div>;
+  return <div className="filter-bar">{query ? <button type="button" className="text-button" onClick={() => setQuery("")}>清除搜索</button> : null}<div className="filter-groups"><div className="filter-set"><span>层次</span><div className="filter-chips degree-chips" role="group" aria-label="按培养层次筛选">{(["全部", "博士", "硕士"] as const).map((degree) => <button type="button" aria-pressed={degreeFilter === degree} className={degreeFilter === degree ? "selected" : ""} key={degree} onClick={() => setDegreeFilter(degree)}>{degree}</button>)}</div></div><div className="filter-set"><span>风险</span><div className="filter-chips" role="group" aria-label="按风险筛选">{(["全部", "正常", "黄色", "橙色", "红色"] as const).map((risk) => <button type="button" aria-pressed={riskFilter === risk} className={riskFilter === risk ? "selected" : ""} key={risk} onClick={() => setRiskFilter(risk)}>{risk}</button>)}</div></div></div></div>;
 }
 
 function StudentTable({ students }: { students: Student[] }) {

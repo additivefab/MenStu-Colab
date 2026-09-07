@@ -22,16 +22,15 @@ export function OverviewMetrics({
           onClick={() => onStateChange(active ? "all" : state)}
           key={state}
         >
-          <span aria-hidden="true">{meta.icon}</span>
-          <strong>{data.counts[state]}</strong>
           <small>{meta.label}</small>
+          <strong>{data.counts[state]}</strong>
         </button>;
       })}
     </div>
     <aside>
       <span>本周可信推进</span>
       <strong>{data.weeklySubstantiveStudentCount}<small> / {data.total} 人</small></strong>
-      <p>只统计导师确认的实质性进展</p>
+
     </aside>
   </section>;
 }
