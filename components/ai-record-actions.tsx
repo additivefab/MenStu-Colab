@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 type RecordTarget = { id: number; title: string; current_revision: number; review_status: string; deletion_id?: string };
 
@@ -63,12 +63,12 @@ export function AiRecordActions({ record, restore = false, onChanged }: {
 
 type DeletedRecord = RecordTarget & { deleted_at: string; deleted_by: string };
 
-export function DeletedAiRecords({ studentId, onChanged }: { studentId: string; onChanged: () => Promise<void> }) {
+export function DeletedAiRecords({ studentId, onChanged, refreshKey = 0 }: { studentId: string; onChanged: () => Promise<void>; refreshKey?: number }) {
   const [open, setOpen] = useState(false);
   const [records, setRecords] = useState<DeletedRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -78,9 +78,14 @@ export function DeletedAiRecords({ studentId, onChanged }: { studentId: string; 
       setRecords(payload.records ?? []);
     } catch (failure) { setError(failure instanceof Error ? failure.message : '读取失败，请重试'); }
     finally { setLoading(false); }
-  }
+  }, [studentId]);
+  useEffect(() => {
+    if (!open) return;
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [open, refreshKey, load]);
   return <div className="ai-deleted-records">
-    <button type="button" aria-expanded={open} onClick={() => { setOpen(!open); if (!open) void load(); }}>
+    <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>
       {open ? '收起已删除记录' : '已删除'}</button>
     {open ? <div aria-label="已删除的 AI 记录">
       {loading ? <p role="status">正在加载…</p> : error ? <p role="alert">{error} <button type="button" onClick={() => void load()}>重试</button></p>

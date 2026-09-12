@@ -79,9 +79,9 @@ test("admin assignment scope, evidence provenance, outputs, guidance, and upgrad
   assert.match(feishuAuth, /row\.role === "mentor"\s*\? "admin"/);
   assert.doesNotMatch(feishuAuth, /export type AppRole = [^\n]*"mentor"/);
   assert.match(studentPage, /科研成果/);
-  assert.match(studentPage, /个人进展与证据链/);
-  assert.match(studentPage, /导师自由指导区/);
-  assert.match(studentPage, /正式进展审核/);
+  assert.match(studentPage, /进展与审核/);
+  assert.match(studentPage, /指导记录/);
+  assert.match(studentPage, /审核操作/);
   assert.doesNotMatch(feishuImport, /messageId\.slice/);
   assert.match(feishuImport, /review_status, updated_at/);
 });
