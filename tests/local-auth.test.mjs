@@ -169,7 +169,7 @@ test('runtime schema is idempotent and migration keeps existing sessions as Feis
   for (const sql of localAuthSchemaStatements) db.exec(sql);
   for (const sql of localAuthSchemaStatements) db.exec(sql);
   assert.equal(db.prepare('SELECT auth_method FROM app_sessions').get().auth_method,'feishu');
-  assert.equal(db.prepare('SELECT version FROM app_schema_meta').get().version,22);
+  assert.equal(db.prepare('SELECT version FROM app_schema_meta').get().version,23);
   db.close();
 });
 

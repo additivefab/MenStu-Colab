@@ -23,7 +23,7 @@ test('Workers HTTP flow: original account -> activation -> login -> scoped data 
     });
     await mf.dispatchFetch(origin+'/api/health/ready'); // Exercise the real runtime migration.
     const db=await mf.getD1Database('DB');
-    assert.equal((await db.prepare('SELECT version FROM app_schema_meta').first()).version,22);
+    assert.equal((await db.prepare('SELECT version FROM app_schema_meta').first()).version,23);
     await db.prepare("INSERT INTO students(id,display_name,degree,grade_year,stage) VALUES ('student-001','测试学生一','博士',2024,'实验'),('student-002','测试学生二','硕士',2025,'实验')").run();
     await db.prepare("INSERT INTO app_users(id,feishu_open_id,display_name,role,student_id) VALUES (1,'old-feishu-id','测试学生一','student','student-001'),(2,'other-feishu-id','测试学生二','student','student-002'),(3,'superadmin-test','测试超管','superadmin',NULL)").run();
     await db.prepare("INSERT INTO app_sessions(token_hash,app_user_id,expires_at) VALUES (?,3,datetime('now','+1 day'))").bind(digest('admin-test-session')).run();
@@ -87,6 +87,36 @@ test('Workers HTTP flow: original account -> activation -> login -> scoped data 
     assert.equal((await send('/api/auth/local/login',{username:'why',password})).status,401);
     assert.equal((await db.prepare('SELECT count(*) AS n FROM local_credentials WHERE app_user_id=2').first()).n,0);
     assert.equal((await send('/api/auth/local/login',{username:'WHY',password:'Updated research password 2026!'})).status,200);
+    // Shared initial passwords grant only access to the password-change flow.
+    const initialBody={action:'initialize',userId:2,studentId:'student-002'};
+    assert.equal((await send('/api/admin/local-accounts',initialBody)).status,401);
+    assert.equal((await send('/api/admin/local-accounts',{...initialBody,userId:3},admin)).status,409);
+    const initialized=await send('/api/admin/local-accounts',initialBody,admin);
+    assert.equal(initialized.status,200,await initialized.clone().text());
+    assert.equal((await send('/api/admin/local-accounts',initialBody,admin)).status,409);
+    const initialLogin=await send('/api/auth/local/login',{username:'sy',password:'123456789'});
+    assert.equal(initialLogin.status,200,await initialLogin.clone().text());
+    const initialCookie=initialLogin.headers.getSetCookie().find(c=>c.startsWith('tanyan_session=')).split(';')[0];
+    for (const path of ['/api/auth/session','/api/dashboard','/api/meeting-requests','/api/users']) {
+      const restricted=await mf.dispatchFetch(origin+path,{headers:{cookie:initialCookie}});
+      assert.equal(restricted.status,403,`${path}: ${await restricted.clone().text()}`);
+      assert.equal((await restricted.json()).code,'PASSWORD_CHANGE_REQUIRED');
+    }
+    assert.equal((await send('/api/auth/persona',{persona:'student'},initialCookie)).status,401);
+    assert.equal((await mf.dispatchFetch(origin+'/api/auth/local/password',{headers:{cookie:initialCookie}})).status,200);
+    const newPersonal='Student two personal password 2026!';
+    assert.equal((await send('/api/auth/local/password',{currentPassword:'incorrect',newPassword:newPersonal},initialCookie)).status,400);
+    assert.equal((await send('/api/auth/local/password',{currentPassword:'123456789',newPassword:'123456789'},initialCookie)).status,400);
+    const initialChanged=await send('/api/auth/local/password',{currentPassword:'123456789',newPassword:newPersonal},initialCookie);
+    assert.equal(initialChanged.status,200,await initialChanged.clone().text());
+    assert.equal((await mf.dispatchFetch(origin+'/api/dashboard',{headers:{cookie:initialCookie}})).status,401);
+    assert.equal((await send('/api/auth/local/login',{username:'sy',password:'123456789'})).status,401);
+    const personalLogin=await send('/api/auth/local/login',{username:'sy',password:newPersonal});
+    assert.equal(personalLogin.status,200);
+    const personalCookie=personalLogin.headers.getSetCookie().find(c=>c.startsWith('tanyan_session=')).split(';')[0];
+    const personalDashboard=await mf.dispatchFetch(origin+'/api/dashboard',{headers:{cookie:personalCookie}});
+    assert.equal(personalDashboard.status,200);
+    assert.equal((await personalDashboard.json()).viewer.id,2);
     const reset=await send('/api/admin/local-accounts',body,admin);
     assert.equal(reset.status,200);
     assert.equal((await mf.dispatchFetch(origin+'/api/auth/session',{headers:{cookie:studentCookie}})).status,401);

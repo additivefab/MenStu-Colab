@@ -186,7 +186,7 @@ test("runtime schema bootstrap matches published migration and is repeatable", (
   for(const sql of progressResolutionSchemaStatements) db.exec(sql);
   for(const sql of progressResolutionSchemaStatements) db.exec(sql);
   assert.deepEqual(db.prepare("SELECT name,sql FROM sqlite_master WHERE name LIKE '%resolution%' ORDER BY name").all(),before);
-  assert.equal(db.prepare("SELECT version FROM app_schema_meta WHERE id=1").get().version,22);
+  assert.equal(db.prepare("SELECT version FROM app_schema_meta WHERE id=1").get().version,23);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(),[]);
   db.close();
 });

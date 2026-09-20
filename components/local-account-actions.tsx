@@ -11,9 +11,10 @@ export function LocalAccountActions({ userId, studentId, studentName, account, o
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [issued, setIssued] = useState<{ username: string; activationUrl: string; expiresAt: string } | null>(null);
-  async function change(action: "issue" | "disable") {
+  async function change(action: "initialize" | "issue" | "disable") {
     if (!window.confirm(action === "disable"
       ? `停用 ${studentName} 的独立登录？该账号现有会话将退出，原档案和飞书绑定保留。`
+      : action === "initialize" ? `为 ${studentName}（${studentId}，原账号 #${userId}）开通独立登录？初始密码为 123456789，首次登录必须修改。`
       : `为 ${studentName}（${studentId}，原账号 #${userId}）生成密码设置链接？请先核对本人身份。旧密码、旧链接及现有会话将失效。`)) return;
     setBusy(true); setMessage(""); setIssued(null);
     try {
@@ -31,7 +32,7 @@ export function LocalAccountActions({ userId, studentId, studentName, account, o
   }
   return <div className={styles.controls}>
     <small>独立账号：{account?.username ?? studentLoginName(studentId)} · {account?.status === "active" ? "已启用" : account?.status === "pending" ? "待设置密码" : account ? "已停用" : "未开通"}</small>
-    <button type="button" disabled={busy} onClick={() => void change("issue")}>{account ? "重新生成密码设置链接" : "开通独立登录"}</button>
+    <button type="button" disabled={busy} onClick={() => void change(account ? "issue" : "initialize")}>{account ? "重新生成密码设置链接" : "开通独立登录"}</button>
     {account && account.status !== "disabled" ? <button type="button" disabled={busy} onClick={() => void change("disable")}>停用独立登录</button> : null}
     {issued ? <div className={styles.result}>
       <strong>{studentName} · 账号 {issued.username}</strong>

@@ -898,6 +898,7 @@ export const localCredentials = sqliteTable("local_credentials", {
   studentId: text("student_id").notNull().references(() => students.id),
   username: text("username").notNull().unique(),
   passwordHash: text("password_hash"),
+  mustChangePassword: integer("must_change_password").notNull().default(0),
   activationHash: text("activation_hash").unique(),
   activationExpiresAt: text("activation_expires_at"),
   version: integer("version").notNull().default(1),
@@ -917,4 +918,9 @@ export const localAuthAttempts = sqliteTable("local_auth_attempts", {
   key: text("key").primaryKey(),
   attempts: integer("attempts").notNull(),
   windowStart: integer("window_start").notNull(),
+});
+
+export const localLoginRollouts = sqliteTable("local_login_rollouts", {
+  rolloutKey: text("rollout_key").primaryKey(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });

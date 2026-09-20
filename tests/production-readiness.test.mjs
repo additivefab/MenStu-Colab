@@ -12,7 +12,7 @@ test("database initialization is version-gated through the immutable progress sc
     readFile(new URL("../app/api/health/ready/route.ts", import.meta.url), "utf8"),
   ]);
 
-  assert.match(database, /CURRENT_SCHEMA_VERSION = 22/);
+  assert.match(database, /CURRENT_SCHEMA_VERSION = 23/);
   assert.match(database, /databaseReadyPromise \?\?=/);
   assert.match(database, /数据库结构不完整/);
   assert.match(database, /app_schema_meta/);

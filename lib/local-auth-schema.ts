@@ -1,9 +1,11 @@
 export const localAuthSchemaStatements = [
+  `CREATE TABLE IF NOT EXISTS local_login_rollouts (rollout_key TEXT PRIMARY KEY, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
   `CREATE TABLE IF NOT EXISTS local_credentials (
     app_user_id INTEGER PRIMARY KEY REFERENCES app_users(id),
     student_id TEXT NOT NULL REFERENCES students(id),
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT,
+    must_change_password INTEGER NOT NULL DEFAULT 0,
     activation_hash TEXT UNIQUE,
     activation_expires_at TEXT,
     version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),

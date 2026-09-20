@@ -3,7 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import styles from "./local-login.module.css";
 
-export function ChangePassword() {
+export function ChangePassword({ requiredChange = false }: { requiredChange?: boolean }) {
   const [account, setAccount] = useState<{ username: string | null; enabled: boolean } | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -35,9 +35,7 @@ export function ChangePassword() {
     finally { setBusy(false); }
   }
 
-  return <details className={styles.changePassword}>
-    <summary>修改登录密码</summary>
-    {account?.enabled ? <form className={styles.form} onSubmit={submit}>
+  const content = account?.enabled ? <form className={styles.form} onSubmit={submit}>
       <label>独立登录名<input name="username" autoComplete="username" value={account.username ?? ""} readOnly /></label>
       <label>原密码<input name="currentPassword" type="password" autoComplete="current-password" required maxLength={256} /></label>
       <label>新密码<input name="newPassword" type="password" autoComplete="new-password" required minLength={15} maxLength={128} /></label>
@@ -45,6 +43,6 @@ export function ChangePassword() {
       <p className={styles.help}>新密码须为 15–128 个字符。修改成功后，所有设备都需要重新登录。</p>
       {error ? <p className={styles.error} role="alert">{error}</p> : null}
       <button className="primary" disabled={busy}>{busy ? "正在修改…" : "保存新密码并重新登录"}</button>
-    </form> : <p className={styles.help} role="status">{error || (account ? "独立登录尚未开通，请联系管理员获取密码设置链接。" : "正在读取独立账号…")}</p>}
-  </details>;
+    </form> : <p className={styles.help} role="status">{error || (account ? "独立登录尚未开通，请联系管理员获取密码设置链接。" : "正在读取独立账号…")}</p>;
+  return requiredChange ? <section className={styles.changePassword}>{content}</section> : <details className={styles.changePassword}><summary>修改登录密码</summary>{content}</details>;
 }

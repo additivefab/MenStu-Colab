@@ -30,6 +30,7 @@ export type AppUser = {
   primaryRole: AppRole;
   activePersona: AppPersona;
   canSwitchPersona: boolean;
+  mustChangePassword?: boolean;
   studentId: string | null;
 };
 
@@ -382,12 +383,13 @@ export function clearPersonaCookie() {
   return `${PERSONA_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 
-export async function getAppUser(request: Request) {
+export async function getAppUser(request: Request, allowPasswordChange = false) {
   const token = readCookie(request, SESSION_COOKIE);
   if (!token) return null;
   await ensureDatabase();
   const tokenHash = await hashToken(token);
   const row = await getD1().prepare(`SELECT u.id, u.feishu_open_id, u.display_name, u.avatar_url, u.email, u.role,
+    CASE WHEN s.auth_method = 'local' THEN c.must_change_password ELSE 0 END AS must_change_password,
     CASE WHEN EXISTS (
       SELECT 1 FROM students bound_student
       WHERE bound_student.id = u.student_id AND bound_student.active = 1
@@ -397,8 +399,9 @@ export async function getAppUser(request: Request) {
     WHERE s.token_hash = ? AND datetime(s.expires_at) > CURRENT_TIMESTAMP AND u.active = 1
       AND ${localSessionGuardSql}`)
     .bind(tokenHash)
-    .first<UserRow>();
-  return row ? mapUser(row, readCookie(request, PERSONA_COOKIE)) : null;
+    .first<UserRow & { must_change_password: number }>();
+  if (!row || (row.must_change_password && !allowPasswordChange)) return null;
+  return { ...mapUser(row, readCookie(request, PERSONA_COOKIE)), mustChangePassword: Boolean(row.must_change_password) };
 }
 
 export async function deleteSession(request: Request) {
@@ -412,9 +415,12 @@ export function authError(status: 401 | 403 | 503, code: string, error: string) 
   return Response.json({ code, error }, { status });
 }
 
-export async function requireAppUser(request: Request, roles?: AppRole[]) {
-  const user = await getAppUser(request);
+export async function requireAppUser(request: Request, roles?: AppRole[], allowPasswordChange = false) {
+  const user = await getAppUser(request, true);
   if (!user) return { response: authError(401, "AUTH_REQUIRED", "请使用独立账号或飞书登录") } as const;
+  if (user.mustChangePassword && !allowPasswordChange) {
+    return { response: authError(403, "PASSWORD_CHANGE_REQUIRED", "首次登录请先修改初始密码") } as const;
+  }
   if (user.role === "pending") {
     return { response: authError(403, "FEISHU_ACCOUNT_PENDING", "账号已验证，等待超级管理员授权") } as const;
   }

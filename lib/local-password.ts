@@ -13,12 +13,21 @@ function derive(password: string, salt: string): Promise<Buffer> {
     { N: 16384, r: 8, p: 5, maxmem: 32 * 1024 * 1024 },
     (error, key) => error ? reject(error) : resolve(key)));
 }
-export async function hashPassword(password: string) {
-  const error = passwordError(password);
-  if (error) throw new Error(error);
+export const INITIAL_STUDENT_PASSWORD = "123456789";
+export function loginPasswordError(password: unknown) {
+  return typeof password !== "string" || password.length < 1 || [...password].length > 128;
+}
+async function encodePassword(password: string) {
   const salt = randomBytes(16).toString("hex");
   return `${PREFIX}:${salt}:${(await derive(password, salt)).toString("hex")}`;
 }
+export async function hashPassword(password: string) {
+  const error = passwordError(password);
+  if (error) throw new Error(error);
+  return encodePassword(password);
+}
+// Only administrative initialization may use the short shared initial password.
+export function hashInitialPassword() { return encodePassword(INITIAL_STUDENT_PASSWORD); }
 export async function verifyPassword(password: string, encoded: string | null) {
   const match = encoded?.match(/^scrypt:16384:8:5:([a-f0-9]{32}):([a-f0-9]{64})$/);
   // Unknown/unactivated accounts do the same expensive work as existing accounts.

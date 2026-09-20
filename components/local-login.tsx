@@ -37,7 +37,7 @@ export function LocalLogin({ onAuthenticated, onFeishu }: { onAuthenticated: () 
       {error ? <p className={styles.error} role="alert">{error}</p> : null}
       <button className="primary" disabled={busy}>{busy ? "正在登录…" : "登录"}</button>
     </form>
-    <p className={styles.help}>首次使用或忘记密码，请联系超级管理员获取密码设置链接。</p>
+    <p className={styles.help}>首次登录后请修改初始密码；忘记密码请联系超级管理员。</p>
     <button type="button" onClick={onFeishu} disabled={busy}>使用飞书登录</button>
   </section></main>;
 }

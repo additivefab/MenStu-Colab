@@ -419,7 +419,7 @@ type DashboardData = {
 };
 
 type AuthGate = {
-  kind: "required" | "pending" | "setup";
+  kind: "required" | "pending" | "setup" | "password";
   message: string;
 };
 
@@ -565,6 +565,10 @@ export default function Dashboard() {
         fetch("/api/meeting-requests", { cache: "no-store" }).catch(() => null),
       ]);
       const payload = (await response.json()) as DashboardData & { code?: string; error?: string };
+      if (payload.code === "PASSWORD_CHANGE_REQUIRED") {
+        setAuthGate({ kind: "password", message: "首次登录请先修改初始密码" });
+        return;
+      }
       if (response.status === 401) {
         setAuthGate({ kind: "required", message: payload.error || "请使用飞书登录" });
         return;
@@ -608,6 +612,7 @@ export default function Dashboard() {
       const response = await fetch("/api/auth/session", { cache: "no-store" });
       const payload = await response.json().catch(() => ({})) as {
         configured?: boolean;
+        code?: string;
         user?: {
           id: number;
           displayName: string;
@@ -619,6 +624,10 @@ export default function Dashboard() {
           studentId: string | null;
         } | null;
       };
+      if (payload.code === "PASSWORD_CHANGE_REQUIRED") {
+        setAuthGate({ kind: "password", message: "首次登录请先修改初始密码" });
+        return;
+      }
       if (response.status === 503 || payload.configured === false) {
         setAuthGate({ kind: "setup", message: "飞书应用尚未配置" });
         return;
@@ -3291,6 +3300,7 @@ function AccountManagement({ viewer, students }: { viewer: DashboardData["viewer
 
 function AccessGate({ gate, onAuthenticated }: { gate: AuthGate; onAuthenticated: () => Promise<void> }) {
   const [feishu, setFeishu] = useState(gate.kind === "pending");
+  if (gate.kind === "password") return <main className="access-shell"><section className="access-card"><h1>设置个人密码</h1><p>首次登录请先修改初始密码，完成后即可查看原学生档案。</p><ChangePassword requiredChange /><button type="button" onClick={() => void fetch("/api/auth/logout", { method: "POST" }).then(() => window.location.assign("/"))}>退出账号</button></section></main>;
   if (!feishu) return <LocalLogin onAuthenticated={onAuthenticated} onFeishu={() => setFeishu(true)} />;
   return <><FeishuAccessGate gate={gate} onAuthenticated={onAuthenticated} /><div className="local-login-return"><button type="button" onClick={() => setFeishu(false)}>返回独立账号登录</button></div></>;
 }

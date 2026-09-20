@@ -1,11 +1,12 @@
 import { env } from "cloudflare:workers";
+import { provisionInitialStudentLogins } from "./initial-student-logins";
 import { localAuthSchemaStatements } from "./local-auth-schema";
 import { progressResolutionSchemaStatements } from "./progress-resolution-schema";
 import { createProgressDeletionsSql, protectDeletedProgressSql } from "./ai-record-deletion";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-export const CURRENT_SCHEMA_VERSION = 22;
+export const CURRENT_SCHEMA_VERSION = 23;
 
 const REQUIRED_TABLES = [
   "students",
@@ -14,6 +15,7 @@ const REQUIRED_TABLES = [
   "app_users",
   "app_sessions",
   "local_credentials",
+  "local_login_rollouts",
   "local_auth_events",
   "local_auth_attempts",
   "mentor_student_assignments",
@@ -60,7 +62,7 @@ export function getD1() {
 }
 
 async function ensureColumn(
-  table: "app_sessions" | "app_user_role_events" | "progress_entries" | "progress_attachments" | "progress_evidence_sources" | "research_milestones" | "student_guidance_notes" | "notification_deliveries" | "meeting_requests",
+  table: "local_credentials" | "app_sessions" | "app_user_role_events" | "progress_entries" | "progress_attachments" | "progress_evidence_sources" | "research_milestones" | "student_guidance_notes" | "notification_deliveries" | "meeting_requests",
   column: string,
   definition: string,
 ) {
@@ -114,7 +116,7 @@ async function prepareDatabase() {
 }
 
 export async function ensureDatabase() {
-  databaseReadyPromise ??= prepareDatabase().catch((error) => {
+  databaseReadyPromise ??= prepareDatabase().then(() => provisionInitialStudentLogins(getD1())).catch((error) => {
     databaseReadyPromise = null;
     throw error;
   });
@@ -629,6 +631,8 @@ async function migrateDatabase(previousVersion: number | null) {
   await ensureColumn("notification_deliveries", "provider_message_id", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn("meeting_requests", "idempotency_key", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn("meeting_requests", "request_hash", "TEXT NOT NULL DEFAULT ''");
+  await d1.batch(localAuthSchemaStatements.map((statement) => d1.prepare(statement)));
+  await ensureColumn("local_credentials", "must_change_password", "INTEGER NOT NULL DEFAULT 0");
   await ensureColumn("app_sessions", "auth_method", "TEXT NOT NULL DEFAULT 'feishu'");
   await ensureColumn("app_sessions", "local_credential_version", "INTEGER");
   await ensureColumn("app_sessions", "local_student_id", "TEXT");

@@ -5,7 +5,7 @@ import { limitLocalAuthRequest, localAuthFailure, privateAuthHeaders, readLocalA
 
 export async function GET(request: Request) {
   try {
-    const auth = await requireAppUser(request, ["student"]);
+    const auth = await requireAppUser(request, ["student"], true);
     if ("response" in auth) return auth.response;
     const account = await localAccountForStudent(getD1(), auth.user.id);
     return Response.json({ username: account?.username ?? null, enabled: Boolean(account?.enabled) }, { headers: privateAuthHeaders });
@@ -15,7 +15,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await readLocalAuthBody(request);
-    const auth = await requireAppUser(request, ["student"]);
+    const auth = await requireAppUser(request, ["student"], true);
     if ("response" in auth) return auth.response;
     await limitLocalAuthRequest(request);
     // The target comes exclusively from the authenticated session, never the request body.

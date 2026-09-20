@@ -1,6 +1,6 @@
 import { getD1 } from "../../../../lib/database";
 import { requireAppUser } from "../../../../lib/feishu-auth";
-import { disableLocalLogin, issueLocalActivation, LocalAuthError } from "../../../../lib/local-auth-service";
+import { disableLocalLogin, initializeLocalLogin, issueLocalActivation, LocalAuthError } from "../../../../lib/local-auth-service";
 import { localAuthFailure, privateAuthHeaders, readLocalAuthBody } from "../../../../lib/local-auth-http";
 
 export async function POST(request: Request) {
@@ -9,7 +9,11 @@ export async function POST(request: Request) {
     const auth = await requireAppUser(request, ["superadmin"]);
     if ("response" in auth) return auth.response;
     if (!Number.isSafeInteger(body.userId) || typeof body.studentId !== "string" || !body.studentId
-      || !["issue", "disable"].includes(String(body.action))) throw new LocalAuthError("账号参数无效");
+      || !["initialize", "issue", "disable"].includes(String(body.action))) throw new LocalAuthError("账号参数无效");
+    if (body.action === "initialize") {
+      const result = await initializeLocalLogin(getD1(), auth.user.id, body.userId as number, body.studentId);
+      return Response.json({ ...result, message: "已开通，初始密码为 123456789，首次登录必须修改" }, { headers: privateAuthHeaders });
+    }
     if (body.action === "disable") {
       await disableLocalLogin(getD1(), auth.user.id, body.userId as number, body.studentId);
       return Response.json({ message: "独立登录已停用，现有会话已退出" }, { headers: privateAuthHeaders });

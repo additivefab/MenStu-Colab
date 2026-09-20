@@ -1,4 +1,4 @@
-import { digest, hashPassword, normalizeUsername, passwordError, secretToken, verifyPassword } from "./local-password.ts";
+import { digest, hashInitialPassword, hashPassword, loginPasswordError, normalizeUsername, passwordError, secretToken, verifyPassword } from "./local-password.ts";
 import { studentLoginName } from "./student-login-names.ts";
 
 export class LocalAuthError extends Error {
@@ -53,6 +53,25 @@ export async function issueLocalActivation(d1: D1Database, actorId: number, user
   return { token, expiresAt, username: (update.results[0] as { username: string }).username };
 }
 
+// Opening an account never overwrites an existing personal password or a disabled credential.
+export async function initializeLocalLogin(d1: D1Database, actorId: number, userId: number, studentId: string) {
+  const username = studentLoginName(studentId);
+  const encoded = await hashInitialPassword();
+  const requestId = crypto.randomUUID();
+  const [insert] = await d1.batch([
+    d1.prepare(`INSERT INTO local_credentials
+      (app_user_id, student_id, username, password_hash, must_change_password)
+      SELECT u.id, u.student_id, ?, ?, 1 FROM app_users u JOIN students s ON s.id = u.student_id
+      WHERE u.id = ? AND u.student_id = ? AND u.active = 1 AND s.active = 1 AND u.role = 'student'
+        AND ${adminGuard} AND NOT EXISTS (SELECT 1 FROM local_credentials c WHERE c.app_user_id = u.id)
+      RETURNING username`).bind(username, encoded, userId, studentId, actorId),
+    d1.prepare(`INSERT INTO local_auth_events (app_user_id, actor_user_id, action, request_id)
+      SELECT ?, ?, 'issue', ? WHERE changes() > 0`).bind(userId, actorId, requestId),
+  ]);
+  if (!insert.meta.changes) throw new LocalAuthError("账号已开通或原学生绑定已变化，请刷新后核对", 409);
+  return { username };
+}
+
 export async function disableLocalLogin(d1: D1Database, actorId: number, userId: number, studentId: string) {
   const requestId = crypto.randomUUID();
   const [update] = await d1.batch([
@@ -80,7 +99,7 @@ export async function activateLocalLogin(d1: D1Database, token: unknown, passwor
   const encoded = await hashPassword(password as string);
   const requestId = crypto.randomUUID();
   const [update] = await d1.batch([
-    d1.prepare(`UPDATE local_credentials SET password_hash = ?, activation_hash = NULL,
+    d1.prepare(`UPDATE local_credentials SET password_hash = ?, must_change_password = 0, activation_hash = NULL,
       activation_expires_at = NULL, version = version + 1, updated_at = CURRENT_TIMESTAMP
       WHERE app_user_id = ? AND version = ? AND activation_hash = ?
         AND datetime(activation_expires_at) > CURRENT_TIMESTAMP AND ${studentGuard}`)
@@ -98,7 +117,7 @@ export async function activateLocalLogin(d1: D1Database, token: unknown, passwor
 
 export async function loginLocally(d1: D1Database, usernameInput: unknown, password: unknown) {
   const username = normalizeUsername(usernameInput);
-  if (!/^[a-z0-9_-]{1,64}$/.test(username) || passwordError(password)) {
+  if (!/^[a-z0-9_-]{1,64}$/.test(username) || loginPasswordError(password)) {
     throw new LocalAuthError("账号或密码错误", 401);
   }
   await takeAuthAttempt(d1, "username", username, 10);
@@ -132,7 +151,7 @@ export async function localAccountForStudent(d1: D1Database, userId: number) {
 
 export async function changeLocalPassword(d1: D1Database, userId: number, sessionHash: string, currentPassword: unknown, newPassword: unknown) {
   await takeAuthAttempt(d1, "password-change", String(userId), 10);
-  if (passwordError(currentPassword)) throw new LocalAuthError("原密码不正确", 400);
+  if (loginPasswordError(currentPassword)) throw new LocalAuthError("原密码不正确", 400);
   const error = passwordError(newPassword);
   if (error) throw new LocalAuthError(error);
   const row = await d1.prepare(`SELECT password_hash, version FROM local_credentials
@@ -144,7 +163,7 @@ export async function changeLocalPassword(d1: D1Database, userId: number, sessio
   const encoded = await hashPassword(newPassword as string);
   const requestId = crypto.randomUUID();
   const [update] = await d1.batch([
-    d1.prepare(`UPDATE local_credentials SET password_hash = ?, version = version + 1,
+    d1.prepare(`UPDATE local_credentials SET password_hash = ?, must_change_password = 0, version = version + 1,
       activation_hash = NULL, activation_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
       WHERE app_user_id = ? AND version = ? AND password_hash = ? AND ${studentGuard}
         AND EXISTS (SELECT 1 FROM app_sessions s WHERE s.token_hash = ?
