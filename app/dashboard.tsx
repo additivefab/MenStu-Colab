@@ -1,5 +1,9 @@
 "use client";
 
+import { LocalLogin } from "../components/local-login";
+import { ChangePassword } from "../components/change-password";
+import { LocalAccountActions } from "../components/local-account-actions";
+
 import { activeBlockerText } from "../lib/progress-blocker";
 import { isCurrentResearchTrack } from "../lib/progress-track";
 import { instantTimestamp } from "../lib/dashboard-overview/dates";
@@ -768,7 +772,7 @@ export default function Dashboard() {
   }).format(new Date());
 
   if (!loading && authGate) {
-    return <FeishuAccessGate key={authGate.kind} gate={authGate} onAuthenticated={async () => {
+    return <AccessGate key={authGate.kind} gate={authGate} onAuthenticated={async () => {
       if (mentorViewFromUrl() === "overview") await loadOverviewShell();
       else await loadDashboard();
     }} />;
@@ -833,7 +837,7 @@ export default function Dashboard() {
           ))}
         </nav>
         {currentViewer.canSwitchPersona ? <button className="persona-switch" type="button" disabled={personaBusy} onClick={() => void switchPersona("student")}><span aria-hidden="true">⇄</span><span><strong>{personaBusy ? "正在切换…" : "本人学生端"}</strong></span></button> : null}
-        <button className="sidebar-foot" type="button" onClick={() => setFeishuOpen(true)} aria-label="查看飞书账号">
+        <button className="sidebar-foot" type="button" onClick={() => setFeishuOpen(true)} aria-label="查看我的账号">
           <div className="avatar">{currentViewer.name.slice(0, 1) || "佘"}</div>
           <div><strong>{currentViewer.name || "佘阳"}</strong><span>{viewerRoleLabel}</span></div>
         </button>
@@ -1476,7 +1480,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
     };
   }, [pendingNavigation, view]);
 
-  if (!student) return <main className="student-portal-shell"><div className="error-state"><strong>学生档案尚未绑定</strong><span>请联系管理员核对飞书账号与学生记录。</span></div></main>;
+  if (!student) return <main className="student-portal-shell"><div className="error-state"><strong>学生档案尚未绑定</strong><span>请联系管理员核对账号与学生记录。</span></div></main>;
 
   function openComposer(kind: "论文" | "项目", targetId?: number) {
     navigateStudent({
@@ -1514,7 +1518,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
       <nav aria-label="我的科研导航">
         {(Object.entries(studentViewMeta) as Array<[StudentView, (typeof studentViewMeta)[StudentView]]>).map(([itemView, item]) => <a key={itemView} className={view === itemView ? "active" : ""} aria-current={view === itemView ? "page" : undefined} href={studentNavigationHref({ view: itemView })} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigateStudent({ view: itemView }); }}><i aria-hidden="true">{item.icon}</i><span>{item.label}</span></a>)}
       </nav>
-      <button className="student-workbench-account" type="button" onClick={onFeishu}><span className="avatar">{data.viewer.name.slice(0, 1)}</span><span><strong>{data.viewer.name}</strong><small>飞书账号</small></span><i>›</i></button>
+      <button className="student-workbench-account" type="button" onClick={onFeishu}><span className="avatar">{data.viewer.name.slice(0, 1)}</span><span><strong>{data.viewer.name}</strong><small>我的账号</small></span><i>›</i></button>
     </aside>
 
     <main className="student-portal-shell" id="student-view-main" tabIndex={-1} aria-labelledby={`student-view-${view}-title`}>
@@ -2775,7 +2779,7 @@ function FeishuModal({ viewer, onClose, onSwitchPersona, personaBusy, onLogout }
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const dialog = dialogRef.current;
-    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled])") ?? []);
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], summary, input:not([disabled]), select:not([disabled]), textarea:not([disabled])") ?? []);
     focusable()[0]?.focus();
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
@@ -2793,11 +2797,12 @@ function FeishuModal({ viewer, onClose, onSwitchPersona, personaBusy, onLogout }
   return <div className="modal-layer" role="presentation">
     <div className="modal compact-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="feishu-dialog-title">
       <button className="close" aria-label="关闭" onClick={onClose}>×</button>
-      <div className="modal-title"><span>账号</span><h2 id="feishu-dialog-title">{viewer.name}</h2><p>{roleLabel} · 飞书登录</p></div>
+      <div className="modal-title"><span>账号</span><h2 id="feishu-dialog-title">{viewer.name}</h2><p>{roleLabel} · 已登录</p></div>
       {viewer.canSwitchPersona ? <div className="persona-modal-card">
         <strong>当前界面：{viewer.activePersona === "student" ? "学生端" : "管理端"}</strong>
         <button className="primary" type="button" disabled={personaBusy} onClick={() => void onSwitchPersona(viewer.activePersona === "student" ? "management" : "student")}>{personaBusy ? "正在切换…" : viewer.activePersona === "student" ? "返回管理端" : "打开本人学生端"}</button>
       </div> : null}
+      {viewer.role === "student" && !viewer.canSwitchPersona ? <ChangePassword /> : null}
       <div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出账号</button></div>
     </div>
   </div>;
@@ -3160,6 +3165,7 @@ function StudentAccessSetup() {
 }
 
 type ManagedUser = {
+  local_account: { username: string; status: "active" | "pending" | "disabled"; activationExpiresAt: string | null } | null;
   id: number;
   display_name: string;
   avatar_url: string;
@@ -3250,7 +3256,7 @@ function AccountManagement({ viewer, students }: { viewer: DashboardData["viewer
   if (!available) return null;
 
   return <section className="panel account-panel">
-    <PanelHeader title="飞书账号与高权限授权" subtitle="成员先完成一次飞书登录，再按已核验账号授予角色；所有高权变更均写入审计" count={users.length} />
+    <PanelHeader title="账号与登录管理" subtitle="在原学生账号上开通独立登录，保留原档案与历史记录" count={users.length} />
     {bootstrapPending ? <div className="account-bootstrap-note"><b>首次超级管理员待初始化</b><span>{canBootstrapSuperAdmin ? "当前已核验管理员账号已绑定为唯一初始化目标；仅可将本人一次性升级为超级管理员，成功后入口自动关闭。" : "系统维护者核验并预绑定当前管理员的唯一飞书账号标识前，不能初始化首位超级管理员。"}</span></div> : null}
     <div className="account-list">{users.map((user) => {
       const selectedRole = roleChoices[user.id] || user.role;
@@ -3264,7 +3270,7 @@ function AccountManagement({ viewer, students }: { viewer: DashboardData["viewer
       const canEdit = !isSelf && viewer.role === "superadmin";
       const badge = managedRoleLabels[user.role];
       return <div className="account-row" key={user.id}>
-        <div className="account-person"><div className="mini-avatar">{user.display_name.slice(0, 1)}</div><span><strong>{user.display_name}</strong><small>飞书成员 · 最近登录 {shortDate(user.last_login_at)}</small></span></div>
+        <div className="account-person"><div className="mini-avatar">{user.display_name.slice(0, 1)}</div><span><strong>{user.display_name}</strong><small>原账号 #{user.id} · 最近登录 {shortDate(user.last_login_at)}</small></span></div>
         {canBootstrapSelf ? <><span className="status-pill safe">{badge} · 当前账号</span>{user.student_name ? <span className="bound-student">本人学生记录：{user.student_name}</span> : null}<button className="bind" disabled={busy === user.id} onClick={() => void updateUser(user, "superadmin")}>{busy === user.id ? "初始化中…" : "一次性初始化为超级管理员"}</button></> : !canEdit ? <><span className={`status-pill ${user.role === "pending" ? "pending" : "safe"}`}>{badge}{isSelf ? " · 当前账号" : ""}</span>{user.student_name ? <span className="bound-student">本人学生记录：{user.student_name}</span> : null}</> : <>
           <div className="account-role-editor">
             <label>角色<select value={selectedRole} onChange={(event) => setRoleChoices((current) => ({ ...current, [user.id]: event.target.value as ManagedUser["role"] }))}>
@@ -3276,10 +3282,17 @@ function AccountManagement({ viewer, students }: { viewer: DashboardData["viewer
           </div>
           <button className="bind" disabled={busy === user.id || (selectedRole === "student" && !students.length)} onClick={() => void updateUser(user)}>{busy === user.id ? "保存中…" : selectedRole === "superadmin" ? "授予超级管理员" : "保存授权"}</button>
         </>}
+        {viewer.role === "superadmin" && user.student_id && (user.role === "student" || user.local_account) ? <LocalAccountActions userId={user.id} studentId={user.student_id} studentName={user.student_name || user.display_name} account={user.local_account} onChanged={loadUsers} /> : null}
       </div>;
     })}{!users.length ? <div className="empty-small">成员第一次从飞书打开应用后，账号会出现在这里。</div> : null}</div>
     {message ? <div className="account-message" role="status">{message}</div> : null}
   </section>;
+}
+
+function AccessGate({ gate, onAuthenticated }: { gate: AuthGate; onAuthenticated: () => Promise<void> }) {
+  const [feishu, setFeishu] = useState(gate.kind === "pending");
+  if (!feishu) return <LocalLogin onAuthenticated={onAuthenticated} onFeishu={() => setFeishu(true)} />;
+  return <><FeishuAccessGate gate={gate} onAuthenticated={onAuthenticated} /><div className="local-login-return"><button type="button" onClick={() => setFeishu(false)}>返回独立账号登录</button></div></>;
 }
 
 function FeishuAccessGate({ gate, onAuthenticated }: { gate: AuthGate; onAuthenticated: () => Promise<void> }) {
@@ -3373,7 +3386,7 @@ function FeishuAccessGate({ gate, onAuthenticated }: { gate: AuthGate; onAuthent
   }, []);
 
   const setup = gate.kind === "setup" || config?.configured === false;
-  return <main className="access-shell"><section className="access-card"><div className="access-brand"><div className="brand-mark">探</div><div><strong>探研</strong><span>射线探伤 × AI</span></div></div><div className={`access-orb ${pending ? "pending" : ""}`}>{pending ? "✓" : "飞"}</div><p className="access-kicker">飞书企业自建应用</p><h1>{pending ? "飞书身份已验证" : setup ? "飞书接入等待应用配置" : "正在通过飞书安全登录"}</h1><p className="access-copy">{pending ? "当前账号已经完成飞书登录，现在只差系统角色授权，无需反复点击飞书授权。" : message}</p>{pending ? <><div className="access-pending-note"><strong>下一步由超级管理员处理</strong><span>请在“系统管理 → 飞书账号与高权限授权”中，为当前账号分配学生或导师角色。</span></div><div className="access-actions"><button className="primary" disabled={status === "checking" || status === "authorizing"} onClick={() => void checkAccess()}>{status === "checking" ? "检查中…" : "重新检查权限"}</button><button disabled={status === "authorizing"} onClick={() => void switchAccount()}>{status === "authorizing" ? "切换中…" : "切换飞书账号"}</button></div></> : null}{setup ? <div className="setup-steps"><span><b>1</b>创建企业自建应用并添加“网页应用”能力</span><span><b>2</b>将应用主页设为当前系统地址</span><span><b>3</b>安全配置 App ID 和 App Secret 后发布</span></div> : null}{!pending && (status === "authorizing" || status === "checking") ? <div className="access-loading"><i /><span>正在确认飞书环境…</span></div> : null}{!pending && status === "error" && config?.configured ? <button className="primary access-retry" onClick={() => void authorize(config)}>重新尝试飞书登录</button> : null}<div className="access-safe">不会把 App Secret、飞书访问凭证或完整代码发送给云端 GPT</div></section></main>;
+  return <main className="access-shell"><section className="access-card"><div className="access-brand"><div className="brand-mark">探</div><div><strong>探研</strong><span>射线探伤 × AI</span></div></div><div className={`access-orb ${pending ? "pending" : ""}`}>{pending ? "✓" : "飞"}</div><p className="access-kicker">飞书企业自建应用</p><h1>{pending ? "飞书身份已验证" : setup ? "飞书接入等待应用配置" : "正在通过飞书安全登录"}</h1><p className="access-copy">{pending ? "当前账号已经完成飞书登录，现在只差系统角色授权，无需反复点击飞书授权。" : message}</p>{pending ? <><div className="access-pending-note"><strong>下一步由超级管理员处理</strong><span>请在“系统管理 → 账号与登录管理”中，为当前账号分配学生或导师角色。</span></div><div className="access-actions"><button className="primary" disabled={status === "checking" || status === "authorizing"} onClick={() => void checkAccess()}>{status === "checking" ? "检查中…" : "重新检查权限"}</button><button disabled={status === "authorizing"} onClick={() => void switchAccount()}>{status === "authorizing" ? "切换中…" : "切换飞书账号"}</button></div></> : null}{setup ? <div className="setup-steps"><span><b>1</b>创建企业自建应用并添加“网页应用”能力</span><span><b>2</b>将应用主页设为当前系统地址</span><span><b>3</b>安全配置 App ID 和 App Secret 后发布</span></div> : null}{!pending && (status === "authorizing" || status === "checking") ? <div className="access-loading"><i /><span>正在确认飞书环境…</span></div> : null}{!pending && status === "error" && config?.configured ? <button className="primary access-retry" onClick={() => void authorize(config)}>重新尝试飞书登录</button> : null}<div className="access-safe">不会把 App Secret、飞书访问凭证或完整代码发送给云端 GPT</div></section></main>;
 }
 
 function LoadingState() {

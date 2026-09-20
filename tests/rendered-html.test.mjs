@@ -119,7 +119,7 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /不会把 App Secret、飞书访问凭证或完整代码发送给云端 GPT/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS progress_entries/);
   assert.match(feishuAuth, /crypto\.subtle\.digest\("SHA-256"/);
-  assert.match(feishuAuth, /FEISHU_AUTH_REQUIRED/);
+  assert.match(feishuAuth, /AUTH_REQUIRED/);
   assert.match(dashboard, /\/api\/auth\/feishu\/browser\/start/);
   assert.match(browserStart, /crypto\.getRandomValues/);
   assert.match(browserStart, /SameSite=Lax/);

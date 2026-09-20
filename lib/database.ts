@@ -1,10 +1,11 @@
 import { env } from "cloudflare:workers";
+import { localAuthSchemaStatements } from "./local-auth-schema";
 import { progressResolutionSchemaStatements } from "./progress-resolution-schema";
 import { createProgressDeletionsSql, protectDeletedProgressSql } from "./ai-record-deletion";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-export const CURRENT_SCHEMA_VERSION = 21;
+export const CURRENT_SCHEMA_VERSION = 22;
 
 const REQUIRED_TABLES = [
   "students",
@@ -12,6 +13,9 @@ const REQUIRED_TABLES = [
   "progress_deletions",
   "app_users",
   "app_sessions",
+  "local_credentials",
+  "local_auth_events",
+  "local_auth_attempts",
   "mentor_student_assignments",
   "student_guidance_notes",
   "student_guidance_events",
@@ -56,7 +60,7 @@ export function getD1() {
 }
 
 async function ensureColumn(
-  table: "app_user_role_events" | "progress_entries" | "progress_attachments" | "progress_evidence_sources" | "research_milestones" | "student_guidance_notes" | "notification_deliveries" | "meeting_requests",
+  table: "app_sessions" | "app_user_role_events" | "progress_entries" | "progress_attachments" | "progress_evidence_sources" | "research_milestones" | "student_guidance_notes" | "notification_deliveries" | "meeting_requests",
   column: string,
   definition: string,
 ) {
@@ -625,6 +629,9 @@ async function migrateDatabase(previousVersion: number | null) {
   await ensureColumn("notification_deliveries", "provider_message_id", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn("meeting_requests", "idempotency_key", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn("meeting_requests", "request_hash", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("app_sessions", "auth_method", "TEXT NOT NULL DEFAULT 'feishu'");
+  await ensureColumn("app_sessions", "local_credential_version", "INTEGER");
+  await ensureColumn("app_sessions", "local_student_id", "TEXT");
 
   await d1.batch([
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_progress_attachments_entry_revision ON progress_attachments(progress_entry_id, revision_number)"),
@@ -709,6 +716,7 @@ async function migrateDatabase(previousVersion: number | null) {
         SELECT 1 FROM progress_revisions r WHERE r.progress_entry_id = p.id
       )`),
     ...progressResolutionSchemaStatements.map((statement) => d1.prepare(statement)),
+    ...localAuthSchemaStatements.map((statement) => d1.prepare(statement)),
     d1.prepare(protectDeletedProgressSql),
     d1.prepare("UPDATE app_users SET email = '' WHERE email != ''"),
     d1.prepare(`INSERT INTO app_schema_meta (id, version, updated_at)

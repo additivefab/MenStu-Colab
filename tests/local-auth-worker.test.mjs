@@ -1,0 +1,95 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { readdir } from 'node:fs/promises';
+import { Miniflare } from 'miniflare';
+import { digest } from '../lib/local-password.ts';
+
+// Run the built production Worker against an isolated in-memory D1, without Feishu credentials.
+test('Workers HTTP flow: original account -> activation -> login -> scoped data -> reset', {timeout:120000}, async () => {
+  const root=fileURLToPath(new URL('../dist/server/', import.meta.url));
+  const files=(await readdir(root,{recursive:true})).filter(f=>f.endsWith('.js'));
+  const mf = new Miniflare({
+    modules: ['index.js',...files.filter(f=>f!=='index.js')].map(path=>({type:'ESModule',path:root+path})),
+    modulesRoot: root,
+    compatibilityDate:'2026-05-22', compatibilityFlags:['nodejs_compat'],
+    d1Databases:{DB:'local-auth-test'},
+    r2Buckets:['FILES'],
+  });
+  try {
+    const origin='http://localhost';
+    const send=(path,body,cookie='', extra={}) => mf.dispatchFetch(origin+path,{
+      method:'POST',headers:{'content-type':'application/json',origin,cookie,'cf-connecting-ip':'127.0.0.1',...extra},body:JSON.stringify(body),
+    });
+    await mf.dispatchFetch(origin+'/api/health/ready'); // Exercise the real runtime migration.
+    const db=await mf.getD1Database('DB');
+    assert.equal((await db.prepare('SELECT version FROM app_schema_meta').first()).version,22);
+    await db.prepare("INSERT INTO students(id,display_name,degree,grade_year,stage) VALUES ('student-001','测试学生一','博士',2024,'实验'),('student-002','测试学生二','硕士',2025,'实验')").run();
+    await db.prepare("INSERT INTO app_users(id,feishu_open_id,display_name,role,student_id) VALUES (1,'old-feishu-id','测试学生一','student','student-001'),(2,'other-feishu-id','测试学生二','student','student-002'),(3,'superadmin-test','测试超管','superadmin',NULL)").run();
+    await db.prepare("INSERT INTO app_sessions(token_hash,app_user_id,expires_at) VALUES (?,3,datetime('now','+1 day'))").bind(digest('admin-test-session')).run();
+    await db.prepare("INSERT INTO progress_entries(student_id,kind,title,submitted_by_user_id) VALUES ('student-001','实验','保留的历史进展',1),('student-002','实验','其他学生的进展',2)").run();
+    await db.prepare("INSERT INTO progress_revisions(progress_entry_id,revision_number,snapshot_json,submitted_by_user_id) SELECT id,1,'{}',submitted_by_user_id FROM progress_entries").run();
+    const admin='tanyan_session=admin-test-session';
+    const body={action:'issue',userId:1,studentId:'student-001'};
+    assert.equal((await send('/api/admin/local-accounts',body)).status,401);
+    assert.equal((await send('/api/admin/local-accounts',body,admin,{origin:'https://evil.example'})).status,403);
+    const issued=await send('/api/admin/local-accounts',body,admin);
+    assert.equal(issued.status,200,await issued.clone().text());
+    assert.match(issued.headers.get('cache-control'),/no-store/);
+    const invitation=await issued.json();
+    assert.equal(invitation.username,'why');
+    const token=new URLSearchParams(new URL(invitation.activationUrl).hash.slice(1)).get('token');
+    assert.ok(token);
+    const page=await mf.dispatchFetch(origin+'/activate');
+    assert.equal(page.status,200);
+    assert.match(await page.text(),/设置独立登录密码/);
+    const password='My independent research password!';
+    const activation=await send('/api/auth/local/activate',{token,password});
+    assert.equal(activation.status,200,await activation.clone().text());
+    assert.equal((await send('/api/auth/local/activate',{token,password})).status,400);
+    assert.equal((await send('/api/auth/local/login',{username:'why',password:'incorrect long password'})).status,401);
+    const login=await send('/api/auth/local/login',{username:'why',password});
+    assert.equal(login.status,200,await login.clone().text());
+    const setCookies=login.headers.getSetCookie();
+    assert.ok(setCookies.some(c=>c.includes('HttpOnly')&&c.includes('Secure')&&c.includes('SameSite=Lax')));
+    const studentCookie=setCookies.find(c=>c.startsWith('tanyan_session=')).split(';')[0];
+    const session=await mf.dispatchFetch(origin+'/api/auth/session',{headers:{cookie:studentCookie}});
+    assert.equal(session.status,200);
+    const identity=await session.json();
+    assert.equal(identity.feishuConfigured,false);
+    assert.equal(identity.user.id,1);
+    assert.equal(identity.user.studentId,'student-001');
+    const dashboard=await mf.dispatchFetch(origin+'/api/dashboard',{headers:{cookie:studentCookie}});
+    assert.equal(dashboard.status,200,await dashboard.clone().text());
+    const data=await dashboard.json();
+    assert.equal(data.viewer.id,1);
+    assert.equal(data.students.length,1);
+    assert.equal(data.students[0].id,'student-001');
+    assert.ok(JSON.stringify(data).includes('保留的历史进展'));
+    assert.ok(!JSON.stringify(data).includes('其他学生的进展'));
+    assert.equal((await send('/api/admin/local-accounts',body,studentCookie)).status,403);
+    assert.equal((await mf.dispatchFetch(origin+'/api/users',{headers:{cookie:studentCookie}})).status,403);
+    assert.equal((await send('/api/auth/persona',{persona:'management'},studentCookie)).status,403);
+    const accounts=await mf.dispatchFetch(origin+'/api/users',{headers:{cookie:admin}});
+    const accountBody=await accounts.text();
+    assert.ok(!accountBody.includes('password_hash')&&!accountBody.includes('activation_hash'));
+    assert.equal(JSON.parse(accountBody).users.find(u=>u.id===1).local_account.status,'active');
+    const passwordStatus=await mf.dispatchFetch(origin+'/api/auth/local/password',{headers:{cookie:studentCookie}});
+    assert.deepEqual(await passwordStatus.json(),{username:'why',enabled:true});
+    assert.equal((await send('/api/auth/local/password',{currentPassword:password,newPassword:'Updated research password 2026!'})).status,401);
+    assert.equal((await send('/api/auth/local/password',{currentPassword:password,newPassword:'Updated research password 2026!'},studentCookie,{origin:'https://evil.example'})).status,403);
+    assert.equal((await send('/api/auth/local/password',{currentPassword:'incorrect long password',newPassword:'Updated research password 2026!'},studentCookie)).status,400);
+    assert.equal((await send('/api/auth/local/password',{currentPassword:password,newPassword:'123456789'},studentCookie)).status,400);
+    const changed=await send('/api/auth/local/password',{userId:2,currentPassword:password,newPassword:'Updated research password 2026!'},studentCookie);
+    assert.equal(changed.status,200,await changed.clone().text());
+    assert.ok(changed.headers.getSetCookie().some(c=>c.startsWith('tanyan_session=')&&c.includes('Max-Age=0')));
+    assert.equal((await mf.dispatchFetch(origin+'/api/auth/session',{headers:{cookie:studentCookie}})).status,401);
+    assert.equal((await send('/api/auth/local/login',{username:'why',password})).status,401);
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM local_credentials WHERE app_user_id=2').first()).n,0);
+    assert.equal((await send('/api/auth/local/login',{username:'WHY',password:'Updated research password 2026!'})).status,200);
+    const reset=await send('/api/admin/local-accounts',body,admin);
+    assert.equal(reset.status,200);
+    assert.equal((await mf.dispatchFetch(origin+'/api/auth/session',{headers:{cookie:studentCookie}})).status,401);
+    assert.equal((await send('/api/auth/local/login',{username:'why',password})).status,401);
+  } finally { await mf.dispose(); }
+});

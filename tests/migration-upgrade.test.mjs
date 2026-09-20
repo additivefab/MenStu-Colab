@@ -11,7 +11,7 @@ test("0010-0021 preserve existing data while adding identity, evidence, concurre
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
 
-  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_", "0014_", "0015_", "0016_", "0017_", "0018_", "0019_", "0020_", "0021_"].some((prefix) => item.startsWith(prefix)))) {
+  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_", "0014_", "0015_", "0016_", "0017_", "0018_", "0019_", "0020_", "0021_", "0022_"].some((prefix) => item.startsWith(prefix)))) {
     database.exec(await readFile(new URL(name, migrationDirectory), "utf8"));
   }
   database.exec(`
@@ -457,6 +457,13 @@ test("0010-0021 preserve existing data while adding identity, evidence, concurre
   assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
   database.exec(await readFile(new URL(names.find((item) => item.startsWith("0021_")), migrationDirectory), "utf8"));
   assert.equal(database.prepare("SELECT version FROM app_schema_meta WHERE id = 1").get().version, 21);
+  assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
+  const originalUsers = database.prepare("SELECT * FROM app_users ORDER BY id").all();
+  const originalProgress = database.prepare("SELECT * FROM progress_entries ORDER BY id").all();
+  database.exec(await readFile(new URL(names.find((item) => item.startsWith("0022_")), migrationDirectory), "utf8"));
+  assert.equal(database.prepare("SELECT version FROM app_schema_meta WHERE id = 1").get().version, 22);
+  assert.deepEqual(database.prepare("SELECT * FROM app_users ORDER BY id").all(), originalUsers);
+  assert.deepEqual(database.prepare("SELECT * FROM progress_entries ORDER BY id").all(), originalProgress);
   assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
   database.close();
 });

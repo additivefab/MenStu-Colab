@@ -131,7 +131,7 @@ test('runtime migration and generated migration expose the same deletion schema 
   assert.doesNotThrow(() => db.exec(`${createProgressDeletionsSql}; ${protectDeletedProgressSql};`));
   assert.deepEqual(db.prepare('PRAGMA table_info(progress_deletions)').all().map((column) => column.name),
     ['progress_entry_id', 'deleted_by_user_id', 'deleted_at', 'operation_id']);
-  assert.equal(db.prepare('SELECT version FROM app_schema_meta WHERE id = 1').get().version, 21);
+  assert.equal(db.prepare('SELECT version FROM app_schema_meta WHERE id = 1').get().version, 22);
 });
 
 test('HTTP handlers enforce administrator scope, origin, revision checks, private trash access and idempotent recovery', async (t) => {

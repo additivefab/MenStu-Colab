@@ -402,7 +402,7 @@ button.primary { border: 0; background: var(--blue); color: white; box-shadow: 0
 .account-row > button { min-height: 32px; border: 1px solid #dfe5ec; border-radius: 8px; background: white; padding: 0 10px; font-size: 11px; font-weight: 700; }
 .account-row > button.bind { border-color: #cbdcf7; color: #2f62b3; background: #edf4ff; }
 .bound-student { color: #4b607b; font-size: 11px; }
-.account-role-editor { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(150px, 1fr)); gap: 9px; }
+.account-role-editor { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 .account-role-editor > label { display: grid; gap: 5px; color: #69788b; font-size: 11px; font-weight: 800; }
 .admin-assignment { grid-column: 1 / -1; margin: 0; padding: 10px; border: 1px solid #dfe6ef; border-radius: 9px; }
 .admin-assignment legend { padding: 0 5px; color: #596b81; font-size: 11px; font-weight: 800; }
@@ -2785,3 +2785,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .mentor-task-views button { padding: 12px 0; border: 0; border-bottom: 3px solid transparent; background: transparent; color: #687782; font-size: 15px; font-weight: 600; }
 .mentor-task-views button[aria-pressed="true"] { color: #17689f; border-bottom-color: #17689f; }
 .mentor-task-views button:focus-visible { outline: 2px solid #17689f; outline-offset: 3px; }
+
+.local-login-return { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 10; }
+.local-login-return button { min-height: 44px; padding: 10px 18px; background: #fff; border: 1px solid #b9c4d2; border-radius: 8px; }

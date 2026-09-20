@@ -10,6 +10,10 @@ type ManagedUserRow = {
   student_id: string | null;
   student_name: string | null;
   last_login_at: string;
+  local_username: string | null;
+  local_active: number;
+  local_pending: number;
+  local_expires_at: string | null;
 };
 
 const userRoles = new Set<UserRole>(["superadmin", "admin", "student", "pending"]);
@@ -25,8 +29,12 @@ export async function GET(request: Request) {
       u.id, u.display_name, u.avatar_url,
       CASE WHEN u.role = 'mentor' THEN 'admin' ELSE u.role END AS role,
       u.student_id,
-      u.last_login_at, s.display_name AS student_name
+      u.last_login_at, s.display_name AS student_name,
+      c.username AS local_username, c.password_hash IS NOT NULL AS local_active,
+      (c.activation_hash IS NOT NULL AND datetime(c.activation_expires_at) > CURRENT_TIMESTAMP) AS local_pending,
+      c.activation_expires_at AS local_expires_at
       FROM app_users u LEFT JOIN students s ON s.id = u.student_id
+      LEFT JOIN local_credentials c ON c.app_user_id = u.id
       WHERE u.active = 1
       ORDER BY CASE u.role WHEN 'superadmin' THEN 0 WHEN 'admin' THEN 1 WHEN 'mentor' THEN 1 WHEN 'pending' THEN 2 ELSE 3 END,
       u.display_name`)
@@ -60,11 +68,16 @@ export async function GET(request: Request) {
       : null,
     users: visibleUsers.map((user) => ({
       ...user,
+      local_account: user.local_username ? {
+        username: user.local_username,
+        status: user.local_active ? "active" : user.local_pending ? "pending" : "disabled",
+        activationExpiresAt: user.local_expires_at,
+      } : null,
       admin_student_ids: assignments.results
         .filter((item) => item.mentor_user_id === user.id)
         .map((item) => item.student_id),
     })),
-  });
+  }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
 export async function PATCH(request: Request) {

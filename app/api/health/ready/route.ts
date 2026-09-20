@@ -35,9 +35,12 @@ export async function GET() {
           degree: "博士" | "硕士";
           grade_year: number;
         }>(),
-      d1.prepare(`SELECT COUNT(*) AS count FROM student_feishu_identity_bindings b
-        JOIN students s ON s.id = b.student_id
-        WHERE b.active = 1 AND s.active = 1`).first<{ count: number }>(),
+      d1.prepare(`SELECT COUNT(*) AS count FROM students s WHERE s.active = 1 AND (
+        EXISTS (SELECT 1 FROM student_feishu_identity_bindings b WHERE b.student_id = s.id AND b.active = 1)
+        OR EXISTS (SELECT 1 FROM local_credentials c JOIN app_users u ON u.id = c.app_user_id
+          WHERE c.student_id = s.id AND u.student_id = s.id AND u.role = 'student'
+            AND u.active = 1 AND c.password_hash IS NOT NULL)
+      )`).first<{ count: number }>(),
       d1.prepare(`SELECT
         SUM(CASE WHEN active = 1 AND role = 'superadmin' THEN 1 ELSE 0 END) AS superadmins,
         SUM(CASE WHEN active = 1 AND role IN ('superadmin', 'mentor') THEN 1 ELSE 0 END) AS staff,
@@ -81,17 +84,17 @@ export async function GET() {
       },
       {
         id: "identity_bindings",
-        label: "学生身份预绑定",
+        label: "学生登录账号关联",
         status: bindingCount === confirmedRoster.length ? "pass" : "fail",
-        detail: `已预绑定 ${bindingCount} / ${confirmedRoster.length} 人`,
+        detail: `已预绑定飞书身份或启用独立账号 ${bindingCount} / ${confirmedRoster.length} 人；实际登录需本人验收`,
       },
       {
         id: "feishu",
         label: "飞书应用配置",
-        status: isFeishuConfigured() ? "pass" : "fail",
+        status: isFeishuConfigured() ? "pass" : "warning",
         detail: isFeishuConfigured()
           ? `登录凭据已配置；事件验签${feishu.encryptKey || feishu.verificationToken ? "已配置" : "仍需核验"}`
-          : "缺少飞书应用 ID 或密钥",
+          : "飞书登录与集成未配置；已开通的独立学生账号可正常登录",
       },
       {
         id: "file_storage",

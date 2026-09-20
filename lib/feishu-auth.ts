@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { ensureDatabase, getD1 } from "./database";
 import { resolvePersona, type AppPersona } from "./persona-policy";
+import { localSessionGuardSql } from "./local-auth-service";
 
 const SESSION_COOKIE = "tanyan_session";
 const PERSONA_COOKIE = "tanyan_persona";
@@ -360,6 +361,10 @@ function readCookie(request: Request, name: string) {
   return "";
 }
 
+export async function requestSessionHash(request: Request) {
+  return hashToken(readCookie(request, SESSION_COOKIE));
+}
+
 export function sessionCookie(token: string, expiresAt: string) {
   const maxAge = Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
   return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
@@ -378,7 +383,6 @@ export function clearPersonaCookie() {
 }
 
 export async function getAppUser(request: Request) {
-  if (!isFeishuConfigured()) return null;
   const token = readCookie(request, SESSION_COOKIE);
   if (!token) return null;
   await ensureDatabase();
@@ -389,7 +393,9 @@ export async function getAppUser(request: Request) {
       WHERE bound_student.id = u.student_id AND bound_student.active = 1
     ) THEN u.student_id ELSE NULL END AS student_id
     FROM app_sessions s JOIN app_users u ON u.id = s.app_user_id
-    WHERE s.token_hash = ? AND datetime(s.expires_at) > CURRENT_TIMESTAMP AND u.active = 1`)
+    LEFT JOIN local_credentials c ON c.app_user_id = u.id
+    WHERE s.token_hash = ? AND datetime(s.expires_at) > CURRENT_TIMESTAMP AND u.active = 1
+      AND ${localSessionGuardSql}`)
     .bind(tokenHash)
     .first<UserRow>();
   return row ? mapUser(row, readCookie(request, PERSONA_COOKIE)) : null;
@@ -407,11 +413,8 @@ export function authError(status: 401 | 403 | 503, code: string, error: string) 
 }
 
 export async function requireAppUser(request: Request, roles?: AppRole[]) {
-  if (!isFeishuConfigured()) {
-    return { response: authError(503, "FEISHU_NOT_CONFIGURED", "飞书企业自建应用尚未配置") } as const;
-  }
   const user = await getAppUser(request);
-  if (!user) return { response: authError(401, "FEISHU_AUTH_REQUIRED", "请从飞书工作台打开并完成登录") } as const;
+  if (!user) return { response: authError(401, "AUTH_REQUIRED", "请使用独立账号或飞书登录") } as const;
   if (user.role === "pending") {
     return { response: authError(403, "FEISHU_ACCOUNT_PENDING", "账号已验证，等待超级管理员授权") } as const;
   }

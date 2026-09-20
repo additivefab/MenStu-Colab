@@ -1,0 +1,19 @@
+.card { text-align: left; }
+.card h1 { margin: 24px 0 12px; font-size: 26px; }
+.card p { line-height: 1.7; color: #49576b; }
+.form { display: grid; gap: 18px; margin: 24px 0; }
+.form label { display: grid; gap: 8px; font-size: 15px; font-weight: 600; }
+.form input, .link { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid #b9c4d2; border-radius: 8px; background: #fff; color: #172b43; font-size: 16px; box-sizing: border-box; }
+.form button { min-height: 44px; }
+.form .error { color: #a32929; margin: 0; }
+.help { font-size: 14px; }
+.controls { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 0; width: 100%; }
+.controls small { font-size: 13px; color: #49576b; }
+.result { display: grid; gap: 10px; width: 100%; padding: 14px; border: 1px solid #b9c4d2; border-radius: 8px; background: #f5f8fc; overflow-wrap: anywhere; }
+.result p { margin: 0; font-size: 14px; line-height: 1.6; }
+.result textarea { resize: vertical; min-height: 76px; }
+
+.controls button, .card > button { min-height: 38px; padding: 8px 12px; border: 1px solid #b9c4d2; border-radius: 8px; background: #fff; color: #244e87; font-size: 14px; cursor: pointer; }
+.controls button:disabled, .card button:disabled { opacity: .6; cursor: wait; }
+.changePassword { margin-top: 20px; border-top: 1px solid #dfe5ec; padding-top: 12px; }
+.changePassword summary { padding: 10px 0; cursor: pointer; font-size: 15px; font-weight: 600; }

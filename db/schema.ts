@@ -392,6 +392,9 @@ export const appSessions = sqliteTable(
       .notNull()
       .references(() => appUsers.id),
     expiresAt: text("expires_at").notNull(),
+    authMethod: text("auth_method").notNull().default("feishu"),
+    localCredentialVersion: integer("local_credential_version"),
+    localStudentId: text("local_student_id"),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
@@ -889,3 +892,29 @@ export const progressResolutionAttachments = sqliteTable("progress_resolution_at
   uniqueIndex("idx_resolution_attachments_storage").on(table.storageKey),
   index("idx_resolution_attachments_event").on(table.eventId),
 ]);
+
+export const localCredentials = sqliteTable("local_credentials", {
+  appUserId: integer("app_user_id").primaryKey().references(() => appUsers.id),
+  studentId: text("student_id").notNull().references(() => students.id),
+  username: text("username").notNull().unique(),
+  passwordHash: text("password_hash"),
+  activationHash: text("activation_hash").unique(),
+  activationExpiresAt: text("activation_expires_at"),
+  version: integer("version").notNull().default(1),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [check("local_credentials_version", sql`${table.version} >= 1`)]);
+
+export const localAuthEvents = sqliteTable("local_auth_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  appUserId: integer("app_user_id").notNull().references(() => appUsers.id),
+  actorUserId: integer("actor_user_id").notNull().references(() => appUsers.id),
+  action: text("action").notNull(),
+  requestId: text("request_id").notNull().unique(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [check("local_auth_events_action", sql`${table.action} IN ('issue', 'activate', 'disable', 'change_password')`)]);
+
+export const localAuthAttempts = sqliteTable("local_auth_attempts", {
+  key: text("key").primaryKey(),
+  attempts: integer("attempts").notNull(),
+  windowStart: integer("window_start").notNull(),
+});
