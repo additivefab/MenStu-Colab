@@ -938,6 +938,20 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
   meetingRequests: MeetingRequest[];
   meetingLoadError: string;
 }) {
+  const [taskView, setTaskView] = useState<"pending" | "completed">("pending");
+  useEffect(() => {
+    const restore = () => setTaskView(new URL(window.location.href).searchParams.get("taskStatus") === "completed" ? "completed" : "pending");
+    restore();
+    window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, []);
+  function selectTaskView(value: "pending" | "completed") {
+    setTaskView(value);
+    const url = new URL(window.location.href);
+    if (value === "completed") url.searchParams.set("taskStatus", "completed");
+    else url.searchParams.delete("taskStatus");
+    window.history.replaceState(null, "", url);
+  }
   const [filter, setFilter] = useState<"all" | MentorTaskCategory>("all");
   const [selectedKey, setSelectedKey] = useState("");
   const [meetingBusy, setMeetingBusy] = useState<number | null>(null);
@@ -1026,6 +1040,11 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
   }, { decision: 0, coordination: 0, followup: 0, waiting: 0 });
 
   return <section className="mentor-inbox">
+    <nav className="mentor-task-views" aria-label="任务记录">
+      <button type="button" aria-pressed={taskView === "pending"} onClick={() => selectTaskView("pending")}>待办任务</button>
+      <button type="button" aria-pressed={taskView === "completed"} onClick={() => selectTaskView("completed")}>已完成任务</button>
+    </nav>
+    {taskView === "completed" ? <ProgressResolutionPanel mode="staff" initialFilter="completed" /> : <>
     <div className="mentor-inbox-summary">
       <div><h2>{tasks.filter((task) => task.category !== "waiting").length} 项待处理</h2></div>
       <div className="mentor-inbox-filters" role="group" aria-label="待办类型">
@@ -1070,7 +1089,7 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
           {selected.task.type === "guidance_verification" && selected.task.context ? <div className="mentor-decision-fact"><span>原指导内容</span><strong>{selected.task.context}</strong></div> : null}
           {selected.task.type === "guidance_verification" && selected.task.nextAction ? <div className="mentor-decision-fact"><span>下一行动</span><strong>{selected.task.nextAction}</strong></div> : null}
           {selected.task.type === "guidance_verification" ? <div className="mentor-decision-fact"><span>验收标准</span><strong>{selected.task.acceptanceCriteria || "未设置；请进入指导记录补齐并核对"}</strong></div> : null}
-          {selected.task.type === "resolution_verification" ? <ProgressResolutionPanel studentId={selected.task.studentId} entryId={selected.task.progressEntryId} mode="staff" onChanged={onRefresh} compact /> : null}
+          {selected.task.type === "resolution_verification" ? <ProgressResolutionPanel studentId={selected.task.studentId} entryId={selected.task.progressEntryId} mode="staff" initialFilter="pending" onChanged={onRefresh} onConfirmed={() => selectTaskView("completed")} compact /> : null}
           {selected.task.type !== "resolution_verification" ? <><div className="mentor-decision-effect"><b>下一步</b><span>{selected.task.type === "proposal_review" ? "打开当前版本，确认、批注或退回修改。" : selected.task.type === "guidance_verification" ? "核对学生的完成说明与验收标准，再作出导师确认。" : selected.task.type === "blocked_milestone" ? "进入学生档案，明确阻塞需要的资源、判断或协作。" : "进入学生档案，重排期限或记录跟进指导。"}</span></div>
           <div className="mentor-detail-actions">{selected.task.type === "proposal_review" ? <a className="primary button-link" href={`/?mentorView=research&researchTab=proposals&proposal=${selected.task.id}`}>进入方案审核</a> : selected.task.type === "guidance_verification" ? <><a className={selected.task.acceptanceCriteria ? "button-link" : "primary button-link"} href={`/students/${encodeURIComponent(selected.task.studentId)}#guidance`}>查看指导记录</a>{selected.task.acceptanceCriteria ? <button className="primary" disabled={workflowBusy === selected.task.id} onClick={() => void verifyGuidance(selected.task)}>{workflowBusy === selected.task.id ? "验收中…" : "确认验收"}</button> : null}</> : <a className="primary button-link" href={`/students/${encodeURIComponent(selected.task.studentId)}#workflow`}>进入学生档案</a>}</div></> : null}
         </article> : null}
@@ -1084,6 +1103,7 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
         {!selected ? <div className="mentor-task-detail-empty"><span>✓</span><h2>没有需要处理的事项</h2><p>新进展、方案、阻塞或预约到达后会进入这里。</p></div> : null}
       </div>
     </div>
+    </>}
   </section>;
 }
 
@@ -1267,6 +1287,7 @@ type StudentNavigationIntent = {
   researchTrack?: StudentResearchTrack;
   entryId?: number;
   action?: "supplement";
+  taskFilter?: "open" | "pending" | "completed";
   composerKind?: "论文" | "项目";
   focus?: "meeting" | "guidance";
   paperId?: number;
@@ -1289,6 +1310,7 @@ function studentNavigationHref(intent: StudentNavigationIntent) {
   if (intent.view === "research") params.set("track", intent.researchTrack || "paper");
   if (intent.entryId) params.set("entry", String(intent.entryId));
   if (intent.action) params.set("action", intent.action);
+  if (intent.taskFilter) params.set("taskFilter", intent.taskFilter);
   if (intent.composerKind) params.set("compose", intent.composerKind === "论文" ? "paper" : "project");
   if (intent.focus) params.set("focus", intent.focus);
   if (intent.paperId) params.set("paper", String(intent.paperId));
@@ -1313,6 +1335,7 @@ function studentNavigationFromLocation(href: string): StudentNavigationIntent {
     researchTrack: params.get("track") === "project" ? "project" : "paper",
     entryId: Number.isInteger(rawEntry) && rawEntry > 0 ? rawEntry : undefined,
     action: params.get("action") === "supplement" ? "supplement" : undefined,
+    taskFilter: params.get("taskFilter") === "completed" ? "completed" : params.get("taskFilter") === "pending" ? "pending" : undefined,
     composerKind: compose === "paper" ? "论文" : compose === "project" ? "项目" : undefined,
     focus: params.get("focus") === "meeting" ? "meeting" : params.get("focus") === "guidance" ? "guidance" : undefined,
     paperId: Number.isInteger(rawPaper) && rawPaper > 0 ? rawPaper : undefined,
@@ -1359,6 +1382,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
   const [composerVisible, setComposerVisible] = useState(false);
   const [composerTargetId, setComposerTargetId] = useState<number | null>(null);
   const [researchPaperId, setResearchPaperId] = useState<number | null>(null);
+  const [taskFilterRequest, setTaskFilterRequest] = useState<{ filter: "open" | "pending" | "completed"; key: number }>();
   const [resolutionRequest, setResolutionRequest] = useState<{ progressEntryId: number; itemKind: ProgressResolutionKind; key: number }>();
   const [pendingNavigation, setPendingNavigation] = useState<StudentNavigationIntent | null>(null);
   const student = data.students.find((item) => item.id === data.viewer.studentId);
@@ -1373,6 +1397,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
   const applyStudentNavigation = useCallback((intent: StudentNavigationIntent) => {
     const nextResearchTrack = intent.researchTrack || "paper";
     setView(intent.view);
+    if (intent.view === "today" && intent.taskFilter) setTaskFilterRequest({ filter: intent.taskFilter, key: Date.now() });
     setResearchTrack(nextResearchTrack);
     setResearchPaperId(intent.view === "research" && nextResearchTrack === "paper" ? intent.paperId ?? null : null);
     if (intent.composerKind) setComposer(intent.composerKind);
@@ -1495,10 +1520,10 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
     <main className="student-portal-shell" id="student-view-main" tabIndex={-1} aria-labelledby={`student-view-${view}-title`}>
       <header className="student-portal-header">
         <div className="student-workbench-context"><strong>{student.currentFocus || "我的科研进展"}</strong></div>
-        <div className="student-account">{data.viewer.canSwitchPersona ? <button className="student-persona-switch" type="button" disabled={personaBusy} onClick={onSwitchToManagement}>{personaBusy ? "正在切换…" : "返回管理端"}</button> : null}<button className="student-header-account" type="button" onClick={onFeishu}>账号</button></div>
+        <div className="student-account"><button type="button" onClick={() => navigateStudent({ view: "today", taskFilter: "completed" })}>已完成任务</button>{data.viewer.canSwitchPersona ? <button className="student-persona-switch" type="button" disabled={personaBusy} onClick={onSwitchToManagement}>{personaBusy ? "正在切换…" : "返回管理端"}</button> : null}<button className="student-header-account" type="button" onClick={onFeishu}>账号</button></div>
       </header>
 
-      {view === "today" ? <><StudentNextAction action={data.studentNextAction} student={student} papers={papers} onPaper={(paperId) => openComposer("论文", paperId)} onProject={(milestoneId) => openComposer("项目", milestoneId)} onMeeting={openMeetingDesk} onGuidance={openGuidanceDesk} onProgress={(entryId) => navigateStudent({ view: "progress", entryId })} onSupplement={openSupplement} onResolution={(progressEntryId, itemKind) => setResolutionRequest({ progressEntryId, itemKind, key: Date.now() })} /><ProgressResolutionPanel studentId={student.id} mode="student" onChanged={onRefresh} openRequest={resolutionRequest} compact /></> : null}
+      {view === "today" ? <><StudentNextAction action={data.studentNextAction} student={student} papers={papers} onPaper={(paperId) => openComposer("论文", paperId)} onProject={(milestoneId) => openComposer("项目", milestoneId)} onMeeting={openMeetingDesk} onGuidance={openGuidanceDesk} onProgress={(entryId) => navigateStudent({ view: "progress", entryId })} onSupplement={openSupplement} onResolution={(progressEntryId, itemKind) => setResolutionRequest({ progressEntryId, itemKind, key: Date.now() })} /><ProgressResolutionPanel studentId={student.id} mode="student" onChanged={onRefresh} openRequest={resolutionRequest} filterRequest={taskFilterRequest} compact /></> : null}
 
       {view === "research" ? <>
         <StudentViewIntro id="student-view-research-title" title="我的研究" metric={`${paperReturned + projectReturned}`} metricLabel="项待补充">

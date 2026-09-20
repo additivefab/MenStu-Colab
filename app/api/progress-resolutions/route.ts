@@ -1,4 +1,4 @@
-import { canReviewStudent, canViewStudent } from "../../../lib/authorization";
+import { canReviewStudent, canViewStudent, getStudentScope, scopeSql } from "../../../lib/authorization";
 import { ensureDatabase, getD1 } from "../../../lib/database";
 import { assertSameOrigin, requireAppUser } from "../../../lib/feishu-auth";
 import { acceptedTrackProgressSql } from "../../../lib/dashboard-overview/query-sql";
@@ -7,7 +7,7 @@ import { AttachmentInputError, attachmentStorageKey, validateProgressFiles } fro
 import { sha256Bytes, sha256Text } from "../../../lib/progress-evidence";
 import { getProgressFileBucket } from "../../../lib/progress-file-storage";
 import { deleteProgressFilesOrQueue } from "../../../lib/progress-file-cleanup";
-import { loadCurrentResolutionSources, loadProgressResolutionItems, loadProgressResolutions } from "../../../lib/progress-resolution-service";
+import { loadCompletedProgressResolutionItems, loadCurrentResolutionSources, loadProgressResolutionItems, loadProgressResolutions } from "../../../lib/progress-resolution-service";
 import { resolutionTransition, type ProgressResolutionAction, type ProgressResolutionKind } from "../../../lib/progress-resolution";
 import { insertResolutionSql, updateResolutionSql, insertResolutionEventSql, insertResolutionAuditSql,
   resolutionSourceGuardSql, resolutionStudentAuthoritySql, resolutionReviewerAuthoritySql,
@@ -42,6 +42,29 @@ export async function GET(request: Request) {
     await ensureDatabase();
     const url = new URL(request.url);
     const requestedStudentId = url.searchParams.get("studentId")?.trim() ?? "";
+    if (url.searchParams.get("view") === "completed") {
+      if (requestedStudentId && !(await canViewStudent(auth.user, requestedStudentId))) {
+        return Response.json({ error: "无权查看该学生" }, { status: 403, headers: privateHeaders });
+      }
+      const studentScope = await getStudentScope(auth.user);
+      // A requested student has already passed canViewStudent. Narrowing here
+      // also keeps an exact-student query within D1's binding limit.
+      if (requestedStudentId) {
+        studentScope.studentIds = studentScope.all || studentScope.studentIds.includes(requestedStudentId) ? [requestedStudentId] : [];
+        studentScope.all = false;
+      }
+      const scopes = studentScope.all || studentScope.studentIds.length <= 100 ? [studentScope] :
+        Array.from({ length: Math.ceil(studentScope.studentIds.length / 100) }, (_, index) => ({
+          all: false, studentIds: studentScope.studentIds.slice(index * 100, (index + 1) * 100),
+        }));
+      const students = (await Promise.all(scopes.map(async (part) => {
+        const scope = scopeSql(part, "s.id");
+        return (await getD1().prepare(`SELECT s.id FROM students s WHERE 1 = 1${scope.clause} ORDER BY s.id`)
+          .bind(...scope.bindings).all<{ id: string }>()).results;
+      }))).flat();
+      const items = await loadCompletedProgressResolutionItems(students.map((student) => student.id));
+      return Response.json({ items, canReview: false, canSubmit: false }, { headers: privateHeaders });
+    }
     const studentId = auth.user.role === "student" ? auth.user.studentId ?? "" : requestedStudentId;
     if (!studentId) throw new InputError("缺少学生参数");
     if (auth.user.role === "student" && requestedStudentId && requestedStudentId !== studentId) {

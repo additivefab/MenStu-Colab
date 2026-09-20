@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 
 import { createPortal } from "react-dom";
 import { validateProgressFiles } from "../lib/progress-attachments";
 import { instantTimestamp } from "../lib/dashboard-overview/dates";
+import { groupProgressTasks, progressTaskFilter, type ProgressTaskFilter } from "../lib/progress-task-view";
 import type { ProgressResolutionAttachment as ResolutionAttachment, ProgressResolutionHistory as ResolutionEvent, ProgressResolutionItem as ResolutionItem } from "../lib/progress-resolution";
 import styles from "./progress-resolution-panel.module.css";
 
@@ -16,13 +17,16 @@ type ResolutionPayload = {
 type Editor = { item: ResolutionItem; action: "submit" | "request_changes" | "reopen" };
 
 export type ProgressResolutionPanelProps = {
-  studentId: string;
+  studentId?: string;
   mode: "student" | "staff";
   entryId?: number;
   onChanged?: () => void | Promise<void>;
+  onConfirmed?: () => void | Promise<void>;
   compact?: boolean;
   refreshKey?: string | number;
   openRequest?: { progressEntryId: number; itemKind: "blocker" | "next_action"; key: number };
+  initialFilter?: ProgressTaskFilter;
+  filterRequest?: { filter: ProgressTaskFilter; key: number };
 };
 
 const changedEvent = "progress-resolutions-changed";
@@ -48,9 +52,9 @@ function eventLabel(event: ResolutionEvent, item: ResolutionItem) {
 
 function dateLabel(value: string) {
   const timestamp = instantTimestamp(value);
-  if (timestamp === null) return value.slice(0, 16);
+  if (!Number.isFinite(timestamp)) return value.slice(0, 16);
   const parsed = new Date(timestamp);
-  return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(parsed);
+  return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(parsed);
 }
 
 function Attachments({ files }: { files: ResolutionAttachment[] }) {
@@ -61,7 +65,7 @@ function Attachments({ files }: { files: ResolutionAttachment[] }) {
   </li>)}</ul>;
 }
 
-export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, compact = false, refreshKey = 0, openRequest }: ProgressResolutionPanelProps) {
+export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, onConfirmed, compact = false, refreshKey = 0, openRequest, initialFilter = "open", filterRequest }: ProgressResolutionPanelProps) {
   const panelId = useId();
   const panelRef = useRef<HTMLElement>(null);
   const noticeRef = useRef<HTMLParagraphElement>(null);
@@ -71,9 +75,13 @@ export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, c
   const [notice, setNotice] = useState("");
   const [editor, setEditor] = useState<Editor | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [filter, setFilter] = useState<ProgressTaskFilter>(initialFilter);
+  const [search, setSearch] = useState("");
+  const [focusRequest, setFocusRequest] = useState<{ itemKey?: string; key: number } | null>(null);
   const sequence = useRef(0);
   const confirmRequests = useRef(new Map<string, string>());
   const handledOpenRequest = useRef<string | null>(null);
+  const handledFilterRequest = useRef<string | null>(null);
   const previousRefreshKey = useRef(refreshKey);
 
   const load = useCallback(async () => {
@@ -81,7 +89,7 @@ export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, c
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({ studentId });
+      const params = new URLSearchParams(studentId ? { studentId } : { view: "completed" });
       if (entryId !== undefined) params.set("entryId", String(entryId));
       const response = await fetch(`/api/progress-resolutions?${params}`, { cache: "no-store" });
       const result = await response.json() as ResolutionPayload;
@@ -98,9 +106,11 @@ export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, c
     setPayload(null);
     setNotice("");
     setEditor(null);
+    setFilter(initialFilter);
+    setFocusRequest(null);
     void load();
     return () => { sequence.current += 1; };
-  }, [load]);
+  }, [load, initialFilter]);
 
   useEffect(() => {
     if (previousRefreshKey.current === refreshKey) return;
@@ -111,15 +121,16 @@ export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, c
   useEffect(() => {
     function reload(event: Event) {
       const detail = (event as CustomEvent<{ studentId: string; source: string }>).detail;
-      if (detail?.studentId === studentId && detail.source !== panelId) void load();
+      if (detail && (!studentId || detail.studentId === studentId) && detail.source !== panelId) void load();
     }
     window.addEventListener(changedEvent, reload);
     return () => window.removeEventListener(changedEvent, reload);
   }, [studentId, panelId, load]);
 
-  async function changed(message: string) {
+  async function changed(message: string, nextFilter: ProgressTaskFilter) {
     setEditor(null);
     setNotice(message);
+    setFilter(nextFilter);
     await load();
     window.dispatchEvent(new CustomEvent(changedEvent, { detail: { studentId, source: panelId } }));
     try { await onChanged?.(); }
@@ -143,15 +154,41 @@ export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, c
       const result = await response.json() as { error?: string };
       if (!response.ok) throw new Error(result.error || "确认失败，请重试");
       confirmRequests.current.delete(requestKey);
-      await changed("已确认，该事项的提醒已关闭。");
+      try { await onConfirmed?.(); }
+      catch { setError("任务已完成，列表更新失败，请刷新页面。"); }
+      await changed("已确认，任务已移入“已完成”。", "completed");
     } catch (failure) { setError(failure instanceof Error ? failure.message : "确认失败，请重试"); }
     finally { setConfirming(null); }
   }
 
   const items = (payload?.items ?? []).filter((item) => entryId === undefined || item.progressEntryId === entryId);
-  const canSubmit = mode === "student" && payload?.canSubmit === true;
-  const canReview = mode === "staff" && payload?.canReview === true;
-  const actionableCount = items.filter((item) => item.current !== false && item.status !== "resolved").length;
+  const allStudents = !studentId;
+  const canSubmit = !allStudents && mode === "student" && payload?.canSubmit === true;
+  const canReview = !allStudents && mode === "staff" && payload?.canReview === true;
+  const groups = groupProgressTasks(items);
+  const activeFilter = allStudents ? "completed" : filter;
+
+  useEffect(() => {
+    if (!filterRequest) return;
+    const requestKey = `${studentId}:${filterRequest.key}`;
+    if (handledFilterRequest.current === requestKey) return;
+    handledFilterRequest.current = requestKey;
+    setFilter(filterRequest.filter);
+    setFocusRequest({ key: filterRequest.key });
+  }, [filterRequest, studentId]);
+
+  useEffect(() => {
+    if (!focusRequest || loading) return;
+    const frame = requestAnimationFrame(() => {
+      const card = focusRequest.itemKey ? Array.from(panelRef.current?.querySelectorAll<HTMLElement>("[data-task-key]") ?? []).find((element) => element.dataset.taskKey === focusRequest.itemKey) : null;
+      const target = card ?? panelRef.current?.querySelector<HTMLElement>("h3");
+      const group = card?.closest("details");
+      if (group) group.open = true;
+      target?.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+      target?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusRequest, loading, activeFilter]);
 
   useEffect(() => {
     if (!openRequest || loading || !payload) return;
@@ -160,12 +197,10 @@ export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, c
     handledOpenRequest.current = requestKey;
     const item = payload.items?.find((candidate) => candidate.progressEntryId === openRequest.progressEntryId && candidate.itemKind === openRequest.itemKind && candidate.current);
     if (!item) { setNotice("事项已更新，请查看最新进展。"); return; }
-    const card = panelRef.current?.querySelector<HTMLElement>(`#progress-resolution-${item.progressEntryId}-${item.itemKind}`);
-    const group = card?.closest("details");
-    if (group) group.open = true;
-    card?.scrollIntoView({ block: "center", behavior: "smooth" });
-    card?.focus({ preventScroll: true });
-    if (mode === "student" && payload.canSubmit && (item.status === "open" || item.status === "changes_requested")) setEditor({ item, action: "submit" });
+    const itemFilter = progressTaskFilter(item);
+    if (itemFilter !== "historical") setFilter(itemFilter);
+    setFocusRequest({ itemKey: item.key, key: openRequest.key });
+    if (studentId && mode === "student" && payload.canSubmit && (item.status === "open" || item.status === "changes_requested")) setEditor({ item, action: "submit" });
   }, [openRequest, payload, loading, studentId, mode]);
 
   function renderItem(item: ResolutionItem) {
@@ -174,18 +209,20 @@ export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, c
       const confirmation = history.find((event) => event.action === "confirm");
       const current = item.current !== false;
       const itemCanReview = canReview && item.canReview !== false;
-      return <article key={item.key} id={`progress-resolution-${item.progressEntryId}-${item.itemKind}${current ? "" : `-revision-${item.revisionNumber}`}`} tabIndex={-1} className={styles.item}>
-        <div className={styles.itemTop}><strong>{item.itemKind === "blocker" ? "困难" : "下一步计划"}</strong><span className={`${styles.status} ${item.status === "resolved" ? styles.resolved : item.status === "pending" ? styles.pending : ""}`}>{statusLabel(item)}</span></div>
+      return <article key={item.key} data-task-key={item.key} id={`progress-resolution-${item.progressEntryId}-${item.itemKind}${current ? "" : `-revision-${item.revisionNumber}`}`} tabIndex={-1} className={styles.item}>
+        <div className={styles.itemTop}><strong>{allStudents && item.studentName ? <span className={styles.studentName}>{item.studentName} · </span> : null}{item.itemKind === "blocker" ? "困难" : "下一步计划"}</strong><span className={`${styles.status} ${item.status === "resolved" ? styles.resolved : item.status === "pending" ? styles.pending : ""}`}>{statusLabel(item)}</span></div>
         <p className={styles.itemText}>{item.text}</p>
         <p className={styles.meta}>{item.trackType === "paper" ? "论文" : "课题"} · {item.title}{item.dueDate ? <span>期限 {item.dueDate}</span> : null}</p>
-        {item.submissionNote ? <div className={styles.result}><strong>处理结果</strong><p>{item.submissionNote}</p><Attachments files={submission?.attachments ?? []} /></div> : null}
+        {item.submissionNote || submission ? <div className={styles.result}><strong>{item.status === "resolved" ? "完成说明" : "处理结果"}</strong><p>{item.submissionNote || submission?.note}</p><Attachments files={submission?.attachments ?? []} /><p className={styles.resultMeta}>提交：{submission?.actorName || "学生"}{item.submittedAt || submission?.createdAt ? ` · ${dateLabel(item.submittedAt || submission!.createdAt)}` : ""}</p></div> : null}
+        {item.status === "resolved" ? <p className={styles.confirmation}>确认：{confirmation?.actorName || "管理员"}{item.resolvedAt || confirmation?.createdAt ? ` · ${dateLabel(item.resolvedAt || confirmation!.createdAt)}` : ""}</p> : null}
         {item.reviewerNote && (item.status === "changes_requested" || item.status === "open") ? <p className={styles.reviewNote}><strong>{item.status === "changes_requested" ? "请补充：" : "重开原因："}</strong>{item.reviewerNote}</p> : null}
         <div className={styles.itemFooter}>
-          {!current ? <small>历史事项，仅供查看。</small>
-            : item.status === "resolved" ? <small>{confirmation?.actorName || "管理员"}确认{completeLabel(item)}{item.resolvedAt ? ` · ${dateLabel(item.resolvedAt)}` : ""}</small>
+          {item.status === "resolved" ? <small>任务已完成，结果与处理记录已保留。</small>
+            : !current ? <small>该事项未确认完成，仅保留历史记录。</small>
               : item.status === "pending" ? <small>已提交，等待管理员确认。</small>
                 : mode === "staff" ? <small>{item.status === "changes_requested" ? "等待学生补充结果。" : "等待学生提交处理结果。"}</small> : <small>提交结果后，由管理员确认。</small>}
           <div className={styles.actions}>
+            {allStudents && item.studentId ? <a className={styles.textButton} href={`/students/${encodeURIComponent(item.studentId)}#progress-${item.progressEntryId}`}>查看原进展</a> : null}
             {current && canSubmit && (item.status === "open" || item.status === "changes_requested") ? <button type="button" className={styles.primaryButton} onClick={() => { setNotice(""); setEditor({ item, action: "submit" }); }}>{submitLabel(item)}</button> : null}
             {current && itemCanReview && item.status === "pending" ? <><button type="button" className={styles.button} disabled={confirming !== null} onClick={() => setEditor({ item, action: "request_changes" })}>退回补充</button><button type="button" className={styles.primaryButton} disabled={confirming !== null} onClick={() => void confirm(item)}>{confirming === item.key ? "正在确认…" : `确认${completeLabel(item)}`}</button></> : null}
             {current && itemCanReview && item.status === "resolved" ? <button type="button" className={styles.textButton} disabled={confirming !== null} onClick={() => setEditor({ item, action: "reopen" })}>重新打开</button> : null}
@@ -195,23 +232,24 @@ export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, c
       </article>;
   }
 
-  const currentItems = items.filter((item) => entryId !== undefined || item.current && item.status !== "resolved");
-  const completedItems = entryId === undefined ? items.filter((item) => item.current && item.status === "resolved") : [];
-  const historicalItems = entryId === undefined ? items.filter((item) => !item.current) : [];
-  if (!loading && !error && !items.length) return null;
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const visibleItems = groups[activeFilter].filter((item) => !allStudents || !normalizedSearch || [item.studentName, item.title, item.text, item.submissionNote].some((value) => value?.toLocaleLowerCase().includes(normalizedSearch)));
+  const filters: Array<{ value: ProgressTaskFilter; label: string }> = [{ value: "open", label: "待处理" }, { value: "pending", label: "待确认" }, { value: "completed", label: "已完成" }];
+  const emptyLabel = normalizedSearch && allStudents ? "没有符合条件的已完成任务。" : { open: "暂无待处理任务。", pending: "暂无待确认结果。", completed: "暂无已完成任务。" }[activeFilter];
   return <section ref={panelRef} className={`${styles.panel}${compact ? ` ${styles.compact}` : ""}`} aria-labelledby={`${panelId}-title`}>
-    <header className={styles.header}><h3 id={`${panelId}-title`}>困难与计划</h3>{items.length ? <span>{actionableCount ? `${actionableCount} 项待处理` : items.some((item) => item.current) ? "已处理" : "历史记录"}</span> : null}</header>
+    <header className={styles.header}><h3 id={`${panelId}-title`} tabIndex={-1}>{allStudents ? "已完成任务" : "任务与结果"}</h3>{allStudents && payload ? <span>{groups.completed.length} 项</span> : null}</header>
+    {allStudents ? <label className={styles.search}><span className={styles.srOnly}>查找已完成任务</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索学生姓名或任务" /></label> : <div className={styles.filters} aria-label="任务状态">{filters.map(({ value, label }) => <button key={value} type="button" aria-pressed={filter === value} className={`${styles.filter}${filter === value ? ` ${styles.selectedFilter}` : ""}`} onClick={() => { setFilter(value); setFocusRequest(null); }}>{label}<span>{groups[value].length}</span></button>)}</div>}
     {notice ? <p ref={noticeRef} tabIndex={-1} className={styles.notice} role="status">{notice}</p> : null}
     {error ? <p className={styles.error} role="alert">{error} <button type="button" className={styles.textButton} onClick={() => void load()}>重新读取</button></p> : null}
     {loading && !payload ? <p className={styles.empty} role="status">正在读取…</p> : null}
-    <div className={styles.items}>{currentItems.map(renderItem)}</div>
-    {completedItems.length ? <details className={styles.historical}><summary>已处理 · {completedItems.length}</summary><div className={styles.items}>{completedItems.map(renderItem)}</div></details> : null}
-    {historicalItems.length ? <details className={styles.historical}><summary>历史事项 · {historicalItems.length}</summary><div className={styles.items}>{historicalItems.map(renderItem)}</div></details> : null}
+    <div className={styles.items} aria-label={filters.find(({ value }) => value === activeFilter)?.label}>{visibleItems.map(renderItem)}</div>
+    {!loading && !error && !visibleItems.length ? <p className={styles.empty}>{emptyLabel}</p> : null}
+    {!allStudents && groups.historical.length ? <details className={styles.historical}><summary>历史事项 · 未确认完成 {groups.historical.length} 项</summary><div className={styles.items}>{groups.historical.map(renderItem)}</div></details> : null}
     {editor ? <ResolutionDialog editor={editor} onClose={() => setEditor(null)} onSaved={changed} /> : null}
   </section>;
 }
 
-function ResolutionDialog({ editor: { item, action }, onClose, onSaved }: { editor: Editor; onClose: () => void; onSaved: (message: string) => Promise<void> }) {
+function ResolutionDialog({ editor: { item, action }, onClose, onSaved }: { editor: Editor; onClose: () => void; onSaved: (message: string, nextFilter: ProgressTaskFilter) => Promise<void> }) {
   const id = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -263,7 +301,7 @@ function ResolutionDialog({ editor: { item, action }, onClose, onSaved }: { edit
       }
       const result = await response.json() as { error?: string };
       if (!response.ok) throw new Error(result.error || "保存失败，请重试");
-      await onSaved(isSubmission ? "结果已提交，等待管理员确认。" : action === "request_changes" ? "已退回，等待学生补充。" : "事项已重新打开，学生可再次提交结果。");
+      await onSaved(isSubmission ? "结果已提交，等待管理员确认。" : action === "request_changes" ? "已退回，等待学生补充。" : "事项已重新打开，学生可再次提交结果。", isSubmission ? "pending" : "open");
     } catch (failure) { setError(failure instanceof Error ? failure.message : "保存失败，请重试"); setBusy(false); }
   }
 

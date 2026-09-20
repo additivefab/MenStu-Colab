@@ -314,9 +314,11 @@ function DetailBlock({ label, value }: { label: string; value: string }) {
 }
 
 export default function StudentOverview({ studentId }: { studentId: string }) {
-  const [tab, setTab] = useState<"progress" | "guidance" | "research">("progress");
+  const [tab, setTab] = useState<"progress" | "guidance" | "research" | "tasks">("progress");
+  const [taskFilterRequest, setTaskFilterRequest] = useState<{ filter: "open" | "pending" | "completed"; key: number }>();
   const [progressFilter, setProgressFilter] = useState<"pending" | "all" | "ai" | "returned" | "results">("pending");
   const [pendingResultEntryIds, setPendingResultEntryIds] = useState<number[]>([]);
+  const [resultFilterRequest, setResultFilterRequest] = useState<{ filter: "pending"; key: number }>();
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [focusTarget, setFocusTarget] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
@@ -648,6 +650,10 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   const ready = Boolean(student);
 
   useEffect(() => {
+    setResultFilterRequest(progressFilter === "results" && entry ? { filter: "pending", key: Date.now() } : undefined);
+  }, [progressFilter, entry?.id]);
+
+  useEffect(() => {
     if (!ready) return;
     function followHash() {
       const hash = window.location.hash.slice(1);
@@ -655,6 +661,9 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       const match = /^(?:review-progress|progress)-(\d+)$/.exec(hash);
       if (match) {
         setTab("progress"); setProgressFilter("all"); setSelectedId(Number(match[1]));
+      } else if (hash === "tasks" || hash === "tasks-completed") {
+        setTab("tasks");
+        setTaskFilterRequest({ filter: hash === "tasks-completed" ? "completed" : "open", key: Date.now() });
       } else if (hash.startsWith("guidance")) {
         setTab("guidance");
       } else if (["papers", "outputs", "proposal", "workflow", "audit", "milestones"].includes(hash) || hash.startsWith("milestone-")) {
@@ -688,7 +697,14 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
 
   function switchTab(next: typeof tab) {
     setTab(next); setFocusTarget("");
-    window.history.replaceState(null, "", `#${next === "progress" ? "evidence" : next === "guidance" ? "guidance" : "papers"}`);
+    window.history.replaceState(null, "", `#${next === "progress" ? "evidence" : next === "guidance" ? "guidance" : next === "tasks" ? "tasks" : "papers"}`);
+  }
+
+  function viewCompletedTasks() {
+    setTab("tasks");
+    setTaskFilterRequest({ filter: "completed", key: Date.now() });
+    setFocusTarget("sw-tasks");
+    window.history.replaceState(null, "", "#tasks-completed");
   }
 
   function writeGuidance() {
@@ -705,10 +721,11 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     <nav className="sw-breadcrumb"><Link href="/?mentorView=students">← 返回学生列表</Link><span>探研 / 学生档案</span></nav>
     <header className="sw-profile">
       <div className="sw-identity"><span className="sw-avatar" aria-hidden="true">{student.name.slice(-2)}</span><div><div className="sw-name"><h1>{student.name}</h1><span>{student.gradeYear} 级{student.degree}</span>{student.stage && student.stage !== "待确认" ? <span>{student.stage}</span> : null}</div><p>{student.currentFocus && !["待补充", "尚未填写"].includes(student.currentFocus) ? student.currentFocus : "研究方向尚未填写"}</p></div></div>
-      <div className="sw-profile-actions"><span>最近确认进展<strong>{student.lastSubstantiveAt ? dateText(student.lastSubstantiveAt) : "暂无"}</strong></span><button className="primary" onClick={writeGuidance}>写指导</button></div>
+      <div className="sw-profile-actions"><span>最近确认进展<strong>{student.lastSubstantiveAt ? dateText(student.lastSubstantiveAt) : "暂无"}</strong></span><button onClick={viewCompletedTasks}>已完成任务</button><button className="primary" onClick={writeGuidance}>写指导</button></div>
     </header>
     <nav className="sw-tabs" aria-label="学生档案页面">
       <button aria-current={tab === "progress" ? "page" : undefined} onClick={() => switchTab("progress")}>进展与审核{pendingCount + pendingResultEntryIds.length ? <span>{pendingCount + pendingResultEntryIds.length} 待审</span> : null}</button>
+      <button aria-current={tab === "tasks" ? "page" : undefined} onClick={() => switchTab("tasks")}>任务与结果</button>
       <button aria-current={tab === "guidance" ? "page" : undefined} onClick={() => switchTab("guidance")}>指导{openGuidanceCount ? <span>{openGuidanceCount} 进行中</span> : null}</button>
       <button aria-current={tab === "research" ? "page" : undefined} onClick={() => switchTab("research")}>研究资料</button>
     </nav>
@@ -735,7 +752,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
             <div className="sw-actions"><button className="primary" disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim() || !draft.nextAction.trim() || !draft.acceptanceCriteria.trim()} onClick={() => void reviewProgress(entry, "supplement", { nextAction: draft.nextAction, dueDate: draft.dueDate, acceptanceCriteria: draft.acceptanceCriteria })}>{reviewBusy === entry.id ? "发送中…" : "退回并发送指导"}</button><button onClick={() => updateGuidanceDraft(entry, { open: false })}>取消</button></div>
           </div> : null}
           <section className="sw-record-body"><h3>本次进展</h3><p>{entry.summary || "尚未填写"}</p>{entry.evidence ? <><h3>证据说明</h3><p>{entry.evidence}</p></> : null}</section>
-          {entry.paper || entry.project ? <ProgressResolutionPanel studentId={studentId} mode="staff" entryId={entry.id} onChanged={async () => { setProgressFilter("all"); setSelectedId(entry.id); await load(); }} compact /> : null}
+          {entry.paper || entry.project ? <ProgressResolutionPanel studentId={studentId} mode="staff" entryId={entry.id} filterRequest={resultFilterRequest} onChanged={async () => { setProgressFilter("all"); setSelectedId(entry.id); await load(); }} compact /> : null}
           {entry.paper || entry.project ? <details className="sw-record-history" open={entry.review_status !== "accepted"}><summary>原进展中的计划与困难</summary>{followUpNotice ? <p className="sw-muted">{followUpNotice}</p> : null}<div className="sw-next-step">{entry.paper ? <div><span>论文下一步</span><p>{entry.paper.next_action || "尚未填写"}{entry.paper.next_action_due_date ? <small>期限 {entry.paper.next_action_due_date}</small> : null}</p>{activeBlockerText(entry.paper.blocker) ? <p className="sw-blocker">本次记录的困难：{entry.paper.blocker}</p> : null}</div> : null}{entry.project ? <div><span>课题下一行动</span><p>{entry.project.next_action || "尚未填写"}{entry.project.next_action_due_date ? <small>期限 {entry.project.next_action_due_date}</small> : null}</p><small>关联课题节点：{entry.project.milestone_title || "未关联"}{entry.project.milestone_target_date ? ` · ${entry.project.milestone_target_date}` : ""}</small>{activeBlockerText(entry.project.blocker) ? <p className="sw-blocker">本次记录的困难：{entry.project.blocker}</p> : null}</div> : null}</div></details> : null}
           {entry.attachments.length || entry.evidence_sources.some((source) => source.source_type !== "attachment") ? <section className="sw-materials"><h3>相关材料</h3>{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url} target="_blank" rel="noreferrer"><span>{attachment.file_name}</span><small>{(attachment.size_bytes / 1024 / 1024).toFixed(1)} MB ↗</small></a>)}{entry.evidence_sources.filter((source) => source.source_type !== "attachment").map((source) => <div key={source.id}>{source.source_ref && ["git", "url"].includes(source.source_type) ? <a href={source.source_ref} target="_blank" rel="noreferrer">{source.label} ↗</a> : <span>{source.label}{source.source_ref ? ` · ${source.source_ref}` : ""}</span>}</div>)}</section> : <p className="sw-muted sw-materials">{entry.summary_only ? "历史纪要的来源信息见下方记录详情" : "未附材料"}</p>}
           {entry.reviewer_note || entry.assessment ? <section className="sw-feedback"><h3>审核结果</h3>{entry.assessment ? <span>{entry.assessment === "substantive" ? "实质性进展" : "支持性工作"}{entry.reviewer_name ? ` · ${entry.reviewer_name}` : ""}</span> : null}{entry.reviewer_note ? <p>{entry.reviewer_note}</p> : null}</section> : null}
@@ -743,6 +760,10 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
           <details className="sw-record-history"><summary>记录详情与操作记录</summary><div className="sw-detail-body"><p>记录 #{entry.id} · 第 {entry.current_revision} 版{entry.reviewed_at ? ` · 审核于 ${dateText(entry.reviewed_at)}` : ""}</p>{entry.paper?.title && entry.paper.title !== entry.title ? <DetailBlock label="所属论文" value={entry.paper.title} /> : null}{entry.paper?.submission_identifier ? <DetailBlock label="稿件编号 / DOI" value={entry.paper.submission_identifier} /> : null}{entry.literature_ref ? <DetailBlock label="文献" value={entry.literature_ref} /> : null}{entry.git_url ? <a href={entry.git_url} target="_blank" rel="noreferrer">代码仓库 ↗</a> : null}{imported ? <><DetailBlock label="纪要来源" value={imported.source_label || "飞书智能纪要"} /><DetailBlock label="导入说明" value={imported.detected_reason} /><p>纪要时间 {dateText(imported.message_created_at)} · 保存于 {dateText(imported.saved_at)}</p>{imported.summary !== entry.summary ? <DetailBlock label="原始纪要" value={imported.summary} /> : null}</> : null}{entry.attachments.map((attachment) => <p className="sw-fingerprint" key={attachment.id}>{attachment.file_name} · SHA256 {attachment.content_sha256}</p>)}{entry.evidence_sources.filter((source) => source.content_sha256).map((source) => <p className="sw-fingerprint" key={source.id}>{source.label} · SHA256 {source.content_sha256}</p>)}{entry.audit.map((event) => <div className="sw-audit-row" key={event.id}><strong>{event.actor_name || (event.actor_type === "system" ? "系统" : "未知人员")} · {reviewLabels[event.to_status as ReviewStatus] || event.action}</strong><small>{dateText(event.created_at)}</small>{event.note ? <p>{event.note}</p> : null}</div>)}</div></details>
         </article> : <div className="sw-reader sw-empty-state"><span aria-hidden="true">✓</span><h2>{progressFilter === "pending" ? "当前没有待审核进展" : "暂无记录"}</h2><p>{progressFilter === "pending" ? "可以查看历史进展，或给学生写一条指导。" : "学生提交或导入的记录会显示在这里。"}</p><div className="sw-actions"><button onClick={() => setProgressFilter("all")}>查看全部进展</button><button onClick={writeGuidance}>写指导</button></div></div>}
       </div>
+    </section>
+
+    <section id="sw-tasks" tabIndex={-1} hidden={tab !== "tasks"} aria-label="任务与结果">
+      {tab === "tasks" ? <ProgressResolutionPanel studentId={studentId} mode="staff" filterRequest={taskFilterRequest} refreshKey={aiRefreshKey} onChanged={load} /> : null}
     </section>
 
     <section id="sw-guidance" tabIndex={-1} hidden={tab !== "guidance"} className="sw-panel" aria-label="指导">

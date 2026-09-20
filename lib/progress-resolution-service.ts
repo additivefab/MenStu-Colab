@@ -19,10 +19,91 @@ export async function loadProgressResolutions(studentIds: string[]): Promise<Pro
 }
 
 export async function loadCurrentResolutionSources(studentId: string): Promise<CurrentResolutionSource[]> {
-  return (await getD1().prepare(`SELECT source.*, p.title FROM (${acceptedTrackProgressSql(1)}) source
+  return loadCurrentResolutionSourcesForStudents([studentId]);
+}
+
+async function loadCurrentResolutionSourcesForStudents(studentIds: string[]): Promise<CurrentResolutionSource[]> {
+  if (!studentIds.length) return [];
+  return (await getD1().prepare(`SELECT source.*, p.title FROM (${acceptedTrackProgressSql(studentIds.length)}) source
     JOIN progress_entries p ON p.id = source.id
     JOIN students s ON s.id = source.student_id AND s.active = 1`)
-    .bind(studentId).all<CurrentResolutionSource>()).results;
+    .bind(...studentIds).all<CurrentResolutionSource>()).results;
+}
+
+/** Completed records remain visible after later progress replaces their source. */
+export async function loadCompletedProgressResolutionItems(studentIds: string[]): Promise<ProgressResolutionItem[]> {
+  if (!studentIds.length) return [];
+  if (studentIds.length > 100) {
+    const batches: Promise<ProgressResolutionItem[]>[] = [];
+    for (let offset = 0; offset < studentIds.length; offset += 100) {
+      batches.push(loadCompletedProgressResolutionItems(studentIds.slice(offset, offset + 100)));
+    }
+    const timestamp = (value: string | null) => {
+      const parsed = Date.parse((value ?? "").replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/u, "$1T$2Z"));
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    return (await Promise.all(batches)).flat().sort((a, b) =>
+      timestamp(b.resolvedAt) - timestamp(a.resolvedAt) || b.progressEntryId - a.progressEntryId || a.key.localeCompare(b.key));
+  }
+  const ids = studentIds.map(() => "?").join(",");
+  const scope = `pr.student_id IN (${ids}) AND pr.status = 'resolved'
+    AND NOT EXISTS (SELECT 1 FROM progress_deletions d WHERE d.progress_entry_id = p.id)`;
+  const [sources, stored, events, attachments] = await Promise.all([
+    loadCurrentResolutionSourcesForStudents(studentIds),
+    getD1().prepare(`SELECT pr.*, s.display_name AS student_name FROM progress_resolutions pr
+      JOIN progress_entries p ON p.id = pr.progress_entry_id AND p.student_id = pr.student_id
+      JOIN students s ON s.id = pr.student_id
+      WHERE ${scope} ORDER BY julianday(pr.resolved_at) DESC, pr.id DESC`)
+      .bind(...studentIds).all<StoredResolution & { student_name: string }>(),
+    getD1().prepare(`SELECT e.id, e.resolution_id, e.action, e.note, e.created_at, u.display_name AS actor_name
+      FROM progress_resolution_events e
+      JOIN progress_resolutions pr ON pr.id = e.resolution_id
+      JOIN progress_entries p ON p.id = pr.progress_entry_id AND p.student_id = pr.student_id
+      JOIN app_users u ON u.id = e.actor_user_id
+      WHERE ${scope} ORDER BY e.id DESC`)
+      .bind(...studentIds).all<{
+        id: number; resolution_id: number; action: ProgressResolutionHistory["action"];
+        note: string; created_at: string; actor_name: string;
+      }>(),
+    getD1().prepare(`SELECT a.id, a.event_id, a.file_name, a.size_bytes
+      FROM progress_resolution_attachments a
+      JOIN progress_resolution_events e ON e.id = a.event_id
+      JOIN progress_resolutions pr ON pr.id = e.resolution_id
+      JOIN progress_entries p ON p.id = pr.progress_entry_id AND p.student_id = pr.student_id
+      WHERE ${scope} ORDER BY a.id`)
+      .bind(...studentIds).all<{ id: number; event_id: number; file_name: string; size_bytes: number }>(),
+  ]);
+  const currentKeys = new Set(sources.flatMap((source) => {
+    const keys: string[] = [];
+    if (activeBlockerText(source.blocker)) keys.push(progressResolutionKey(source.id, source.current_revision, "blocker"));
+    if (source.next_action.trim()) keys.push(progressResolutionKey(source.id, source.current_revision, "next_action"));
+    return keys;
+  }));
+  const filesByEvent = new Map<number, ProgressResolutionHistory["attachments"]>();
+  for (const file of attachments.results) {
+    const files = filesByEvent.get(file.event_id) ?? [];
+    files.push({ id: file.id, fileName: file.file_name, sizeBytes: file.size_bytes,
+      url: `/api/progress-resolutions/files?id=${file.id}` });
+    filesByEvent.set(file.event_id, files);
+  }
+  const historyByResolution = new Map<number, ProgressResolutionHistory[]>();
+  for (const event of events.results) {
+    const history = historyByResolution.get(event.resolution_id) ?? [];
+    history.push({ id: event.id, action: event.action, note: event.note, actorName: event.actor_name,
+      createdAt: event.created_at, attachments: filesByEvent.get(event.id) ?? [] });
+    historyByResolution.set(event.resolution_id, history);
+  }
+  return stored.results.map((row) => {
+    const key = progressResolutionKey(row.progress_entry_id, row.revision_number, row.item_kind);
+    return {
+      studentId: row.student_id, studentName: row.student_name,
+      key, progressEntryId: row.progress_entry_id, revisionNumber: row.revision_number, itemKind: row.item_kind,
+      title: row.source_title, text: row.source_text, dueDate: row.source_due_date, trackType: row.track_type,
+      current: currentKeys.has(key), canReview: false, status: row.status, version: row.version,
+      submissionNote: row.submission_note, reviewerNote: row.reviewer_note,
+      submittedAt: row.submitted_at, resolvedAt: row.resolved_at, history: historyByResolution.get(row.id) ?? [],
+    };
+  });
 }
 
 export async function loadProgressResolutionItems(studentId: string, entryId?: number): Promise<ProgressResolutionItem[]> {

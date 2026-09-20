@@ -2779,3 +2779,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .ai-deleted-records article { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; }
 .ai-deleted-records article + article { border-top: 1px solid #e8ebef; }
 .ai-deleted-records small { display: block; margin-top: 5px; color: #687585; font-size: 13px; }
+
+
+.mentor-task-views { display: flex; gap: 22px; border-bottom: 1px solid #dfe5e9; padding: 0 4px; }
+.mentor-task-views button { padding: 12px 0; border: 0; border-bottom: 3px solid transparent; background: transparent; color: #687782; font-size: 15px; font-weight: 600; }
+.mentor-task-views button[aria-pressed="true"] { color: #17689f; border-bottom-color: #17689f; }
+.mentor-task-views button:focus-visible { outline: 2px solid #17689f; outline-offset: 3px; }

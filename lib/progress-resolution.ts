@@ -26,6 +26,8 @@ export type ProgressResolutionHistory = {
   attachments: ProgressResolutionAttachment[];
 };
 export type ProgressResolutionItem = {
+  studentId?: string;
+  studentName?: string;
   key: string;
   progressEntryId: number;
   revisionNumber: number;
