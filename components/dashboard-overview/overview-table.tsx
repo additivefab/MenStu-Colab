@@ -1,5 +1,6 @@
 import { overviewStateMeta, type MentorOverviewStudent } from "../../lib/dashboard-overview/types";
 import { overviewActionHref, overviewActionLabel, overviewDate, overviewOwnerLabels } from "./overview-actions";
+import { overviewNextActionText } from "./overview-view-model";
 
 export function OverviewTable({
   students,
@@ -41,7 +42,7 @@ export function OverviewTable({
             ><strong>{student.displayName}</strong><small>{student.grade}级{student.degreeLevel} · {student.stage}</small></button></span>
             <span className="group-overview-state-cell" role="cell"><i aria-hidden="true">{meta.icon}</i><span><strong>{meta.label}</strong><small>{student.primaryReasonLabel}</small>{student.additionalIssueCount ? <em>另有 {student.additionalIssueCount} 项</em> : null}</span></span>
             <span className="group-overview-trusted-cell" role="cell"><strong>{student.latestSubstantiveTitle || "暂无已确认进展"}</strong><small>{student.latestSubstantiveAt ? `${overviewDate(student.latestSubstantiveAt)} 已确认` : student.latestSubmittedAt ? `${overviewDate(student.latestSubmittedAt)} 有尚未确认的提交` : "暂无提交"}</small></span>
-            <span className="group-overview-next-cell" role="cell"><strong>{student.nextAction || "等待补齐明确行动"}</strong><small>{student.nextActionDueDate ? `${overviewDate(student.nextActionDueDate, true)} · ` : ""}{overviewOwnerLabels[student.nextOwner]}跟进</small></span>
+            <span className="group-overview-next-cell" role="cell"><strong>{overviewNextActionText(student)}</strong><small>{student.nextActionDueDate ? `${overviewDate(student.nextActionDueDate, true)} · ` : ""}{overviewOwnerLabels[student.nextOwner]}跟进</small></span>
           <span className="group-overview-action-cell" role="cell"><a className="group-overview-primary-action" href={overviewActionHref(student)} onClick={(event) => event.stopPropagation()}>{overviewActionLabel(student)}</a></span>
         </div>;
       })}

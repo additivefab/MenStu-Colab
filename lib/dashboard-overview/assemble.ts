@@ -1,5 +1,6 @@
 import type { AppUser } from "../feishu-auth";
 import { activeBlockerText } from "../progress-blocker.ts";
+import { progressResolutionKey, type ProgressResolutionRow } from "../progress-resolution.ts";
 import { canActOnProgressReview, canActOnProposalReview, canVerifyGuidance, filterCurrentAcceptedTracks } from "./authority.ts";
 import { isInCurrentShanghaiWeek } from "./dates.ts";
 import { countOverviewStates, deriveStudentOverview } from "./derive.ts";
@@ -29,6 +30,7 @@ export type OverviewTrackProgressRow = {
   student_id: string;
   track_type: "paper" | "project";
   track_key: string;
+  current_revision: number;
   next_action: string;
   next_action_due_date: string;
   blocker: string;
@@ -112,6 +114,7 @@ export type MentorOverviewAssemblyInput = {
   milestones: OverviewMilestoneRow[];
   guidance: OverviewGuidanceRow[];
   papers: OverviewPaperRow[];
+  resolutions?: ProgressResolutionRow[];
 };
 
 function earliestAction(rows: OverviewTrackProgressRow[], waits: OverviewGuidanceRow[]) {
@@ -150,6 +153,36 @@ export function assembleMentorOverview(
     const paper = input.papers.find((row) => row.student_id === student.id) ?? null;
     const canReview = reviewableIds.has(student.id);
     const tracks = filterCurrentAcceptedTracks(acceptedTracks, outstanding);
+    const resolutions = new Map((input.resolutions ?? [])
+      .filter((row) => row.student_id === student.id)
+      .map((row) => [progressResolutionKey(row.progress_entry_id, row.revision_number, row.item_kind), row]));
+    const resolutionFor = (row: OverviewTrackProgressRow, kind: "blocker" | "next_action") => (
+      resolutions.get(progressResolutionKey(row.id, row.current_revision, kind))
+    );
+    const hasResolutionWorkflow = (row: OverviewTrackProgressRow, kind: "blocker" | "next_action") => {
+      const status = resolutionFor(row, kind)?.status;
+      return status === "resolved" || status === "pending" || status === "changes_requested";
+    };
+    const openTracks = tracks.map((row) => ({
+      ...row,
+      blocker: hasResolutionWorkflow(row, "blocker") ? "" : row.blocker,
+      next_action: hasResolutionWorkflow(row, "next_action") ? "" : row.next_action,
+    }));
+    const currentResolutions = tracks.flatMap((row) => (
+      (["blocker", "next_action"] as const).flatMap((kind) => {
+        const title = kind === "blocker" ? activeBlockerText(row.blocker) : row.next_action.trim();
+        const resolution = resolutionFor(row, kind);
+        if (!title || !resolution || (resolution.status !== "pending" && resolution.status !== "changes_requested")) return [];
+        return [{
+          id: resolution.id,
+          progressEntryId: row.id,
+          title: `${kind === "blocker" ? "困难" : "后续计划"} · ${title}`,
+          occurredAt: resolution.submitted_at,
+          status: resolution.status,
+          canReview: canReview && resolution.submitted_by_user_id !== viewer.id,
+        }];
+      })
+    ));
 
     const actionableProgress = outstanding.filter((row) => canActOnProgressReview(row, viewer.id, canReview, now));
     const actionableProposal = proposal && canActOnProposalReview(
@@ -161,7 +194,7 @@ export function assembleMentorOverview(
     const guidanceToVerify = guidance.filter((row) => canVerifyGuidance(row, viewer.id, canReview));
     const waitingGuidance = guidance.filter((row) => !row.student_reported_at);
     const latestSubstantive = substantive[0] ?? null;
-    const currentAction = earliestAction(tracks, waitingGuidance);
+    const currentAction = earliestAction(openTracks, waitingGuidance);
     const currentMilestone = milestones[0] ?? null;
 
     const derived = deriveStudentOverview({
@@ -178,14 +211,14 @@ export function assembleMentorOverview(
         status: row.status,
         updatedAt: row.updated_at,
       })),
-      nextActions: tracks.filter((row) => row.next_action.trim()).map((row) => ({
+      nextActions: openTracks.filter((row) => row.next_action.trim()).map((row) => ({
         id: row.id,
         label: row.next_action,
         dueDate: row.next_action_due_date || null,
         occurredAt: row.confirmed_at,
         sourceType: row.track_type === "paper" ? "paper" as const : "progress" as const,
       })),
-      blockers: tracks.filter((row) => activeBlockerText(row.blocker)).map((row) => ({
+      blockers: openTracks.filter((row) => activeBlockerText(row.blocker)).map((row) => ({
         id: row.id,
         label: row.blocker,
         dueDate: null,
@@ -220,6 +253,7 @@ export function assembleMentorOverview(
           kind: "guidance" as const,
         })),
       ],
+      resolutions: currentResolutions,
     }, now);
 
     return {

@@ -3,7 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-test("0010-0020 preserve existing data while adding identity, evidence, concurrency, and recovery gates", async () => {
+test("0010-0021 preserve existing data while adding identity, evidence, concurrency, and recovery gates", async () => {
   const migrationDirectory = new URL("../drizzle/", import.meta.url);
   const names = (await readdir(migrationDirectory))
     .filter((name) => /^\d{4}_.*\.sql$/.test(name))
@@ -11,7 +11,7 @@ test("0010-0020 preserve existing data while adding identity, evidence, concurre
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
 
-  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_", "0014_", "0015_", "0016_", "0017_", "0018_", "0019_", "0020_"].some((prefix) => item.startsWith(prefix)))) {
+  for (const name of names.filter((item) => !["0006_", "0007_", "0008_", "0009_", "0010_", "0011_", "0012_", "0013_", "0014_", "0015_", "0016_", "0017_", "0018_", "0019_", "0020_", "0021_"].some((prefix) => item.startsWith(prefix)))) {
     database.exec(await readFile(new URL(name, migrationDirectory), "utf8"));
   }
   database.exec(`
@@ -454,6 +454,9 @@ test("0010-0020 preserve existing data while adding identity, evidence, concurre
   assert.equal(database.prepare("SELECT version FROM app_schema_meta WHERE id = 1").get().version, 20);
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM progress_deletions").get().count, 0);
   assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = 'protect_deleted_progress'").get());
+  assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
+  database.exec(await readFile(new URL(names.find((item) => item.startsWith("0021_")), migrationDirectory), "utf8"));
+  assert.equal(database.prepare("SELECT version FROM app_schema_meta WHERE id = 1").get().version, 21);
   assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
   database.close();
 });

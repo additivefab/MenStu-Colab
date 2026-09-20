@@ -24,3 +24,10 @@ test("pending, returned, missing and not-yet-overdue plans do not get an approva
   assert.equal(progressFollowUpNotice({ ...accepted, paper: { ...plan, next_action: " " } }, "2026-09-20"), null);
   assert.equal(progressFollowUpNotice({ ...accepted, paper: null }, "2026-09-20"), null);
 });
+
+
+test("confirmed or pending completion results suppress the historical overdue notice", () => {
+  for (const status of ["pending", "resolved"]) {
+    assert.equal(progressFollowUpNotice({ review_status: "accepted", paper: { next_action: "整理结果", next_action_due_date: "2026-08-01" }, project: null, follow_up_states: { next_action: status } }, new Date("2026-09-20T08:00:00Z")), null);
+  }
+});

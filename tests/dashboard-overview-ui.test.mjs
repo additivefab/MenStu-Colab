@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { overviewActionHref, overviewActionLabel } from "../components/dashboard-overview/overview-actions.ts";
-import { earliestOverviewDueDate, parseOverviewUrl, sortOverviewStudents } from "../components/dashboard-overview/overview-view-model.ts";
+import { earliestOverviewDueDate, overviewNextActionText, parseOverviewUrl, sortOverviewStudents } from "../components/dashboard-overview/overview-view-model.ts";
 
 function student(overrides = {}) {
   return {
@@ -49,6 +49,15 @@ test("earliest deadline is the minimum across all issues rather than the primary
   assert.equal(earliestOverviewDueDate(row), "2026-08-20");
 });
 
+test("next-action copy reflects resolution processing without asking for a duplicate plan", () => {
+  assert.equal(overviewNextActionText(student({ primaryState: "mentor", primaryAction: "review_resolution", nextAction: null })), "处理结果待确认");
+  assert.equal(overviewNextActionText(student({ primaryAction: "view_resolution", nextAction: null })), "处理结果待确认");
+  assert.equal(overviewNextActionText(student({ primaryState: "student", primaryAction: "view_resolution", primaryReasonCode: "STUDENT_RESOLUTION_CHANGES_REQUESTED", nextAction: null })), "待补充处理结果");
+  assert.equal(overviewNextActionText(student({ nextAction: null })), "暂无待办计划");
+  assert.equal(overviewNextActionText(student({ primaryState: "insufficient", nextAction: null })), "等待补齐明确行动");
+  assert.equal(overviewNextActionText(student({ primaryState: "mentor", primaryAction: "review_resolution", nextAction: "另一项仍待执行的计划" })), "另一项仍待执行的计划");
+});
+
 test("overview actions use a fixed route whitelist and reject an arbitrary proposal target", () => {
   const proposal = student({ primaryAction: "review_proposal", primaryActionTargetId: "27" });
   assert.equal(overviewActionLabel(proposal), "审核方案");
@@ -77,6 +86,10 @@ test("overview actions use a fixed route whitelist and reject an arbitrary propo
   assert.equal(overviewActionLabel(student({ primaryAction: "view_progress", primaryReasonCode: "ON_TRACK_NEXT_ACTION" })), "查看进展");
   assert.equal(overviewActionLabel(student({ primaryAction: "view_progress", primaryReasonCode: "STUDENT_CHANGES_REQUESTED" })), "查看待补交");
   assert.equal(overviewActionHref(student({ primaryAction: "follow_up", primaryActionTargetId: "12&next=https://evil.test" })), "/students/student-1#outlook");
+  assert.equal(overviewActionLabel(student({ primaryAction: "review_resolution" })), "确认处理结果");
+  assert.equal(overviewActionLabel(student({ primaryAction: "view_resolution", primaryReasonCode: "STUDENT_RESOLUTION_CHANGES_REQUESTED" })), "查看待补充");
+  assert.equal(overviewActionHref(student({ primaryAction: "review_resolution", primaryActionTargetId: 18 })), "/students/student-1#progress-18");
+  assert.equal(overviewActionHref(student({ primaryAction: "view_resolution", primaryActionTargetId: "18&next=https://evil.test" })), "/students/student-1#evidence");
 });
 
 test("overview UI keeps old views, accessible drawer, responsive cards, and read-only data flow", async () => {

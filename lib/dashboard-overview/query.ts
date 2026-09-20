@@ -1,6 +1,7 @@
 import { getStudentScope, scopeSql } from "../authorization";
 import { getD1 } from "../database";
 import type { AppUser } from "../feishu-auth";
+import { loadProgressResolutions } from "../progress-resolution-service";
 import { assembleMentorOverview } from "./assemble";
 import {
   acceptedTrackProgressSql,
@@ -39,6 +40,7 @@ type TrackProgressRow = {
   student_id: string;
   track_type: "paper" | "project";
   track_key: string;
+  current_revision: number;
   next_action: string;
   next_action_due_date: string;
   blocker: string;
@@ -143,7 +145,7 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
     };
   }
 
-  const [reviewableResult, substantiveResult, trackResult, submittedResult, outstandingResult, proposalResult, milestoneResult, guidanceResult, paperResult] = await Promise.all([
+  const [reviewableResult, substantiveResult, trackResult, submittedResult, outstandingResult, proposalResult, milestoneResult, guidanceResult, paperResult, resolutions] = await Promise.all([
     viewer.role === "superadmin"
       ? Promise.resolve({ results: studentIds
         .filter((studentId) => studentId !== viewer.studentId)
@@ -158,6 +160,7 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
     d1.prepare(milestoneOverviewSql(studentIds.length)).bind(...studentIds).all<MilestoneRow>(),
     d1.prepare(guidanceOverviewSql(studentIds.length)).bind(...studentIds).all<GuidanceRow>(),
     d1.prepare(paperPositionSql(studentIds.length)).bind(...studentIds).all<PaperRow>(),
+    loadProgressResolutions(studentIds),
   ]);
   const reviewableRows = reviewableResult.results as Array<{ student_id: string }>;
   const substantiveRows = substantiveResult.results as SubstantiveRow[];
@@ -181,5 +184,6 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
     milestones: milestoneRows,
     guidance: guidanceRows,
     papers: paperRows,
+    resolutions,
   }, viewer, now);
 }

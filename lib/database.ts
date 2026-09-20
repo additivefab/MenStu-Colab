@@ -1,9 +1,10 @@
 import { env } from "cloudflare:workers";
+import { progressResolutionSchemaStatements } from "./progress-resolution-schema";
 import { createProgressDeletionsSql, protectDeletedProgressSql } from "./ai-record-deletion";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-export const CURRENT_SCHEMA_VERSION = 20;
+export const CURRENT_SCHEMA_VERSION = 21;
 
 const REQUIRED_TABLES = [
   "students",
@@ -24,6 +25,9 @@ const REQUIRED_TABLES = [
   "progress_attachments",
   "progress_file_cleanup_queue",
   "progress_revisions",
+  "progress_resolutions",
+  "progress_resolution_events",
+  "progress_resolution_attachments",
   "student_papers",
   "paper_submission_candidates",
   "paper_progress_details",
@@ -704,6 +708,7 @@ async function migrateDatabase(previousVersion: number | null) {
       WHERE NOT EXISTS (
         SELECT 1 FROM progress_revisions r WHERE r.progress_entry_id = p.id
       )`),
+    ...progressResolutionSchemaStatements.map((statement) => d1.prepare(statement)),
     d1.prepare(protectDeletedProgressSql),
     d1.prepare("UPDATE app_users SET email = '' WHERE email != ''"),
     d1.prepare(`INSERT INTO app_schema_meta (id, version, updated_at)

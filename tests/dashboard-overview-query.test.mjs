@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { assembleMentorOverview } from "../lib/dashboard-overview/assemble.ts";
 
 import {
   canActOnProgressReview,
@@ -170,6 +171,35 @@ test("only the current revision can become trusted while latest submission stays
     db.prepare(latestSubmittedSql(1)).get("student-c").current_revision_created_at,
     "2026-08-23 16:30:00",
   );
+  db.close();
+});
+
+test("accepted SQL exposes the exact current revision and leaves source text intact for resolution authority", () => {
+  const db = database();
+  const entryId = insertAccepted(db, "student-resolution", 1);
+  db.prepare("INSERT INTO project_progress_details VALUES (?, NULL, NULL, '完成部署', '2026-07-01', '设备未到位')").run(entryId);
+  db.prepare("UPDATE progress_entries SET current_revision = 2 WHERE id = ?").run(entryId);
+  db.prepare(`INSERT INTO progress_revisions
+    (progress_entry_id, revision_number, review_status, assessment, reviewed_at, created_at)
+    VALUES (?, 2, 'accepted', 'substantive', '2026-08-23 00:00:00', '2026-08-22 00:00:00')`).run(entryId);
+  const tracks = db.prepare(acceptedTrackProgressSql(1)).all("student-resolution");
+  assert.equal(tracks[0].current_revision, 2);
+  assert.equal(tracks[0].blocker, "设备未到位");
+  assert.equal(tracks[0].next_action, "完成部署");
+  const input = {
+    students: [{ id: "student-resolution", display_name: "测试学生", degree: "硕士", grade_year: 2024, stage: "研究执行期", cadence_days: 30, current_focus: "", tracking_started_at: null }],
+    reviewableStudentIds: ["student-resolution"],
+    acceptedTracks: tracks, substantive: [], latestSubmitted: [], outstanding: [], proposals: [], milestones: [], guidance: [], papers: [],
+    resolutions: [{ id: 1, student_id: "student-resolution", progress_entry_id: entryId, revision_number: 1, item_kind: "blocker", status: "resolved", version: 1, submitted_by_user_id: 20, submitted_at: "2026-08-23 00:00:00", resolved_at: "2026-08-24 00:00:00", submission_note: "", reviewer_note: "" }],
+  };
+  const now = "2026-08-24T08:00:00Z";
+  const viewer = { id: 10, role: "admin" };
+  assert.equal(assembleMentorOverview(input, viewer, now).students[0].counters.blocked, 1);
+  input.resolutions[0].revision_number = 2;
+  const closed = assembleMentorOverview(input, viewer, now).students[0];
+  assert.equal(closed.counters.blocked, 0);
+  assert.equal(closed.counters.overdue, 1);
+  assert.equal(db.prepare(acceptedTrackProgressSql(1)).get("student-resolution").blocker, "设备未到位");
   db.close();
 });
 

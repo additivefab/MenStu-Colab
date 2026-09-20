@@ -1,5 +1,6 @@
 import { overviewStateMeta, type MentorOverviewStudent } from "../../lib/dashboard-overview/types";
 import { overviewActionHref, overviewActionLabel, overviewDate, overviewOwnerLabels } from "./overview-actions";
+import { overviewNextActionText } from "./overview-view-model";
 
 export function OverviewMobileList({
   students,
@@ -16,7 +17,7 @@ export function OverviewMobileList({
           <header><span><i aria-hidden="true">{meta.icon}</i>{meta.label}</span><small>{overviewOwnerLabels[student.nextOwner]}</small></header>
           <h3>{student.displayName}<small>{student.grade}级{student.degreeLevel} · {student.stage}</small></h3>
           <p>{student.primaryReasonLabel}{student.additionalIssueCount ? ` · 另有 ${student.additionalIssueCount} 项` : ""}</p>
-          <dl><div><dt>下一步</dt><dd>{student.nextAction || "等待补齐明确行动"}{student.nextActionDueDate ? ` · ${overviewDate(student.nextActionDueDate)}` : ""}</dd></div></dl>
+          <dl><div><dt>下一步</dt><dd>{overviewNextActionText(student)}{student.nextActionDueDate ? ` · ${overviewDate(student.nextActionDueDate)}` : ""}</dd></div></dl>
         </button>
         <a href={overviewActionHref(student)}>{overviewActionLabel(student)}</a>
       </article>;

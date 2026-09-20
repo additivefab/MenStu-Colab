@@ -13,6 +13,8 @@ export function overviewActionLabel(student: MentorOverviewStudent) {
     case "follow_up": return student.issues[0]?.sourceType === "milestone" ? "跟进节点"
       : student.issues[0]?.sourceType === "guidance" ? "跟进指导" : "跟进下一步";
     case "review_progress": return "立即审核";
+    case "review_resolution": return "确认处理结果";
+    case "view_resolution": return student.primaryReasonCode === "STUDENT_RESOLUTION_CHANGES_REQUESTED" ? "查看待补充" : "查看处理结果";
     case "review_proposal": return "审核方案";
     case "verify_guidance": return "核对验收";
     case "view_guidance": return "查看指导";
@@ -40,6 +42,8 @@ export function overviewActionHref(student: MentorOverviewStudent) {
       : `${studentPath}#proposal`;
     case "verify_guidance":
     case "view_guidance": return targetId ? `${studentPath}#guidance-${targetId}` : `${studentPath}#guidance`;
+    case "review_resolution":
+    case "view_resolution":
     case "view_progress": return targetId ? `${studentPath}#progress-${targetId}` : `${studentPath}#evidence`;
     case "follow_up":
     case "resolve_blocker": {

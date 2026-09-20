@@ -6,6 +6,8 @@ import { isCurrentResearchTrack } from "../../../lib/progress-track";
 import "./workspace.css";
 
 import Link from "next/link";
+import { ProgressResolutionPanel } from "../../../components/progress-resolution-panel";
+import type { ProgressResolutionKind, ProgressResolutionStatus } from "../../../lib/progress-resolution";
 import { AiRecordActions, DeletedAiRecords } from "../../../components/ai-record-actions";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { paperDeadlineState, paperStageMeta, paperStages, type PaperStage } from "../../../lib/paper-progress";
@@ -44,6 +46,7 @@ type StudentProgress = {
   current_revision_created_at?: string;
   reviewed_at: string | null;
   current_revision: number;
+  follow_up_states?: Partial<Record<ProgressResolutionKind, ProgressResolutionStatus>>;
   ai_summary_origin: boolean;
   can_finalize?: boolean;
   can_decide?: boolean;
@@ -312,7 +315,8 @@ function DetailBlock({ label, value }: { label: string; value: string }) {
 
 export default function StudentOverview({ studentId }: { studentId: string }) {
   const [tab, setTab] = useState<"progress" | "guidance" | "research">("progress");
-  const [progressFilter, setProgressFilter] = useState<"pending" | "all" | "ai" | "returned">("pending");
+  const [progressFilter, setProgressFilter] = useState<"pending" | "all" | "ai" | "returned" | "results">("pending");
+  const [pendingResultEntryIds, setPendingResultEntryIds] = useState<number[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [focusTarget, setFocusTarget] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
@@ -357,6 +361,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         viewer?: { role: ViewerRole };
         students?: Student[];
         papers?: StudentPaper[];
+        workflowTasks?: Array<{ type: string; studentId: string; progressEntryId?: number }>;
         pending?: Array<StudentProgress & {
           can_finalize: boolean;
           can_decide: boolean;
@@ -386,9 +391,13 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         can_release: entry.can_release,
         claim_stale: entry.claim_stale,
       }]));
+      const resultEntryIds = [...new Set((dashboard.workflowTasks ?? [])
+        .filter((task) => task.type === "resolution_verification" && task.studentId === studentId)
+        .flatMap((task) => task.progressEntryId ? [task.progressEntryId] : []))];
+      setPendingResultEntryIds(resultEntryIds);
       if (!initialized.current) {
         initialized.current = true;
-        setProgressFilter(matched.progress.some(isPending) ? "pending" : "all");
+        setProgressFilter(resultEntryIds.length ? "results" : matched.progress.some(isPending) ? "pending" : "all");
       }
       setStudent({
         ...matched,
@@ -634,7 +643,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   const pendingCount = progress.filter((item) => isPending(item) && isCurrentEntry(item)).length;
   const activeGuidance = useMemo(() => [...guidanceNotes].sort((a, b) => Number(b.status === "open") - Number(a.status === "open") || Number(Boolean(b.student_reported_at)) - Number(Boolean(a.student_reported_at)) || b.created_at.localeCompare(a.created_at)), [guidanceNotes]);
   const openGuidanceCount = guidanceNotes.filter((note) => note.status === "open").length;
-  const visibleProgress = progress.filter((entry) => progressFilter === "all" || (progressFilter === "pending" && isPending(entry) && isCurrentEntry(entry)) || (progressFilter === "ai" && entry.ai_summary_origin) || (progressFilter === "returned" && ["changes_requested", "rejected"].includes(entry.review_status)));
+  const visibleProgress = progress.filter((entry) => progressFilter === "all" || (progressFilter === "results" && pendingResultEntryIds.includes(entry.id)) || (progressFilter === "pending" && isPending(entry) && isCurrentEntry(entry)) || (progressFilter === "ai" && entry.ai_summary_origin) || (progressFilter === "returned" && ["changes_requested", "rejected"].includes(entry.review_status)));
   const entry = visibleProgress.find((item) => item.id === selectedId) ?? visibleProgress[0];
   const ready = Boolean(student);
 
@@ -699,7 +708,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       <div className="sw-profile-actions"><span>最近确认进展<strong>{student.lastSubstantiveAt ? dateText(student.lastSubstantiveAt) : "暂无"}</strong></span><button className="primary" onClick={writeGuidance}>写指导</button></div>
     </header>
     <nav className="sw-tabs" aria-label="学生档案页面">
-      <button aria-current={tab === "progress" ? "page" : undefined} onClick={() => switchTab("progress")}>进展与审核{pendingCount ? <span>{pendingCount} 待审</span> : null}</button>
+      <button aria-current={tab === "progress" ? "page" : undefined} onClick={() => switchTab("progress")}>进展与审核{pendingCount + pendingResultEntryIds.length ? <span>{pendingCount + pendingResultEntryIds.length} 待审</span> : null}</button>
       <button aria-current={tab === "guidance" ? "page" : undefined} onClick={() => switchTab("guidance")}>指导{openGuidanceCount ? <span>{openGuidanceCount} 进行中</span> : null}</button>
       <button aria-current={tab === "research" ? "page" : undefined} onClick={() => switchTab("research")}>研究资料</button>
     </nav>
@@ -707,10 +716,10 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     {guidanceMessage ? <p className="sw-message" role="status">{guidanceMessage}</p> : null}
 
     <section id="sw-progress" tabIndex={-1} hidden={tab !== "progress"} aria-label="进展与审核">
-      <div className="sw-filterbar"><div className="sw-filters" aria-label="筛选进展">{([["pending", "待审核", pendingCount], ["all", "全部", progress.length], ["ai", "AI 纪要", progress.filter((item) => item.ai_summary_origin).length], ["returned", "已退回", progress.filter((item) => ["changes_requested", "rejected"].includes(item.review_status)).length]] as const).map(([value, label, count]) => <button key={value} aria-pressed={progressFilter === value} onClick={() => { setProgressFilter(value); setSelectedId(null); }}>{label}<span>{count}</span></button>)}</div><span className="sw-muted">按提交时间排序</span></div>
+      <div className="sw-filterbar"><div className="sw-filters" aria-label="筛选进展">{([["pending", "待审核", pendingCount], ["results", "待确认结果", pendingResultEntryIds.length], ["all", "全部", progress.length], ["ai", "AI 纪要", progress.filter((item) => item.ai_summary_origin).length], ["returned", "已退回", progress.filter((item) => ["changes_requested", "rejected"].includes(item.review_status)).length]] as const).map(([value, label, count]) => <button key={value} aria-pressed={progressFilter === value} onClick={() => { setProgressFilter(value); setSelectedId(null); }}>{label}<span>{count}</span></button>)}</div><span className="sw-muted">按提交时间排序</span></div>
       <div className="sw-progress-layout">
         <aside className="sw-records" aria-label="进展列表">
-          {visibleProgress.map((item) => <button className="sw-record" key={item.id} aria-pressed={entry?.id === item.id} onClick={() => { setSelectedId(item.id); window.history.replaceState(null, "", `#progress-${item.id}`); }}><span className="sw-record-meta"><span>{item.ai_summary_origin ? "AI 纪要" : item.kind}</span><time>{dateText(item.submitted_at)}</time></span><strong>{item.title}</strong><p>{item.summary}</p><span className={`status-pill review-${item.review_status}`}>{reviewLabels[item.review_status]}</span></button>)}
+          {visibleProgress.map((item) => <button className="sw-record" key={item.id} aria-pressed={entry?.id === item.id} onClick={() => { setSelectedId(item.id); window.history.replaceState(null, "", `#progress-${item.id}`); }}><span className="sw-record-meta"><span>{item.ai_summary_origin ? "AI 纪要" : item.kind}</span><time>{dateText(item.submitted_at)}</time></span><strong>{item.title}</strong><p>{item.summary}</p><span className={`status-pill review-${pendingResultEntryIds.includes(item.id) ? "submitted" : item.review_status}`}>{pendingResultEntryIds.includes(item.id) ? "处理结果待确认" : reviewLabels[item.review_status]}</span></button>)}
           {!visibleProgress.length ? <p className="sw-empty">{progressFilter === "pending" ? "待审核已处理完" : "暂无这类记录"}</p> : null}
           {canManageAiRecords ? <DeletedAiRecords studentId={studentId} onChanged={load} refreshKey={aiRefreshKey} /> : null}
         </aside>
@@ -726,8 +735,8 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
             <div className="sw-actions"><button className="primary" disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim() || !draft.nextAction.trim() || !draft.acceptanceCriteria.trim()} onClick={() => void reviewProgress(entry, "supplement", { nextAction: draft.nextAction, dueDate: draft.dueDate, acceptanceCriteria: draft.acceptanceCriteria })}>{reviewBusy === entry.id ? "发送中…" : "退回并发送指导"}</button><button onClick={() => updateGuidanceDraft(entry, { open: false })}>取消</button></div>
           </div> : null}
           <section className="sw-record-body"><h3>本次进展</h3><p>{entry.summary || "尚未填写"}</p>{entry.evidence ? <><h3>证据说明</h3><p>{entry.evidence}</p></> : null}</section>
-          {followUpNotice ? <p className="sw-message">{followUpNotice}</p> : null}
-          {entry.paper || entry.project ? <div className="sw-next-step">{entry.paper ? <div><span>论文下一步</span><p>{entry.paper.next_action || "尚未填写"}{entry.paper.next_action_due_date ? <small>期限 {entry.paper.next_action_due_date}</small> : null}</p>{activeBlockerText(entry.paper.blocker) ? <p className="sw-blocker">本次记录的困难：{entry.paper.blocker}</p> : null}</div> : null}{entry.project ? <div><span>课题下一行动</span><p>{entry.project.next_action || "尚未填写"}{entry.project.next_action_due_date ? <small>期限 {entry.project.next_action_due_date}</small> : null}</p><small>关联课题节点：{entry.project.milestone_title || "未关联"}{entry.project.milestone_target_date ? ` · ${entry.project.milestone_target_date}` : ""}</small>{activeBlockerText(entry.project.blocker) ? <p className="sw-blocker">本次记录的困难：{entry.project.blocker}</p> : null}</div> : null}</div> : null}
+          {entry.paper || entry.project ? <ProgressResolutionPanel studentId={studentId} mode="staff" entryId={entry.id} onChanged={async () => { setProgressFilter("all"); setSelectedId(entry.id); await load(); }} compact /> : null}
+          {entry.paper || entry.project ? <details className="sw-record-history" open={entry.review_status !== "accepted"}><summary>原进展中的计划与困难</summary>{followUpNotice ? <p className="sw-muted">{followUpNotice}</p> : null}<div className="sw-next-step">{entry.paper ? <div><span>论文下一步</span><p>{entry.paper.next_action || "尚未填写"}{entry.paper.next_action_due_date ? <small>期限 {entry.paper.next_action_due_date}</small> : null}</p>{activeBlockerText(entry.paper.blocker) ? <p className="sw-blocker">本次记录的困难：{entry.paper.blocker}</p> : null}</div> : null}{entry.project ? <div><span>课题下一行动</span><p>{entry.project.next_action || "尚未填写"}{entry.project.next_action_due_date ? <small>期限 {entry.project.next_action_due_date}</small> : null}</p><small>关联课题节点：{entry.project.milestone_title || "未关联"}{entry.project.milestone_target_date ? ` · ${entry.project.milestone_target_date}` : ""}</small>{activeBlockerText(entry.project.blocker) ? <p className="sw-blocker">本次记录的困难：{entry.project.blocker}</p> : null}</div> : null}</div></details> : null}
           {entry.attachments.length || entry.evidence_sources.some((source) => source.source_type !== "attachment") ? <section className="sw-materials"><h3>相关材料</h3>{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url} target="_blank" rel="noreferrer"><span>{attachment.file_name}</span><small>{(attachment.size_bytes / 1024 / 1024).toFixed(1)} MB ↗</small></a>)}{entry.evidence_sources.filter((source) => source.source_type !== "attachment").map((source) => <div key={source.id}>{source.source_ref && ["git", "url"].includes(source.source_type) ? <a href={source.source_ref} target="_blank" rel="noreferrer">{source.label} ↗</a> : <span>{source.label}{source.source_ref ? ` · ${source.source_ref}` : ""}</span>}</div>)}</section> : <p className="sw-muted sw-materials">{entry.summary_only ? "历史纪要的来源信息见下方记录详情" : "未附材料"}</p>}
           {entry.reviewer_note || entry.assessment ? <section className="sw-feedback"><h3>审核结果</h3>{entry.assessment ? <span>{entry.assessment === "substantive" ? "实质性进展" : "支持性工作"}{entry.reviewer_name ? ` · ${entry.reviewer_name}` : ""}</span> : null}{entry.reviewer_note ? <p>{entry.reviewer_note}</p> : null}</section> : null}
             {!entry.summary_only && isCurrentEntry(entry) && entry.review_status === "changes_requested" && (viewerRole === "superadmin" || viewerRole === "admin" || viewerRole === "student") ? <details className="student-resubmit"><summary>补充证据并重新提交</summary><form onSubmit={(event) => void resubmitProgress(event, entry)}><label>更新后的结论<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label><label>补充核验证据<textarea name="evidence" rows={3} required defaultValue={entry.evidence} /></label>{entry.kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required defaultValue={entry.literature_ref} /></label> : <input type="hidden" name="literatureRef" value={entry.literature_ref || ""} />}{entry.paper ? <><input type="hidden" name="paperId" value={entry.paper.id} /><input name="gitUrl" type="hidden" value={entry.git_url || ""} /><label>论文阶段<select name="paperStage" defaultValue={entry.paper.stage}>{paperStages.map((stage) => <option key={stage} value={stage}>{paperStageMeta[stage].label}</option>)}</select></label><label>稿件版本<input name="manuscriptVersion" required defaultValue={entry.paper.manuscript_version} /></label><label>下一行动<textarea name="nextAction" rows={2} required defaultValue={entry.paper.next_action} /></label><label>行动期限<input name="nextActionDueDate" type="date" required defaultValue={entry.paper.next_action_due_date} /></label><label>当前阻塞（可选）<textarea name="blocker" rows={2} defaultValue={entry.paper.blocker} /></label><label>稿件编号 / DOI（可选）<input name="submissionIdentifier" defaultValue={entry.paper.submission_identifier} /></label></> : <label>Git 链接（可选）<input name="gitUrl" type="url" defaultValue={entry.git_url} placeholder="仅支持 https://" /></label>}<label>补充附件（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>最多 5 个文件，单个不超过 50 MB，总计不超过 80 MB</small></label>{progressMessage[entry.id] ? <p role="status">{progressMessage[entry.id]}</p> : null}<button className="primary" disabled={progressBusy === entry.id}>{progressBusy === entry.id ? "提交中…" : "保留原记录并重新提交"}</button></form></details> : null}

@@ -27,7 +27,8 @@ test("the same rule covers a full cohort and both personas without altering the 
     input.students.push({ id, display_name: `学生${index}`, degree: "硕士", grade_year: 2024, stage: "研究执行期", cadence_days: 30, current_focus: "论文修改", tracking_started_at: null });
     input.acceptedTracks.push({ id: index + 1, student_id: id, track_type: "paper", track_key: `paper:${index + 1}`, next_action: "完成修改", next_action_due_date: "2026-08-31", blocker, current_revision_created_at: now, confirmed_at: now });
     const student = deriveStudentNextAction({ now: new Date(now), cadenceDays: 30, currentFocus: "论文修改", proposal: null, milestones: [], guidance: [], meetings: [], papers: [{ id: 1, title: "论文", status: "active" }], progress: [{ id: 1, kind: "论文", title: "论文", submittedAt: now, reviewStatus: "accepted", reviewerNote: "", project: null, paper: { id: 1, title: "论文", nextAction: "完成修改", nextActionDueDate: "2026-08-31", blocker } }] });
-    assert.equal(student.primary.kind, index % 4 === 3 ? "meeting" : "paper");
+    assert.equal(student.primary.kind, "resolution");
+    assert.equal(student.candidates.some((item) => item.itemKind === "blocker"), index % 4 === 3);
   }
   const before = structuredClone(input);
   const response = assembleMentorOverview(input, { id: 1, role: "superadmin" }, now);

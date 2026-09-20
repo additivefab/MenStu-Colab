@@ -148,6 +148,13 @@
       "when": 1788783660325,
       "tag": "0020_handy_doctor_spectrum",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1789887048196,
+      "tag": "0021_boring_prowler",
+      "breakpoints": true
     }
   ]
 }

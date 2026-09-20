@@ -4,6 +4,8 @@ import { requireAppUser } from "../../../lib/feishu-auth";
 import { evidenceDisplayRef, type ProgressAssessment, type ReviewStatus } from "../../../lib/progress-evidence";
 import { deriveStudentNextAction } from "../../../lib/student-next-action";
 import { isCurrentResearchTrack } from "../../../lib/progress-track";
+import { loadProgressResolutions } from "../../../lib/progress-resolution-service";
+import { acceptedTrackProgressSql } from "../../../lib/dashboard-overview/query-sql";
 
 type StudentRow = {
   id: string;
@@ -155,7 +157,7 @@ type ProgressAuditRow = {
 
 type WorkflowTask = {
   id: number;
-  type: "proposal_review" | "blocked_milestone" | "overdue_milestone" | "guidance_verification";
+  type: "proposal_review" | "blocked_milestone" | "overdue_milestone" | "guidance_verification" | "resolution_verification";
   studentId: string;
   studentName: string;
   title: string;
@@ -165,6 +167,7 @@ type WorkflowTask = {
   nextAction?: string;
   acceptanceCriteria?: string;
   version?: number;
+  progressEntryId?: number;
 };
 
 function privateDashboardResponse(payload: Record<string, unknown>) {
@@ -246,6 +249,7 @@ export async function GET(request: Request) {
         .bind(viewer.id).all<{ student_id: string }>()).results
         .map((item) => item.student_id)
         .filter((studentId) => studentId !== viewer.studentId));
+    const resolutionRows = await loadProgressResolutions(studentIds);
     let progressRows: ProgressRow[] = [];
     let paperRows: StudentPaperRow[] = [];
     let milestoneRows: MilestoneSummaryRow[] = [];
@@ -367,6 +371,9 @@ export async function GET(request: Request) {
       return {
         ...entry,
         current_revision_created_at: currentRevision?.created_at ?? entry.submitted_at,
+        follow_up_states: Object.fromEntries(resolutionRows
+          .filter((item) => item.progress_entry_id === entry.id && item.revision_number === entry.current_revision)
+          .map((item) => [item.item_kind, item.status])),
         paper: entry.paper_id || entry.paper_candidate_id ? {
           id: entry.paper_id ?? 0,
           title: entry.paper_title ?? "未命名论文",
@@ -380,7 +387,7 @@ export async function GET(request: Request) {
           next_action_due_date: entry.next_action_due_date ?? "",
           blocker: entry.blocker ?? "",
         } : null,
-        project: entry.project_next_action ? {
+        project: entry.project_next_action !== null ? {
           milestone_id: entry.project_milestone_id,
           milestone_title: entry.project_milestone_title ?? "",
           milestone_target_date: entry.project_milestone_target_date,
@@ -509,12 +516,14 @@ export async function GET(request: Request) {
         now: new Date(),
         cadenceDays: student.cadenceDays,
         currentFocus: student.currentFocus,
+        resolutions: resolutionRows,
         proposal: student.proposalVersion !== null ? { status: student.proposalStatus ?? "draft", version: student.proposalVersion } : null,
         progress: student.progress.map((entry) => ({
           id: entry.id,
           kind: entry.kind,
           title: entry.title,
           submittedAt: entry.current_revision_created_at,
+          currentRevision: entry.current_revision,
           reviewStatus: entry.review_status,
           reviewerNote: entry.reviewer_note,
           paper: entry.paper ? {
@@ -615,6 +624,7 @@ export async function GET(request: Request) {
             attachments: entry.attachments,
             audit: entry.audit,
             current_revision: entry.current_revision,
+            follow_up_states: entry.follow_up_states,
             revisions: entry.revisions,
           })),
           milestones: student.milestones.filter((milestone) => milestone.proposal_status === "approved"),
@@ -640,6 +650,21 @@ export async function GET(request: Request) {
     }
 
     const workflowTasks: WorkflowTask[] = [];
+    for (let offset = 0; offset < studentIds.length; offset += 100) {
+      const chunk = studentIds.slice(offset, offset + 100);
+      const currentTracks = await d1.prepare(acceptedTrackProgressSql(chunk.length)).bind(...chunk)
+        .all<{ id: number; student_id: string; current_revision: number }>();
+      for (const item of resolutionRows.filter((row) => row.status === "pending"
+        && reviewableStudentIds.has(row.student_id) && row.submitted_by_user_id !== viewer.id
+        && currentTracks.results.some((track) => track.id === row.progress_entry_id && track.current_revision === row.revision_number))) {
+        workflowTasks.push({
+          id: item.id, type: "resolution_verification", studentId: item.student_id,
+          studentName: nameById.get(item.student_id) ?? "学生",
+          title: item.item_kind === "blocker" ? "确认困难处理结果" : "确认计划完成结果",
+          detail: item.submission_note, targetDate: null, progressEntryId: item.progress_entry_id,
+        });
+      }
+    }
     if (studentIds.length) {
       const placeholders = studentIds.map(() => "?").join(",");
       const [proposalTasks, milestoneTasks, guidanceTasks] = await Promise.all([
@@ -736,6 +761,7 @@ export async function GET(request: Request) {
         pending: actionablePendingCount,
         waiting: pending.length - actionablePendingCount,
         proposalPending: workflowTasks.filter((task) => task.type === "proposal_review").length,
+        resolutionPending: workflowTasks.filter((task) => task.type === "resolution_verification").length,
         guidancePending: workflowTasks.filter((task) => task.type === "guidance_verification").length,
         blocked: workflowTasks.filter((task) => task.type === "blocked_milestone" || task.type === "overdue_milestone").length,
         outputs: students.reduce((sum, student) => sum + student.outputCount, 0),

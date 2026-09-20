@@ -829,3 +829,63 @@ export const progressDeletions = sqliteTable("progress_deletions", {
   deletedAt: text("deleted_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   operationId: text("operation_id").notNull(),
 });
+
+export const progressResolutions = sqliteTable("progress_resolutions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  studentId: text("student_id").notNull().references(() => students.id),
+  progressEntryId: integer("progress_entry_id").notNull().references(() => progressEntries.id),
+  revisionNumber: integer("revision_number").notNull(),
+  itemKind: text("item_kind", { enum: ["blocker", "next_action"] }).notNull(),
+  sourceTitle: text("source_title").notNull(),
+  sourceText: text("source_text").notNull(),
+  sourceDueDate: text("source_due_date"),
+  trackType: text("track_type", { enum: ["paper", "project"] }).notNull(),
+  status: text("status", { enum: ["open", "pending", "resolved", "changes_requested"] }).notNull().default("open"),
+  version: integer("version").notNull().default(1),
+  submissionNote: text("submission_note").notNull().default(""),
+  reviewerNote: text("reviewer_note").notNull().default(""),
+  submittedByUserId: integer("submitted_by_user_id").references(() => appUsers.id),
+  submittedAt: text("submitted_at"),
+  resolvedAt: text("resolved_at"),
+  lastRequestId: text("last_request_id").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("idx_progress_resolutions_source").on(table.progressEntryId, table.revisionNumber, table.itemKind),
+  index("idx_progress_resolutions_student_status").on(table.studentId, table.status),
+  check("progress_resolutions_kind", sql`${table.itemKind} IN ('blocker', 'next_action')`),
+  check("progress_resolutions_status", sql`${table.status} IN ('open', 'pending', 'resolved', 'changes_requested')`),
+  check("progress_resolutions_version", sql`${table.version} >= 1 AND ${table.revisionNumber} >= 1`),
+]);
+
+export const progressResolutionEvents = sqliteTable("progress_resolution_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  resolutionId: integer("resolution_id").notNull().references(() => progressResolutions.id),
+  actorUserId: integer("actor_user_id").notNull().references(() => appUsers.id),
+  action: text("action", { enum: ["submit", "confirm", "request_changes", "reopen"] }).notNull(),
+  fromStatus: text("from_status").notNull(),
+  toStatus: text("to_status").notNull(),
+  version: integer("version").notNull(),
+  note: text("note").notNull().default(""),
+  requestId: text("request_id").notNull(),
+  requestHash: text("request_hash").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("idx_resolution_events_request").on(table.actorUserId, table.requestId),
+  uniqueIndex("idx_resolution_events_version").on(table.resolutionId, table.version),
+  check("progress_resolution_events_action", sql`${table.action} IN ('submit', 'confirm', 'request_changes', 'reopen')`),
+]);
+
+export const progressResolutionAttachments = sqliteTable("progress_resolution_attachments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  eventId: integer("event_id").notNull().references(() => progressResolutionEvents.id),
+  storageKey: text("storage_key").notNull(),
+  fileName: text("file_name").notNull(),
+  contentType: text("content_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  contentSha256: text("content_sha256").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("idx_resolution_attachments_storage").on(table.storageKey),
+  index("idx_resolution_attachments_event").on(table.eventId),
+]);

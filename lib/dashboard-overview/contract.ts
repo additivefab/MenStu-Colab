@@ -71,6 +71,8 @@ const reasonCodes = new Set<OverviewReasonCode>([
   "MENTOR_PROGRESS_REVIEW",
   "MENTOR_PROPOSAL_REVIEW",
   "MENTOR_GUIDANCE_VERIFY",
+  "MENTOR_RESOLUTION_REVIEW",
+  "STUDENT_RESOLUTION_CHANGES_REQUESTED",
   "STUDENT_CHANGES_REQUESTED",
   "STUDENT_GUIDANCE_ACTION",
   "STUDENT_CADENCE_OVERDUE",
@@ -85,6 +87,8 @@ const actions = new Set<OverviewAction>([
   "resolve_blocker",
   "follow_up",
   "review_progress",
+  "review_resolution",
+  "view_resolution",
   "review_proposal",
   "verify_guidance",
   "view_guidance",
@@ -100,6 +104,7 @@ const sourceTypes = new Set<OverviewSourceType>([
   "guidance",
   "paper",
   "profile",
+  "resolution",
 ]);
 const states = new Set<OverviewState>(overviewStates);
 

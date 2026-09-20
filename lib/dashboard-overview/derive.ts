@@ -16,6 +16,8 @@ const reasonOrder: Record<OverviewReasonCode, number> = {
   MENTOR_PROGRESS_REVIEW: 3,
   MENTOR_PROPOSAL_REVIEW: 4,
   MENTOR_GUIDANCE_VERIFY: 5,
+  MENTOR_RESOLUTION_REVIEW: 5.5,
+  STUDENT_RESOLUTION_CHANGES_REQUESTED: 6.5,
   STUDENT_CHANGES_REQUESTED: 6,
   STUDENT_GUIDANCE_ACTION: 7,
   STUDENT_CADENCE_OVERDUE: 8,
@@ -163,7 +165,25 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
     });
   }
 
-  const hasMentorWork = issues.some((issue) => issue.state === "mentor");
+  for (const resolution of input.resolutions ?? []) {
+    const returned = resolution.status === "changes_requested";
+    issues.push({
+      code: returned ? "STUDENT_RESOLUTION_CHANGES_REQUESTED" : "MENTOR_RESOLUTION_REVIEW",
+      state: returned ? "student" : resolution.canReview ? "mentor" : "on_track",
+      label: returned
+        ? `等待补充处理结果：${resolution.title}`
+        : resolution.canReview ? `确认处理结果：${resolution.title}` : `等待导师确认处理结果：${resolution.title}`,
+      owner: returned ? "student" : "mentor",
+      dueDate: null,
+      occurredAt: resolution.occurredAt,
+      sourceType: "resolution",
+      sourceId: resolution.id,
+      action: !returned && resolution.canReview ? "review_resolution" : "view_resolution",
+      actionTargetId: resolution.progressEntryId,
+    });
+  }
+
+  const hasMentorWork = issues.some((issue) => issue.state === "mentor" || issue.code === "MENTOR_RESOLUTION_REVIEW");
   const cadenceBaseline = input.latestSubstantiveAt ?? input.trackingStartedAt;
   const daysSinceBaseline = daysSinceInShanghai(cadenceBaseline, now);
   if (!hasMentorWork && input.cadenceDays && input.cadenceDays > 0 && daysSinceBaseline !== null

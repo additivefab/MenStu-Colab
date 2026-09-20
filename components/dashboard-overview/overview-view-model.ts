@@ -41,3 +41,10 @@ export function earliestOverviewDueDate(student: Pick<MentorOverviewStudent, "is
     return earliest === null || issue.dueDate < earliest ? issue.dueDate : earliest;
   }, null);
 }
+
+export function overviewNextActionText(student: Pick<MentorOverviewStudent, "nextAction" | "primaryAction" | "primaryReasonCode" | "primaryState">) {
+  if (student.nextAction?.trim()) return student.nextAction;
+  if (student.primaryReasonCode === "STUDENT_RESOLUTION_CHANGES_REQUESTED") return "待补充处理结果";
+  if (student.primaryAction === "review_resolution" || student.primaryAction === "view_resolution") return "处理结果待确认";
+  return student.primaryState === "on_track" ? "暂无待办计划" : "等待补齐明确行动";
+}

@@ -78,9 +78,10 @@ test("one paper waiting for review does not hide another active paper that is ov
       { id: 10, kind: "论文", title: "B 已确认", submittedAt: "2026-08-20T01:00:00Z", reviewStatus: "accepted", reviewerNote: "", paper: { id: 2, title: "论文 B", nextAction: "补讨论章节", nextActionDueDate: "2026-08-20", blocker: "" }, project: null },
     ],
   });
-  assert.equal(result.primary?.kind, "paper");
-  assert.equal(result.primary?.targetId, 2);
-  assert.equal(result.primary?.destination, "paper");
+  assert.equal(result.primary?.kind, "resolution");
+  assert.equal(result.primary?.targetId, 10);
+  assert.equal(result.primary?.itemKind, "next_action");
+  assert.equal(result.primary?.destination, "resolution");
   assert.equal(result.waitingCount, 1);
 });
 
@@ -96,7 +97,8 @@ test("all active papers enter the comparator instead of only the newest paper", 
       { id: 20, kind: "论文", title: "B", submittedAt: "2026-08-10T01:00:00Z", reviewStatus: "accepted", reviewerNote: "", paper: { id: 2, title: "论文 B", nextAction: "补实验", nextActionDueDate: "2026-08-20", blocker: "" }, project: null },
     ],
   });
-  assert.equal(result.primary?.targetId, 2);
+  assert.equal(result.primary?.targetId, 20);
+  assert.equal(result.primary?.itemKind, "next_action");
   assert.equal(result.additionalActionCount, 1);
 });
 
@@ -109,8 +111,8 @@ test("an overdue action outranks a blocked but not overdue milestone", () => {
     ],
     milestones: [{ id: 7, title: "等待设备", targetDate: "2026-09-10", status: "blocked" }],
   });
-  assert.equal(result.primary?.kind, "paper");
-  assert.equal(result.primary?.targetId, 1);
+  assert.equal(result.primary?.kind, "resolution");
+  assert.equal(result.primary?.targetId, 31);
 });
 
 test("a confirmed meeting links to the meeting desk instead of the progress feed", () => {
@@ -208,7 +210,7 @@ test("current resubmissions pause old actions, rejected records do not erase acc
   const input = { ...base, milestones: [currentMilestone], progress: [oldProject, pending] };
   assert.equal(deriveStudentNextAction(input).primary.kind, "waiting");
   const rejected = deriveStudentNextAction({ ...input, progress: [oldProject, { ...pending, reviewStatus: "rejected" }] });
-  assert.equal(rejected.primary.title, "旧困难");
+  assert.equal(rejected.candidates.some((item) => item.title === "旧困难" && item.itemKind === "blocker"), true);
   const sameTime = { ...pending, submittedAt: oldProject.submittedAt };
   assert.equal(deriveStudentNextAction({ ...input, progress: [oldProject, sameTime] }).primary.kind, "waiting");
 });
@@ -222,6 +224,64 @@ test("retired-node waits disappear from the work queue and real difficulties sur
     assert.equal(withOldWork.candidates.some((candidate) => candidate.title === "旧困难"), false);
   }
   const result = deriveStudentNextAction({ ...base, milestones: [{ ...currentMilestone, targetDate: "2026-08-25" }], progress: [{ ...linkedProject, project: { ...linkedProject.project, blocker: "缺关键设备，需导师协调" } }] });
-  assert.equal(result.primary.kind, "meeting");
+  assert.equal(result.primary.kind, "resolution");
+  assert.equal(result.primary.itemKind, "blocker");
   assert.equal(result.primary.title, "缺关键设备，需导师协调");
+});
+
+
+const resolutionProgress = {
+  id: 70, currentRevision: 2, kind: "项目", title: "完成测试", submittedAt: "2026-08-20T08:00:00Z",
+  reviewStatus: "accepted", reviewerNote: "", paper: null,
+  project: { milestoneId: null, proposalVersion: null, nextAction: "整理测试结果", nextActionDueDate: "2026-08-22", blocker: "缺少测试数据" },
+};
+const resolutionRow = (kind, status, extra = {}) => ({
+  id: 1, student_id: "s1", progress_entry_id: 70, revision_number: 2, item_kind: kind, status,
+  version: 1, submission_note: "数据已整理", reviewer_note: "请补充具体结果", ...extra,
+});
+
+test("student can open the exact difficulty and overdue plan independently", () => {
+  const result = deriveStudentNextAction({ ...base, progress: [resolutionProgress], resolutions: [] });
+  assert.deepEqual(result.candidates.map((item) => [item.targetId, item.itemKind]).sort(), [[70, "blocker"], [70, "next_action"]]);
+  assert.equal(result.candidates.every((item) => item.destination === "resolution"), true);
+});
+
+test("a submitted result waits for review; resolving a difficulty does not complete its plan", () => {
+  const progress = [resolutionProgress];
+  const result = deriveStudentNextAction({ ...base, progress, resolutions: [resolutionRow("blocker", "pending"), resolutionRow("next_action", "resolved")] });
+  assert.equal(result.primary.waiting, true);
+  assert.equal(result.primary.destination, "resolution");
+  assert.equal(result.primary.targetId, 70);
+  assert.equal(result.primary.itemKind, "blocker");
+  assert.equal(result.waitingCount, 1);
+  assert.equal(result.candidates.length, 0);
+  const plan = deriveStudentNextAction({ ...base, progress, resolutions: [resolutionRow("blocker", "resolved")] });
+  assert.equal(plan.primary.itemKind, "next_action");
+});
+
+test("returned results reopen their exact submission and stale resolution revisions never hide new work", () => {
+  const returned = deriveStudentNextAction({ ...base, progress: [resolutionProgress], resolutions: [resolutionRow("blocker", "changes_requested")] });
+  assert.equal(returned.primary.itemKind, "blocker");
+  assert.equal(returned.primary.detail, "请补充具体结果");
+  const stale = deriveStudentNextAction({ ...base, progress: [resolutionProgress], resolutions: [resolutionRow("blocker", "resolved", { revision_number: 1 })] });
+  assert.equal(stale.candidates.some((item) => item.itemKind === "blocker"), true);
+  const oldSource = deriveStudentNextAction({ ...base, progress: [{ ...resolutionProgress, id: 71 }], resolutions: [resolutionRow("blocker", "resolved")] });
+  assert.equal(oldSource.candidates.some((item) => item.itemKind === "blocker"), true);
+});
+
+test("retired or superseded pending results never keep the student waiting", () => {
+  const newer = { ...resolutionProgress, id: 72, reviewStatus: "submitted", submittedAt: "2026-08-23T08:00:00Z" };
+  const result = deriveStudentNextAction({ ...base, progress: [resolutionProgress, newer], resolutions: [resolutionRow("blocker", "pending")] });
+  assert.equal(result.primary.destination, "progress");
+  assert.equal(result.primary.targetId, 72);
+  assert.equal(result.waitingCount, 1);
+});
+
+
+test("a paused paper still shows an already submitted completion result waiting for confirmation", () => {
+  const entry = { ...resolutionProgress, paper: { id: 3, title: "暂停论文", nextAction: "整理结果", nextActionDueDate: "2026-08-20", blocker: "" }, project: null };
+  const result = deriveStudentNextAction({ ...base, progress: [entry], papers: [{ id: 3, title: "暂停论文", status: "on_hold", currentStage: "drafting" }], resolutions: [resolutionRow("next_action", "pending")] });
+  assert.equal(result.waitingCount, 1);
+  assert.equal(result.primary.destination, "resolution");
+  assert.equal(result.primary.waiting, true);
 });

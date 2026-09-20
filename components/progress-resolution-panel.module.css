@@ -1,0 +1,73 @@
+.panel { min-width: 0; background: #fff; border: 1px solid #dededa; border-radius: 12px; padding: 20px; color: #202321; }
+.compact { padding: 16px; }
+.header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.header h3 { margin: 0; font-size: 16px; font-weight: 700; }
+.header > span { font-size: 12px; color: #737873; }
+.items { display: grid; gap: 12px; }
+.item { min-width: 0; border: 1px solid #e3e5e1; border-radius: 9px; padding: 15px; }
+.item:focus-visible { outline: 2px solid #286fae; outline-offset: 3px; }
+.itemTop { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.itemTop > strong { font-size: 12px; color: #626a63; font-weight: 600; }
+.status { flex-shrink: 0; border-radius: 5px; background: #f6f0e3; color: #8a641d; font-size: 11px; line-height: 1.5; padding: 2px 7px; }
+.pending { background: #eaf2fa; color: #286995; }
+.resolved { background: #eaf4ed; color: #297349; }
+.itemText { margin: 8px 0 6px; font-size: 14px; font-weight: 600; line-height: 1.7; overflow-wrap: anywhere; white-space: pre-wrap; }
+.meta { margin: 0; color: #737873; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.meta > span { margin-left: 12px; white-space: nowrap; }
+.result { margin-top: 12px; padding: 11px 12px; border-radius: 6px; background: #f6f7f5; font-size: 13px; line-height: 1.7; }
+.result > strong, .dialogResult > strong { display: block; color: #616a61; font-size: 12px; font-weight: 600; }
+.result > p, .dialogResult > p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.reviewNote { margin: 12px 0 0; color: #8a581f; font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.reviewNote strong { font-weight: 600; }
+.itemFooter { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding-top: 12px; }
+.itemFooter > small { color: #737873; font-size: 12px; line-height: 1.6; }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.button, .primaryButton { min-height: 36px; padding: 7px 12px; border: 1px solid #d9dfd9; border-radius: 7px; background: #fff; color: #38443b; font-size: 13px; font-weight: 600; line-height: 1.5; }
+.primaryButton { color: #fff; border-color: #286fae; background: #286fae; }
+.button:hover:not(:disabled) { background: #f4f6f3; }
+.primaryButton:hover:not(:disabled) { background: #205c93; }
+.textButton { padding: 3px 0; border: 0; background: none; color: #286fae; font-size: 12px; line-height: 1.6; }
+.textButton:hover:not(:disabled) { text-decoration: underline; }
+.button:focus-visible, .primaryButton:focus-visible, .textButton:focus-visible, .closeButton:focus-visible, .history > summary:focus-visible, .attachments a:focus-visible { outline: 2px solid #286fae; outline-offset: 3px; }
+.history { margin-top: 12px; border-top: 1px solid #eceee9; padding-top: 10px; }
+.historical { margin-top: 15px; }
+.historical > summary { cursor: pointer; color: #687068; font-size: 12px; }
+.historical > .items { margin-top: 12px; }
+.history > summary { width: fit-content; cursor: pointer; color: #687068; font-size: 12px; }
+.history > ol { list-style: none; margin: 12px 0 0; padding: 0 0 0 12px; border-left: 2px solid #e6eae3; }
+.history > ol > li { margin-top: 13px; font-size: 12px; line-height: 1.7; }
+.history > ol > li:first-child { margin-top: 0; }
+.history > ol > li > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; }
+.history strong { font-weight: 600; }
+.history time { color: #7b827b; font-size: 11px; }
+.history p { margin: 4px 0 0; color: #626b63; white-space: pre-wrap; overflow-wrap: anywhere; }
+.attachments { margin: 7px 0 0; padding: 0; list-style: none; }
+.attachments > li { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-top: 3px; font-size: 12px; line-height: 1.7; }
+.attachments a { color: #286fae; text-underline-offset: 3px; overflow-wrap: anywhere; }
+.attachments small { flex-shrink: 0; color: #7b827b; font-size: 11px; }
+.notice, .error, .empty { margin: 0 0 12px; padding: 10px 12px; border-radius: 6px; font-size: 13px; line-height: 1.7; }
+.notice { color: #297349; background: #edf5ee; }
+.error { color: #a43c37; background: #fff1ef; }
+.empty { padding: 0; color: #737873; }
+.dialog { width: min(600px, calc(100vw - 48px)); max-height: calc(100dvh - 48px); overflow-y: auto; margin: auto; padding: 25px; border: 1px solid #dededa; border-radius: 14px; background: #fff; color: #202321; box-shadow: 0 20px 80px #14281c38; }
+.dialog::backdrop { background: #101d285e; }
+.dialogHeader { display: flex; justify-content: space-between; align-items: center; gap: 15px; margin-bottom: 17px; }
+.dialogHeader h2 { margin: 0; font-size: 19px; font-weight: 700; }
+.closeButton { width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #727a73; font-size: 25px; font-weight: 400; line-height: 1; }
+.closeButton:hover:not(:disabled) { background: #f0f3ed; }
+.dialogContext { padding: 13px 14px; margin-bottom: 19px; border: 1px solid #e1e6dd; border-radius: 8px; background: #f7f8f5; }
+.dialogContext > strong { color: #687168; font-size: 12px; font-weight: 600; }
+.dialogContext > p { margin: 6px 0 0; font-size: 14px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dialogContext > small { display: block; margin-top: 5px; color: #737873; font-size: 12px; }
+.dialogResult { margin-bottom: 16px; font-size: 13px; line-height: 1.7; }
+.dialog form { display: grid; gap: 17px; }
+.field { display: grid; gap: 7px; color: #48544b; font-size: 13px; font-weight: 600; }
+.field textarea, .field input { width: 100%; padding: 10px 11px; border: 1px solid #d9dfd6; border-radius: 7px; background: #fff; color: #202321; font-size: 14px; font-weight: 400; }
+.field textarea { resize: vertical; min-height: 125px; line-height: 1.7; }
+.field textarea:focus, .field input:focus-visible { outline: 2px solid #286fae; outline-offset: 1px; }
+.field textarea::placeholder { color: #858d85; }
+.field input[type="file"] { font-size: 12px; }
+.field input::file-selector-button { margin-right: 10px; padding: 5px 9px; border: 1px solid #d9dfd6; border-radius: 5px; background: #f5f7f3; color: #48544b; cursor: pointer; }
+.field > small { color: #7b827b; font-size: 12px; font-weight: 400; line-height: 1.6; }
+.dialogActions { display: flex; justify-content: flex-end; gap: 9px; padding-top: 4px; }
+.dialogActions > button { min-height: 39px; }

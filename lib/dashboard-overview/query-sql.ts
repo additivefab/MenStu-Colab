@@ -35,7 +35,7 @@ export function substantiveProgressSql(studentCount: number) {
 export function acceptedTrackProgressSql(studentCount: number) {
   const ids = placeholders(studentCount);
   return `WITH accepted_candidates AS (
-    SELECT p.id, p.student_id, p.review_status,
+    SELECT p.id, p.student_id, p.current_revision, p.review_status,
       CASE WHEN ppd.progress_entry_id IS NOT NULL THEN 'paper' ELSE 'project' END AS track_type,
       CASE WHEN ppd.progress_entry_id IS NOT NULL THEN 'paper:' || ppd.paper_id ELSE 'project' END AS track_key,
       COALESCE(ppd.next_action, jpd.next_action, '') AS next_action,
@@ -76,7 +76,7 @@ export function acceptedTrackProgressSql(studentCount: number) {
     ) AS track_rank
     FROM accepted_candidates
   )
-  SELECT id, student_id, track_type, track_key, next_action, next_action_due_date, blocker,
+  SELECT id, student_id, current_revision, track_type, track_key, next_action, next_action_due_date, blocker,
     current_revision_created_at, confirmed_at
   FROM accepted_tracks WHERE track_rank = 1 AND review_status = 'accepted' AND action_is_current = 1
   ORDER BY student_id, track_key`;

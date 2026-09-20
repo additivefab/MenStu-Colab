@@ -176,3 +176,35 @@ test("0, 1, 26, and 100 students always produce mutually exclusive counts", () =
     assert.equal(Object.values(counts).reduce((sum, count) => sum + count, 0), size);
   }
 });
+
+test("resolution confirmation is mentor work and does not become a premature resolved claim", () => {
+  const result = deriveStudentOverview(input({
+    cadenceDays: 7,
+    latestSubstantiveAt: "2026-07-01T00:00:00Z",
+    resolutions: [{ id: 4, progressEntryId: 18, title: "困难 · 设备调试", occurredAt: "2026-08-23T00:00:00Z", status: "pending", canReview: true }],
+  }), now);
+  assert.equal(result.primaryState, "mentor");
+  assert.equal(result.primaryReasonCode, "MENTOR_RESOLUTION_REVIEW");
+  assert.equal(result.primaryAction, "review_resolution");
+  assert.equal(result.primaryActionTargetId, 18);
+  assert.equal(result.issues[0].sourceId, 4);
+  assert.equal(result.issues[0].sourceType, "resolution");
+  assert.equal(result.issues.length, 1);
+  assert.deepEqual(result.counters, { actionableByMentor: 1, waitingForStudent: 0, blocked: 0, overdue: 0 });
+  assert.doesNotMatch(result.primaryReasonLabel, /已解决|已完成/);
+});
+
+test("a returned resolution belongs to the student while a read-only pending result belongs to its mentor", () => {
+  const fact = { id: 4, progressEntryId: 18, title: "后续计划 · 完成部署", occurredAt: "2026-08-23T00:00:00Z", status: "changes_requested", canReview: true };
+  const returned = deriveStudentOverview(input({ resolutions: [fact] }), now);
+  assert.equal(returned.primaryReasonCode, "STUDENT_RESOLUTION_CHANGES_REQUESTED");
+  assert.equal(returned.primaryState, "student");
+  assert.equal(returned.primaryAction, "view_resolution");
+  assert.equal(returned.counters.waitingForStudent, 1);
+  const pending = deriveStudentOverview(input({ cadenceDays: 7, latestSubstantiveAt: "2026-07-01T00:00:00Z", resolutions: [{ ...fact, status: "pending", canReview: false }] }), now);
+  assert.equal(pending.nextOwner, "mentor");
+  assert.equal(pending.primaryAction, "view_resolution");
+  assert.equal(pending.counters.actionableByMentor, 0);
+  assert.equal(pending.counters.waitingForStudent, 0);
+  assert.equal(pending.issues.length, 1);
+});

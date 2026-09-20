@@ -15,6 +15,8 @@ export type OverviewReasonCode =
   | "MENTOR_PROGRESS_REVIEW"
   | "MENTOR_PROPOSAL_REVIEW"
   | "MENTOR_GUIDANCE_VERIFY"
+  | "MENTOR_RESOLUTION_REVIEW"
+  | "STUDENT_RESOLUTION_CHANGES_REQUESTED"
   | "STUDENT_CHANGES_REQUESTED"
   | "STUDENT_GUIDANCE_ACTION"
   | "STUDENT_CADENCE_OVERDUE"
@@ -29,6 +31,8 @@ export type OverviewAction =
   | "resolve_blocker"
   | "follow_up"
   | "review_progress"
+  | "review_resolution"
+  | "view_resolution"
   | "review_proposal"
   | "verify_guidance"
   | "view_guidance"
@@ -37,7 +41,7 @@ export type OverviewAction =
   | "view_student"
   | "complete_profile";
 
-export type OverviewSourceType = "progress" | "proposal" | "milestone" | "guidance" | "paper" | "profile";
+export type OverviewSourceType = "progress" | "proposal" | "milestone" | "guidance" | "paper" | "profile" | "resolution";
 
 export type OverviewIssue = {
   code: OverviewReasonCode;
@@ -91,6 +95,15 @@ export type OverviewStudentWaitFact = {
   kind: "changes_requested" | "proposal_changes_requested" | "guidance";
 };
 
+export type OverviewResolutionFact = {
+  id: number;
+  progressEntryId: number;
+  title: string;
+  occurredAt: string | null;
+  status: "pending" | "changes_requested";
+  canReview: boolean;
+};
+
 export type StudentOverviewInput = {
   studentId: string;
   cadenceDays: number | null;
@@ -103,6 +116,7 @@ export type StudentOverviewInput = {
   blockers: OverviewBlockerFact[];
   mentorReviews: OverviewMentorReviewFact[];
   studentWaits: OverviewStudentWaitFact[];
+  resolutions?: OverviewResolutionFact[];
 };
 
 export type DerivedStudentOverview = {

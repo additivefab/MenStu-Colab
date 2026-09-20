@@ -6,6 +6,8 @@ import { instantTimestamp } from "../lib/dashboard-overview/dates";
 
 import { FormEvent, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { paperDeadlineState, paperStageMeta, paperStages, paperTypes, type PaperStage } from "../lib/paper-progress";
+import { ProgressResolutionPanel } from "../components/progress-resolution-panel";
+import type { ProgressResolutionKind, ProgressResolutionStatus } from "../lib/progress-resolution";
 import { AiRecordActions } from "../components/ai-record-actions";
 import { MentorGroupOverview } from "../components/dashboard-overview/mentor-group-overview";
 import { clearMutationKey, mutationKeyForForm } from "../lib/client-idempotency";
@@ -68,6 +70,7 @@ type StudentProgress = {
   submitted_at: string;
   reviewed_at: string | null;
   current_revision: number;
+  follow_up_states?: Partial<Record<ProgressResolutionKind, ProgressResolutionStatus>>;
   ai_summary_origin: boolean;
   can_delete_ai?: boolean;
   paper: {
@@ -366,7 +369,7 @@ type DashboardData = {
   pending: PendingEntry[];
   workflowTasks: Array<{
     id: number;
-    type: "proposal_review" | "blocked_milestone" | "overdue_milestone" | "guidance_verification";
+    type: "proposal_review" | "blocked_milestone" | "overdue_milestone" | "guidance_verification" | "resolution_verification";
     studentId: string;
     studentName: string;
     title: string;
@@ -376,17 +379,19 @@ type DashboardData = {
     nextAction?: string;
     acceptanceCriteria?: string;
     version?: number;
+    progressEntryId?: number;
   }>;
   studentNextAction?: {
     primary: {
       id: string;
-      kind: "supplement" | "guidance" | "paper" | "project" | "meeting" | "waiting" | "onboarding";
-      destination: "supplement" | "guidance" | "paper" | "project" | "meeting" | "progress";
+      kind: "supplement" | "guidance" | "paper" | "project" | "meeting" | "waiting" | "onboarding" | "resolution";
+      destination: "supplement" | "guidance" | "paper" | "project" | "meeting" | "progress" | "resolution";
       kicker: string;
       title: string;
       detail: string;
       meta: string;
       targetId?: number;
+      itemKind?: ProgressResolutionKind;
       attention: boolean;
       waiting: boolean;
     } | null;
@@ -401,6 +406,7 @@ type DashboardData = {
     waiting: number;
     proposalPending: number;
     guidancePending: number;
+    resolutionPending?: number;
     blocked: number;
     outputs: number;
     attention: number;
@@ -820,8 +826,8 @@ export default function Dashboard() {
             <div className="nav-entry" key={item.id}>
               <button className={`nav-item ${activeView === item.id ? "active" : ""}`} onClick={() => navigateMentor(item.id)}>
                 <span>{item.icon}</span>{item.label}
-                {item.id === "inbox" && data && data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + data.metrics.blocked + meetingPendingCount > 0
-                  ? <b>{data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + data.metrics.blocked + meetingPendingCount}</b> : null}
+                {item.id === "inbox" && data && data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + data.metrics.blocked + meetingPendingCount > 0
+                  ? <b>{data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + data.metrics.blocked + meetingPendingCount}</b> : null}
               </button>
             </div>
           ))}
@@ -948,7 +954,7 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
     })),
     ...data.workflowTasks.map((task): MentorInboxTask => ({
       key: `workflow-${task.type}-${task.id}`,
-      category: task.type === "proposal_review" || task.type === "guidance_verification" ? "decision" : task.type === "blocked_milestone" ? "coordination" : "followup",
+      category: task.type === "proposal_review" || task.type === "guidance_verification" || task.type === "resolution_verification" ? "decision" : task.type === "blocked_milestone" ? "coordination" : "followup",
       kind: "workflow",
       task,
     })),
@@ -1064,8 +1070,9 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
           {selected.task.type === "guidance_verification" && selected.task.context ? <div className="mentor-decision-fact"><span>原指导内容</span><strong>{selected.task.context}</strong></div> : null}
           {selected.task.type === "guidance_verification" && selected.task.nextAction ? <div className="mentor-decision-fact"><span>下一行动</span><strong>{selected.task.nextAction}</strong></div> : null}
           {selected.task.type === "guidance_verification" ? <div className="mentor-decision-fact"><span>验收标准</span><strong>{selected.task.acceptanceCriteria || "未设置；请进入指导记录补齐并核对"}</strong></div> : null}
-          <div className="mentor-decision-effect"><b>下一步</b><span>{selected.task.type === "proposal_review" ? "打开当前版本，确认、批注或退回修改。" : selected.task.type === "guidance_verification" ? "核对学生的完成说明与验收标准，再作出导师确认。" : selected.task.type === "blocked_milestone" ? "进入学生档案，明确阻塞需要的资源、判断或协作。" : "进入学生档案，重排期限或记录跟进指导。"}</span></div>
-          <div className="mentor-detail-actions">{selected.task.type === "proposal_review" ? <a className="primary button-link" href={`/?mentorView=research&researchTab=proposals&proposal=${selected.task.id}`}>进入方案审核</a> : selected.task.type === "guidance_verification" ? <><a className={selected.task.acceptanceCriteria ? "button-link" : "primary button-link"} href={`/students/${encodeURIComponent(selected.task.studentId)}#guidance`}>查看指导记录</a>{selected.task.acceptanceCriteria ? <button className="primary" disabled={workflowBusy === selected.task.id} onClick={() => void verifyGuidance(selected.task)}>{workflowBusy === selected.task.id ? "验收中…" : "确认验收"}</button> : null}</> : <a className="primary button-link" href={`/students/${encodeURIComponent(selected.task.studentId)}#workflow`}>进入学生档案</a>}</div>
+          {selected.task.type === "resolution_verification" ? <ProgressResolutionPanel studentId={selected.task.studentId} entryId={selected.task.progressEntryId} mode="staff" onChanged={onRefresh} compact /> : null}
+          {selected.task.type !== "resolution_verification" ? <><div className="mentor-decision-effect"><b>下一步</b><span>{selected.task.type === "proposal_review" ? "打开当前版本，确认、批注或退回修改。" : selected.task.type === "guidance_verification" ? "核对学生的完成说明与验收标准，再作出导师确认。" : selected.task.type === "blocked_milestone" ? "进入学生档案，明确阻塞需要的资源、判断或协作。" : "进入学生档案，重排期限或记录跟进指导。"}</span></div>
+          <div className="mentor-detail-actions">{selected.task.type === "proposal_review" ? <a className="primary button-link" href={`/?mentorView=research&researchTab=proposals&proposal=${selected.task.id}`}>进入方案审核</a> : selected.task.type === "guidance_verification" ? <><a className={selected.task.acceptanceCriteria ? "button-link" : "primary button-link"} href={`/students/${encodeURIComponent(selected.task.studentId)}#guidance`}>查看指导记录</a>{selected.task.acceptanceCriteria ? <button className="primary" disabled={workflowBusy === selected.task.id} onClick={() => void verifyGuidance(selected.task)}>{workflowBusy === selected.task.id ? "验收中…" : "确认验收"}</button> : null}</> : <a className="primary button-link" href={`/students/${encodeURIComponent(selected.task.studentId)}#workflow`}>进入学生档案</a>}</div></> : null}
         </article> : null}
         {selected?.kind === "meeting" ? <article className="mentor-workflow-detail">
           <span className="mentor-task-category coordination">需要协调</span>
@@ -1352,6 +1359,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
   const [composerVisible, setComposerVisible] = useState(false);
   const [composerTargetId, setComposerTargetId] = useState<number | null>(null);
   const [researchPaperId, setResearchPaperId] = useState<number | null>(null);
+  const [resolutionRequest, setResolutionRequest] = useState<{ progressEntryId: number; itemKind: ProgressResolutionKind; key: number }>();
   const [pendingNavigation, setPendingNavigation] = useState<StudentNavigationIntent | null>(null);
   const student = data.students.find((item) => item.id === data.viewer.studentId);
   const papers = student ? data.papers.filter((paper) => paper.student_id === student.id) : [];
@@ -1490,7 +1498,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
         <div className="student-account">{data.viewer.canSwitchPersona ? <button className="student-persona-switch" type="button" disabled={personaBusy} onClick={onSwitchToManagement}>{personaBusy ? "正在切换…" : "返回管理端"}</button> : null}<button className="student-header-account" type="button" onClick={onFeishu}>账号</button></div>
       </header>
 
-      {view === "today" ? <StudentNextAction action={data.studentNextAction} student={student} papers={papers} onPaper={(paperId) => openComposer("论文", paperId)} onProject={(milestoneId) => openComposer("项目", milestoneId)} onMeeting={openMeetingDesk} onGuidance={openGuidanceDesk} onProgress={(entryId) => navigateStudent({ view: "progress", entryId })} onSupplement={openSupplement} /> : null}
+      {view === "today" ? <><StudentNextAction action={data.studentNextAction} student={student} papers={papers} onPaper={(paperId) => openComposer("论文", paperId)} onProject={(milestoneId) => openComposer("项目", milestoneId)} onMeeting={openMeetingDesk} onGuidance={openGuidanceDesk} onProgress={(entryId) => navigateStudent({ view: "progress", entryId })} onSupplement={openSupplement} onResolution={(progressEntryId, itemKind) => setResolutionRequest({ progressEntryId, itemKind, key: Date.now() })} /><ProgressResolutionPanel studentId={student.id} mode="student" onChanged={onRefresh} openRequest={resolutionRequest} compact /></> : null}
 
       {view === "research" ? <>
         <StudentViewIntro id="student-view-research-title" title="我的研究" metric={`${paperReturned + projectReturned}`} metricLabel="项待补充">
@@ -1506,7 +1514,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
         <div className="student-view-intro-actions"><button className="primary" type="button" onClick={() => openComposer("论文")}>记论文进展</button><button type="button" onClick={() => openComposer("项目")}>记课题进展</button></div>
       </StudentViewIntro> : null}
       {composer ? <div className="student-persistent-composer" hidden={view !== "progress" || !composerVisible}><StudentQuickProgressComposer key={`${composer}-${composerTargetId ?? "default"}`} kind={composer} initialTargetId={composerTargetId} student={student} papers={papers} onCancel={() => { setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); }} onSaved={async () => { const savedKind = composer; setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); onToast(`${savedKind === "论文" ? "论文" : "课题"}进展已提交，记录已更新`); await onRefresh(); }} /></div> : null}
-      {view === "progress" ? <><StudentProgressOverview student={student} onSupplement={openSupplement} currentEntryIds={new Set(currentEntries.map((entry) => entry.id))} />{paperReturned + projectReturned > 0 ? <details className="quiet-details student-supplement-section"><summary>待补充材料<span>{paperReturned + projectReturned} 条</span></summary><StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} returnedOnly /><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} returnedOnly /></details> : null}</> : null}
+      {view === "progress" ? <><StudentProgressOverview student={student} onChanged={onRefresh} onSupplement={openSupplement} currentEntryIds={new Set(currentEntries.map((entry) => entry.id))} />{paperReturned + projectReturned > 0 ? <details className="quiet-details student-supplement-section"><summary>待补充材料<span>{paperReturned + projectReturned} 条</span></summary><StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} returnedOnly /><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} returnedOnly /></details> : null}</> : null}
 
       {view === "library" ? <><StudentViewIntro id="student-view-library-title" title="我的资料" /><StudentResearchLibrary student={student} onOpenSource={openResearchSource} /></> : null}
 
@@ -1530,7 +1538,7 @@ function StudentViewIntro({ id, title, metric, metricLabel, children }: {
   </section>;
 }
 
-function StudentNextAction({ action, student, papers, onPaper, onProject, onMeeting, onGuidance, onProgress, onSupplement }: {
+function StudentNextAction({ action, student, papers, onPaper, onProject, onMeeting, onGuidance, onProgress, onSupplement, onResolution }: {
   action: DashboardData["studentNextAction"] | undefined;
   student: Student;
   papers: StudentPaper[];
@@ -1540,6 +1548,7 @@ function StudentNextAction({ action, student, papers, onPaper, onProject, onMeet
   onGuidance: (guidanceId?: number) => void;
   onProgress: (entryId?: number) => void;
   onSupplement: (entry: StudentProgress) => void;
+  onResolution: (entryId: number, itemKind: ProgressResolutionKind) => void;
 }) {
   const focus = action?.primary ?? {
     id: "onboarding",
@@ -1552,7 +1561,9 @@ function StudentNextAction({ action, student, papers, onPaper, onProject, onMeet
     attention: false,
     waiting: false,
   };
-  const actionLabel = focus.destination === "supplement"
+  const actionLabel = focus.destination === "resolution"
+    ? focus.waiting ? "查看处理结果" : focus.itemKind === "blocker" ? "提交处理结果" : "提交完成结果"
+    : focus.destination === "supplement"
     ? "补充材料"
     : focus.destination === "meeting"
       ? focus.kind === "waiting" ? "查看会议预约" : "约导师解决阻塞"
@@ -1565,6 +1576,10 @@ function StudentNextAction({ action, student, papers, onPaper, onProject, onMeet
           : "记录课题进展";
 
   function runAction() {
+    if (focus.destination === "resolution" && focus.targetId && focus.itemKind) {
+      onResolution(focus.targetId, focus.itemKind);
+      return;
+    }
     if (focus.destination === "supplement") {
       const returnedEntry = student.progress.find((entry) => entry.id === focus.targetId);
       if (returnedEntry) onSupplement(returnedEntry);
@@ -1744,8 +1759,10 @@ function StudentResearchTracks({ scope, student, papers, selectedPaperId, onSele
     : leadPaper && ["accepted", "published", "closed"].includes(leadPaper.status) ? "论文已完成当前跟踪"
       : latestPaperEntry && ["submitted", "in_review"].includes(latestPaperEntry.review_status) ? "已提交进展，等待导师确认"
         : latestPaperEntry?.review_status === "changes_requested" ? "按导师意见补充进展"
+          : latestPaperEntry?.follow_up_states?.next_action === "resolved" ? "上一项计划已完成，继续记录新的进展"
+            : latestPaperEntry?.follow_up_states?.next_action === "pending" ? "完成结果已提交，等待管理员确认"
           : paperActionCurrent ? latestPaperEntry?.paper?.next_action || "下一步待填写" : "先记录这篇论文的下一行动";
-  const nextActionDate = paperActionCurrent ? latestPaperEntry?.paper?.next_action_due_date || null : null;
+  const nextActionDate = paperActionCurrent && !["resolved", "pending"].includes(latestPaperEntry?.follow_up_states?.next_action ?? "") ? latestPaperEntry?.paper?.next_action_due_date || null : null;
   const actionDeadline = paperDeadlineState(nextActionDate || null);
   const updateDays = daysSinceLatestSubmission(student);
   const rhythmOverdue = Boolean(entries.length) && updateDays > student.cadenceDays;
@@ -1951,7 +1968,8 @@ function StudentRevisionHistory({ entry }: { entry: StudentProgress }) {
   </details>;
 }
 
-function StudentProgressOverview({ student, fixedFilter, onSupplement, currentEntryIds }: { student: Student; fixedFilter?: Exclude<StudentProgressFilter, "all">; onSupplement?: (entry: StudentProgress) => void; currentEntryIds?: Set<number> }) {
+function StudentProgressOverview({ student, fixedFilter, onSupplement, currentEntryIds, onChanged }: { student: Student; fixedFilter?: Exclude<StudentProgressFilter, "all">; onSupplement?: (entry: StudentProgress) => void; currentEntryIds?: Set<number>; onChanged?: () => Promise<void> }) {
+  const [openedEntries, setOpenedEntries] = useState<Set<number>>(new Set());
   const [filter, setFilter] = useState<StudentProgressFilter>("all");
   const entries = useMemo(() => [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime()), [student.progress]);
   const activeFilter = fixedFilter || filter;
@@ -1968,7 +1986,7 @@ function StudentProgressOverview({ student, fixedFilter, onSupplement, currentEn
     </nav> : null}
 
     <div className="student-progress-overview-list">
-      {visibleEntries.map((entry) => { const kind = studentProgressKindMeta(entry.kind); const context = entry.reviewer_note ? `导师已回复：${entry.reviewer_note}` : entry.kind === "组会" ? entry.evidence_sources[0]?.label || "飞书会议纪要" : entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.project ? `${entry.project.milestone_title || "未关联节点"} · V${entry.current_revision}` : "点开查看完整内容"; return <details id={`student-progress-${entry.id}`} key={`${activeFilter}-${entry.id}`} className={`student-progress-entry kind-${kind.className}`}>
+      {visibleEntries.map((entry) => { const kind = studentProgressKindMeta(entry.kind); const context = entry.reviewer_note ? `导师已回复：${entry.reviewer_note}` : entry.kind === "组会" ? entry.evidence_sources[0]?.label || "飞书会议纪要" : entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version}` : entry.project ? `${entry.project.milestone_title || "未关联节点"} · V${entry.current_revision}` : "点开查看完整内容"; return <details id={`student-progress-${entry.id}`} key={`${activeFilter}-${entry.id}`} className={`student-progress-entry kind-${kind.className}`} onToggle={(event) => { const isOpen = event.currentTarget.open; setOpenedEntries((current) => { const next = new Set(current); if (isOpen) next.add(entry.id); else next.delete(entry.id); return next; }); }}>
         <summary>
           <span className="student-progress-entry-icon" aria-hidden="true">{kind.icon}</span>
           <span className="student-progress-entry-date"><time>{shortDate(entry.submitted_at)}</time><small>{kind.label}</small></span>
@@ -1986,6 +2004,7 @@ function StudentProgressOverview({ student, fixedFilter, onSupplement, currentEn
             {entry.evidence ? <div className="student-progress-evidence"><span>材料说明</span><p>{entry.evidence}</p></div> : null}
             {entry.attachments?.length ? <div className="student-attachment-list" aria-label="提交附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>V{attachment.revision_number || 1} · {fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
             {entry.reviewer_note ? <blockquote><b>{entry.reviewer_name ? `${entry.reviewer_name}的回复` : "导师回复"}</b><span>{entry.reviewer_note}</span></blockquote> : null}
+            {openedEntries.has(entry.id) && (entry.paper || entry.project) ? <ProgressResolutionPanel studentId={student.id} mode="student" entryId={entry.id} onChanged={onChanged} compact /> : null}
             <StudentRevisionHistory entry={entry} />
           </>}
         </article>
@@ -2367,7 +2386,7 @@ function OverviewMetrics({ data }: { data: DashboardData }) {
   return <section className="metric-grid" aria-label="课题组概况">
     <article className="metric"><span>{data.viewer.role === "admin" ? "负责学生" : "在组学生"}</span><strong>{data.metrics.total}</strong><small>{data.metrics.doctors} 博士 · {data.metrics.masters} 硕士</small></article>
     <article className="metric"><span>科研成果与资产</span><strong>{data.metrics.outputs}</strong><small className="positive">论文、数据、软件、专利与交付物</small></article>
-    <article className="metric"><span>待我处理</span><strong>{data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + data.metrics.blocked}</strong><small>证据 {data.metrics.pending} · 方案 {data.metrics.proposalPending} · 验收 {data.metrics.guidancePending} · 节点 {data.metrics.blocked}</small></article>
+    <article className="metric"><span>待我处理</span><strong>{data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + data.metrics.blocked}</strong><small>证据 {data.metrics.pending} · 方案 {data.metrics.proposalPending} · 验收 {data.metrics.guidancePending} · 节点 {data.metrics.blocked}</small></article>
     <article className="metric attention"><span>需要关注</span><strong>{data.metrics.attention}</strong><small>黄 {data.metrics.riskCounts.黄色 ?? 0} · 橙 {data.metrics.riskCounts.橙色 ?? 0} · 红 {data.metrics.riskCounts.红色 ?? 0}</small></article>
   </section>;
 }
