@@ -91,7 +91,7 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /id="student-meeting-form" tabIndex=\{-1\}/);
   assert.match(styles, /\.student-workbench-shell ~ \.toast/);
   assert.match(styles, /pointer-events: none/);
-  assert.match(dashboard, /先做这一件事/);
+  assert.match(dashboard, /paperActionCurrent \? "当前安排" : "当前状态"/);
   assert.match(dashboard, /role="progressbar"/);
   assert.match(dashboard, /记录节奏/);
   assert.match(dashboard, /StudentResearchLibrary/);

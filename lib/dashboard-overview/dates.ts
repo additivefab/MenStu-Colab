@@ -11,6 +11,10 @@ function parsedInstant(value: string | Date) {
   return new Date(normalized);
 }
 
+export function instantTimestamp(value: string | Date) {
+  return parsedInstant(value).getTime();
+}
+
 export function shanghaiDateKey(value: string | Date) {
   if (typeof value === "string" && dateKeyPattern.test(value)) return value;
   const date = parsedInstant(value);
@@ -43,7 +47,8 @@ export function calendarDayDiff(laterDate: string, earlierDate: string) {
 export function isOverdueInShanghai(dueDate: string | null, now: string | Date) {
   if (!dueDate || !dateKeyPattern.test(dueDate)) return false;
   const today = shanghaiDateKey(now);
-  return Boolean(today && dueDate < today);
+  const daysPastDue = today ? calendarDayDiff(today, dueDate) : null;
+  return daysPastDue !== null && daysPastDue > 0;
 }
 
 export function daysSinceInShanghai(value: string | null, now: string | Date) {

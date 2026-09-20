@@ -1,3 +1,5 @@
+import { calendarDayDiff, shanghaiDateKey } from "./dashboard-overview/dates.ts";
+
 export const paperStages = [
   "planning",
   "research",
@@ -46,18 +48,9 @@ export function isIsoDate(value: string) {
 
 export function paperDeadlineState(value: string | null, reference = new Date()) {
   if (!value) return { label: "未设投稿日期", overdue: false, days: null as number | null };
-  const currentKey = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(reference);
-  const [targetYear, targetMonth, targetDay] = value.split("-").map(Number);
-  const [currentYear, currentMonth, currentDay] = currentKey.split("-").map(Number);
-  const days = Math.round((
-    Date.UTC(targetYear, targetMonth - 1, targetDay)
-    - Date.UTC(currentYear, currentMonth - 1, currentDay)
-  ) / 86_400_000);
+  const currentKey = shanghaiDateKey(reference);
+  const days = currentKey ? calendarDayDiff(value, currentKey) : null;
+  if (days === null) return { label: "日期待核对", overdue: false, days };
   if (days < 0) return { label: `逾期 ${Math.abs(days)} 天`, overdue: true, days };
   if (days === 0) return { label: "今天到期", overdue: false, days };
   return { label: `${days} 天后`, overdue: false, days };

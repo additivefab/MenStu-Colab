@@ -7,6 +7,7 @@ import {
   type StudentOverviewInput,
 } from "./types.ts";
 import { daysSinceInShanghai, isOverdueInShanghai } from "./dates.ts";
+import { activeBlockerText } from "../progress-blocker.ts";
 
 const reasonOrder: Record<OverviewReasonCode, number> = {
   MILESTONE_BLOCKED: 0,
@@ -46,6 +47,7 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
   const issues: OverviewIssue[] = [];
 
   for (const blocker of input.blockers) {
+    if (!activeBlockerText(blocker.label)) continue;
     issues.push({
       code: "MILESTONE_BLOCKED",
       state: "intervene",

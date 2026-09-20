@@ -1,5 +1,9 @@
 "use client";
 
+import { activeBlockerText } from "../lib/progress-blocker";
+import { isCurrentResearchTrack } from "../lib/progress-track";
+import { instantTimestamp } from "../lib/dashboard-overview/dates";
+
 import { FormEvent, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { paperDeadlineState, paperStageMeta, paperStages, paperTypes, type PaperStage } from "../lib/paper-progress";
 import { AiRecordActions } from "../components/ai-record-actions";
@@ -465,8 +469,21 @@ function fileSizeText(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function progressRevisionTime(entry: StudentProgress) {
+  const value = entry.revisions?.find((revision) => revision.revision_number === entry.current_revision)?.created_at ?? entry.submitted_at;
+  return instantTimestamp(value);
+}
+
+function currentStudentEntry(entry: StudentProgress, student: Student, papers: StudentPaper[] = []) {
+  return isCurrentResearchTrack({ paperId: entry.paper?.id, milestoneId: entry.project?.milestone_id, proposalVersion: entry.project?.proposal_version }, {
+    proposal: student.proposalVersion != null ? { status: student.proposalStatus ?? "draft", version: student.proposalVersion } : null,
+    papers,
+    milestones: student.milestones,
+  });
+}
+
 function daysSinceLatestSubmission(student: Student) {
-  const latest = student.progress.reduce((value, entry) => Math.max(value, new Date(entry.submitted_at).getTime()), 0);
+  const latest = student.progress.reduce((value, entry) => Math.max(value, progressRevisionTime(entry)), 0);
   if (!latest) return student.risk.days;
   return Math.max(0, Math.floor((Date.now() - latest) / 86_400_000));
 }
@@ -1104,8 +1121,8 @@ function MentorProgressDecision({ entry, busy, note, onNote, onReview, onChanged
       {previousRevision && previousSummary !== entry.summary ? <details><summary>查看与 V{previousRevision.revision_number} 的结论差异</summary><p>{previousSummary || "上一版未填写结论"}</p></details> : null}
       {previousRevision && previousEvidence !== entry.evidence ? <details><summary>查看上一版证据</summary><p>{previousEvidence || "上一版未填写证据"}</p></details> : null}
     </section>
-    {entry.paper ? <div className="mentor-decision-facts"><div><span>论文阶段</span><strong>{paperStageMeta[entry.paper.stage].label}</strong></div><div><span>下一行动</span><strong>{entry.paper.next_action}</strong></div><div><span>期限</span><strong>{entry.paper.next_action_due_date}</strong></div>{entry.paper.blocker ? <div className="blocker"><span>阻塞</span><strong>{entry.paper.blocker}</strong></div> : null}</div> : null}
-    {entry.project ? <div className="mentor-decision-facts"><div><span>培养节点</span><strong>{entry.project.milestone_title || "未关联节点"}</strong></div><div><span>下一行动</span><strong>{entry.project.next_action}</strong></div><div><span>期限</span><strong>{entry.project.next_action_due_date}</strong></div>{entry.project.blocker ? <div className="blocker"><span>阻塞</span><strong>{entry.project.blocker}</strong></div> : null}</div> : null}
+    {entry.paper ? <div className="mentor-decision-facts"><div><span>论文阶段</span><strong>{paperStageMeta[entry.paper.stage].label}</strong></div><div><span>下一行动</span><strong>{entry.paper.next_action}</strong></div><div><span>期限</span><strong>{entry.paper.next_action_due_date}</strong></div>{activeBlockerText(entry.paper.blocker) ? <div className="blocker"><span>阻塞</span><strong>{entry.paper.blocker}</strong></div> : null}</div> : null}
+    {entry.project ? <div className="mentor-decision-facts"><div><span>培养节点</span><strong>{entry.project.milestone_title || "未关联节点"}</strong></div><div><span>下一行动</span><strong>{entry.project.next_action}</strong></div><div><span>期限</span><strong>{entry.project.next_action_due_date}</strong></div>{activeBlockerText(entry.project.blocker) ? <div className="blocker"><span>阻塞</span><strong>{entry.project.blocker}</strong></div> : null}</div> : null}
     <div className="mentor-evidence-strip">{entry.evidence_sources.map((source) => <span key={source.id}><b>{source.label}</b>{source.source_ref ? <a href={source.source_ref} target="_blank" rel="noreferrer">打开证据</a> : null}{source.content_sha256 ? <small>指纹 {source.content_sha256}</small> : null}</span>)}{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)}</small></a>)}</div>
     {entry.can_decide ? <section className="mentor-binary-review" aria-label="快速判断">
       <div className="mentor-binary-review-head"><div><span>只做一个判断</span><strong>这可以作为学生的正式进展吗？</strong></div><small>确认后自动进入下一项</small></div>
@@ -1340,9 +1357,10 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
   const papers = student ? data.papers.filter((paper) => paper.student_id === student.id) : [];
   const paperEntries = student?.progress.filter((entry) => entry.kind === "论文") ?? [];
   const projectEntries = student?.progress.filter((entry) => entry.kind === "项目") ?? [];
-  const paperReturned = paperEntries.filter((entry) => entry.review_status === "changes_requested").length;
-  const projectReturned = projectEntries.filter((entry) => entry.review_status === "changes_requested").length;
-  const waitingCount = student?.progress.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length ?? 0;
+  const currentEntries = student ? student.progress.filter((entry) => currentStudentEntry(entry, student, papers)) : [];
+  const paperReturned = currentEntries.filter((entry) => entry.kind === "论文" && entry.review_status === "changes_requested").length;
+  const projectReturned = currentEntries.filter((entry) => entry.kind === "项目" && entry.review_status === "changes_requested").length;
+  const waitingCount = currentEntries.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
 
   const applyStudentNavigation = useCallback((intent: StudentNavigationIntent) => {
     const nextResearchTrack = intent.researchTrack || "paper";
@@ -1437,6 +1455,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
   }
 
   function openSupplement(entry: StudentProgress) {
+    if (!student || !currentStudentEntry(entry, student, papers)) return;
     navigateStudent({ view: "progress", entryId: entry.id, action: "supplement" });
   }
 
@@ -1487,7 +1506,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
         <div className="student-view-intro-actions"><button className="primary" type="button" onClick={() => openComposer("论文")}>记论文进展</button><button type="button" onClick={() => openComposer("项目")}>记课题进展</button></div>
       </StudentViewIntro> : null}
       {composer ? <div className="student-persistent-composer" hidden={view !== "progress" || !composerVisible}><StudentQuickProgressComposer key={`${composer}-${composerTargetId ?? "default"}`} kind={composer} initialTargetId={composerTargetId} student={student} papers={papers} onCancel={() => { setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); }} onSaved={async () => { const savedKind = composer; setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); onToast(`${savedKind === "论文" ? "论文" : "课题"}进展已提交，记录已更新`); await onRefresh(); }} /></div> : null}
-      {view === "progress" ? <><StudentProgressOverview student={student} onSupplement={openSupplement} />{paperReturned + projectReturned > 0 ? <details className="quiet-details student-supplement-section"><summary>待补充材料<span>{paperReturned + projectReturned} 条</span></summary><StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} returnedOnly /><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} returnedOnly /></details> : null}</> : null}
+      {view === "progress" ? <><StudentProgressOverview student={student} onSupplement={openSupplement} currentEntryIds={new Set(currentEntries.map((entry) => entry.id))} />{paperReturned + projectReturned > 0 ? <details className="quiet-details student-supplement-section"><summary>待补充材料<span>{paperReturned + projectReturned} 条</span></summary><StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} returnedOnly /><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} returnedOnly /></details> : null}</> : null}
 
       {view === "library" ? <><StudentViewIntro id="student-view-library-title" title="我的资料" /><StudentResearchLibrary student={student} onOpenSource={openResearchSource} /></> : null}
 
@@ -1699,27 +1718,34 @@ function StudentResearchTracks({ scope, student, papers, selectedPaperId, onSele
   onSelectPaper: (paperId: number) => void;
   onOpenComposer: (kind: "论文" | "项目", targetId?: number) => void;
 }) {
-  const entries = [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
+  const entries = [...student.progress].sort((a, b) => progressRevisionTime(b) - progressRevisionTime(a) || b.id - a.id);
   const trackingPapers = papers.filter((paper) => paper.status === "active" || paper.status === "on_hold");
   const defaultPaper = trackingPapers.find((paper) => paper.status === "active") ?? trackingPapers[0] ?? papers[0];
   const leadPaper = trackingPapers.find((paper) => paper.id === selectedPaperId) ?? defaultPaper;
   const paperEntries = entries.filter((entry) => entry.kind === "论文");
   const projectEntries = entries.filter((entry) => entry.kind === "项目");
   const selectedPaperEntries = leadPaper ? paperEntries.filter((entry) => entry.paper?.id === leadPaper.id) : [];
-  const latestPaperEntry = selectedPaperEntries[0];
+  const latestPaperEntry = selectedPaperEntries.find((entry) => entry.review_status !== "rejected");
   const latestProjectEntry = projectEntries[0];
-  const planMilestones = [...student.milestones].sort((a, b) => a.sort_order - b.sort_order);
-  const currentProjectMilestoneId = latestProjectEntry?.project?.milestone_id
+  const planMilestones = student.proposalStatus === "approved" ? [...student.milestones].sort((a, b) => a.sort_order - b.sort_order) : [];
+  const linkedMilestone = planMilestones.find((milestone) => milestone.id === latestProjectEntry?.project?.milestone_id);
+  const currentLinkedMilestone = latestProjectEntry?.project?.proposal_version === student.proposalVersion && linkedMilestone?.status !== "completed" ? linkedMilestone : undefined;
+  const currentProjectMilestoneId = currentLinkedMilestone?.id
     ?? planMilestones.find((milestone) => milestone.status === "in_progress")?.id
     ?? planMilestones.find((milestone) => milestone.status === "pending" || milestone.status === "blocked")?.id;
   const scopedEntries = scope === "paper" ? paperEntries : projectEntries;
   const latestEntry = scopedEntries[0];
-  const pendingCount = scopedEntries.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
+  const pendingCount = scopedEntries.filter((entry) => currentStudentEntry(entry, student, papers) && (entry.review_status === "submitted" || entry.review_status === "in_review")).length;
   const repliedCount = scopedEntries.filter((entry) => Boolean(entry.reviewer_note?.trim())).length;
   const stageIndex = leadPaper ? paperStages.indexOf(leadPaper.current_stage) : -1;
   const stagePercent = stageIndex < 0 ? 0 : Math.round((stageIndex / (paperStages.length - 1)) * 100);
-  const nextAction = latestPaperEntry?.paper?.next_action || "先记录这篇论文的下一行动";
-  const nextActionDate = latestPaperEntry?.paper?.next_action_due_date || null;
+  const paperActionCurrent = leadPaper?.status === "active" && latestPaperEntry?.review_status === "accepted";
+  const nextAction = leadPaper?.status === "on_hold" ? "论文已暂停"
+    : leadPaper && ["accepted", "published", "closed"].includes(leadPaper.status) ? "论文已完成当前跟踪"
+      : latestPaperEntry && ["submitted", "in_review"].includes(latestPaperEntry.review_status) ? "已提交进展，等待导师确认"
+        : latestPaperEntry?.review_status === "changes_requested" ? "按导师意见补充进展"
+          : paperActionCurrent ? latestPaperEntry?.paper?.next_action || "下一步待填写" : "先记录这篇论文的下一行动";
+  const nextActionDate = paperActionCurrent ? latestPaperEntry?.paper?.next_action_due_date || null : null;
   const actionDeadline = paperDeadlineState(nextActionDate || null);
   const updateDays = daysSinceLatestSubmission(student);
   const rhythmOverdue = Boolean(entries.length) && updateDays > student.cadenceDays;
@@ -1743,7 +1769,7 @@ function StudentResearchTracks({ scope, student, papers, selectedPaperId, onSele
           <div className="student-paper-stage-bar" role="progressbar" aria-label={`${leadPaper.title} 论文阶段位置`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={stagePercent}><i style={{ width: `${stagePercent}%` }} /></div>
           <details className="quiet-details student-stage-details"><summary>查看全部阶段</summary><ol className="student-paper-stage-steps">{paperStages.map((stage, index) => <li key={stage} aria-current={index === stageIndex ? "step" : undefined} className={index < stageIndex ? "done" : index === stageIndex ? "current" : ""}><i /><small>{paperStageMeta[stage].label}</small></li>)}</ol></details>
           <p className="student-paper-stage-gate">这一阶段要做到：{paperStageMeta[leadPaper.current_stage].gate}</p>
-          <div className={`student-track-next-action ${actionDeadline.overdue ? "overdue" : ""}`}><span>先做这一件事</span><strong>{nextAction}</strong><small>{nextActionDate ? `准备完成：${nextActionDate} · ${actionDeadline.label}` : "完成后记一条论文进展"}</small></div>
+          <div className={`student-track-next-action ${actionDeadline.overdue ? "overdue" : ""}`}><span>{paperActionCurrent ? "当前安排" : "当前状态"}</span><strong>{nextAction}</strong><small>{nextActionDate ? `准备完成：${nextActionDate} · ${actionDeadline.label}` : "完成后记一条论文进展"}</small></div>
         </> : <div className="student-track-empty"><strong>先把论文建起来</strong><span>题目可以先写暂定名，后面随时继续更新。</span></div>}
         <button type="button" onClick={() => onOpenComposer("论文", leadPaper?.id)}>{leadPaper ? "记录这篇论文的进展" : "新建论文并记录"}</button>
       </article> : null}
@@ -1758,8 +1784,8 @@ function StudentResearchTracks({ scope, student, papers, selectedPaperId, onSele
             <em>{milestoneStatusLabels[milestone.status]}</em>
           </li>)}</ol>
         </section> : <div className="student-project-plan-empty"><strong>研究方案还没有形成可执行节点</strong><span>方案确认后，这里会显示每个节点的日期、验收证据和执行状态。</span></div>}
-        {latestProjectEntry ? <div className="student-project-latest"><time>{shortDate(latestProjectEntry.submitted_at)} · V{latestProjectEntry.current_revision}</time><h3>{latestProjectEntry.title}</h3><p>{latestProjectEntry.summary || latestProjectEntry.evidence}</p>{latestProjectEntry.project ? <div><span>下一行动</span><strong>{latestProjectEntry.project.next_action}</strong><small>{latestProjectEntry.project.next_action_due_date ? `计划 ${latestProjectEntry.project.next_action_due_date}` : "未设置期限"}</small></div> : null}{latestProjectEntry.attachments.length ? <small>{latestProjectEntry.attachments.length} 个附件已保存</small> : <small>这次没有附件</small>}</div> : <div className="student-track-empty"><strong>先记下最近做完的事</strong><span>实验、测试、数据整理和阶段结果都可以写。</span></div>}
-        {latestProjectEntry?.project ? <div className="student-project-next"><span>关联节点</span><strong>{latestProjectEntry.project.milestone_title || "未关联节点"}</strong><small>{latestProjectEntry.project.completion_requested ? "已申请完成，等待导师实质性进展确认" : latestProjectEntry.project.evidence_target || "继续围绕节点积累证据"}</small></div> : student.nextMilestone ? <div className="student-project-next"><span>下一培养节点</span><strong>{student.nextMilestone}</strong><small>{student.nextMilestoneDate ? `目标 ${student.nextMilestoneDate}` : "围绕节点形成一项可核验成果"}</small></div> : null}
+        {latestProjectEntry ? <div className="student-project-latest"><time>{shortDate(latestProjectEntry.submitted_at)} · V{latestProjectEntry.current_revision}</time><h3>{latestProjectEntry.title}</h3><p>{latestProjectEntry.summary || latestProjectEntry.evidence}</p>{latestProjectEntry.project ? <div><span>本次记录的后续计划</span><strong>{latestProjectEntry.project.next_action}</strong><small>{latestProjectEntry.project.next_action_due_date ? `计划 ${latestProjectEntry.project.next_action_due_date}` : "未设置期限"}</small></div> : null}{latestProjectEntry.attachments.length ? <small>{latestProjectEntry.attachments.length} 个附件已保存</small> : <small>这次没有附件</small>}</div> : <div className="student-track-empty"><strong>先记下最近做完的事</strong><span>实验、测试、数据整理和阶段结果都可以写。</span></div>}
+        {latestProjectEntry?.project ? <div className="student-project-next"><span>关联节点</span><strong>{latestProjectEntry.project.milestone_title || "未关联节点"}</strong><small>{linkedMilestone?.status === "completed" ? "该节点已完成" : latestProjectEntry.project.milestone_id && !currentLinkedMilestone ? "该记录属于历史方案或节点" : latestProjectEntry.project.completion_requested && latestProjectEntry.review_status !== "accepted" ? "已申请完成，等待导师确认" : latestProjectEntry.project.evidence_target || "继续围绕节点积累证据"}</small></div> : student.nextMilestone ? <div className="student-project-next"><span>下一培养节点</span><strong>{student.nextMilestone}</strong><small>{student.nextMilestoneDate ? `目标 ${student.nextMilestoneDate}` : "围绕节点形成一项可核验成果"}</small></div> : null}
         <div className={`student-project-rhythm ${rhythmOverdue ? "overdue" : ""}`}><span>记录节奏</span><strong>{rhythmLabel}</strong><small>建议每 {student.cadenceDays} 天至少更新一次</small></div>
         <div className="student-project-review"><span>最近状态</span><strong>{latestProjectEntry ? studentReviewLabels[latestProjectEntry.review_status] : "等待第一条记录"}</strong></div>
         <button type="button" onClick={() => onOpenComposer("项目", currentProjectMilestoneId)}>记录课题进展</button>
@@ -1899,7 +1925,7 @@ function StudentProjectDetail({ project }: { project: StudentProjectProgress }) 
     <div><dt>关联节点</dt><dd>{project.milestone_title || "未关联节点"}</dd><small>{project.milestone_target_date ? `目标 ${project.milestone_target_date}` : "未设置节点日期"}</small></div>
     <div><dt>下一行动</dt><dd>{project.next_action}</dd><small>{project.next_action_due_date ? `计划 ${project.next_action_due_date}` : "未设置期限"}</small></div>
     {project.evidence_target ? <div className="wide"><dt>节点验收证据</dt><dd>{project.evidence_target}</dd></div> : null}
-    {project.blocker ? <div className="wide blocker"><dt>当前阻塞</dt><dd>{project.blocker}</dd></div> : null}
+    {activeBlockerText(project.blocker) ? <div className="wide blocker"><dt>本次记录的困难</dt><dd>{project.blocker}</dd></div> : null}
     {project.completion_requested ? <div className="wide completion"><dt>节点完成申请</dt><dd>已申请；只有导师确认为实质性进展后才回写完成。</dd></div> : null}
   </dl>;
 }
@@ -1925,7 +1951,7 @@ function StudentRevisionHistory({ entry }: { entry: StudentProgress }) {
   </details>;
 }
 
-function StudentProgressOverview({ student, fixedFilter, onSupplement }: { student: Student; fixedFilter?: Exclude<StudentProgressFilter, "all">; onSupplement?: (entry: StudentProgress) => void }) {
+function StudentProgressOverview({ student, fixedFilter, onSupplement, currentEntryIds }: { student: Student; fixedFilter?: Exclude<StudentProgressFilter, "all">; onSupplement?: (entry: StudentProgress) => void; currentEntryIds?: Set<number> }) {
   const [filter, setFilter] = useState<StudentProgressFilter>("all");
   const entries = useMemo(() => [...student.progress].sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime()), [student.progress]);
   const activeFilter = fixedFilter || filter;
@@ -1950,7 +1976,7 @@ function StudentProgressOverview({ student, fixedFilter, onSupplement }: { stude
           <em className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</em><i aria-hidden="true">查看</i>
         </summary>
         <article>
-          {entry.review_status === "changes_requested" && onSupplement ? <>
+          {entry.review_status === "changes_requested" && onSupplement && currentEntryIds?.has(entry.id) ? <>
             <blockquote><b>{entry.reviewer_name ? `${entry.reviewer_name}的回复` : "导师回复"}</b><span>{entry.reviewer_note || "请按要求补充内容、证据或附件。"}</span></blockquote>
             <button className="primary student-progress-supplement" type="button" onClick={() => onSupplement(entry)}>补充材料</button>
           </> : <>
@@ -1978,7 +2004,7 @@ function StudentProgressPanel({ student, papers, onRefresh, onToast, returnedOnl
 }) {
   const [busy, setBusy] = useState<number | null>(null);
   const entries = [...student.progress]
-    .filter((entry) => entry.kind === "论文" && (!returnedOnly || entry.review_status === "changes_requested"))
+    .filter((entry) => entry.kind === "论文" && (!returnedOnly || (entry.review_status === "changes_requested" && currentStudentEntry(entry, student, papers))))
     .sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
 
   async function resubmit(event: FormEvent<HTMLFormElement>, entry: StudentProgress) {
@@ -2017,12 +2043,12 @@ function StudentProgressPanel({ student, papers, onRefresh, onToast, returnedOnl
     <div className="student-progress-feed-list">{entries.map((entry) => <article id={`student-action-entry-${entry.id}`} tabIndex={-1} key={entry.id}>
       <div><span className={`student-state ${entry.review_status}`}>{studentReviewLabels[entry.review_status]}</span><time>{shortDate(entry.submitted_at)}</time></div>
       <h3>{entry.paper?.title || entry.title}</h3><small>{entry.paper ? `${paperStageMeta[entry.paper.stage].label} · ${entry.paper.manuscript_version} · V${entry.current_revision}` : `历史论文进展 · V${entry.current_revision}`}</small><p>{entry.summary}</p>
-      {entry.paper ? <dl className="student-paper-update-detail"><div><dt>接下来做</dt><dd>{entry.paper.next_action}</dd></div><div><dt>准备完成</dt><dd>{entry.paper.next_action_due_date}</dd></div>{entry.paper.submission_identifier ? <div><dt>稿件编号 / DOI</dt><dd>{entry.paper.submission_identifier}</dd></div> : null}{entry.paper.blocker ? <div className="blocker"><dt>卡在哪里</dt><dd>{entry.paper.blocker}</dd></div> : null}</dl> : null}
+      {entry.paper ? <dl className="student-paper-update-detail"><div><dt>接下来做</dt><dd>{entry.paper.next_action}</dd></div><div><dt>准备完成</dt><dd>{entry.paper.next_action_due_date}</dd></div>{entry.paper.submission_identifier ? <div><dt>稿件编号 / DOI</dt><dd>{entry.paper.submission_identifier}</dd></div> : null}{activeBlockerText(entry.paper.blocker) ? <div className="blocker"><dt>卡在哪里</dt><dd>{entry.paper.blocker}</dd></div> : null}</dl> : null}
       {entry.evidence ? <div className="student-progress-evidence"><span>材料说明</span><p>{entry.evidence}</p></div> : null}
       {entry.attachments?.length ? <div className="student-attachment-list" aria-label="提交附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>V{attachment.revision_number || 1} · {fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
       {entry.reviewer_note ? <blockquote><b>导师回复</b><span>{entry.reviewer_note}</span></blockquote> : null}
       <StudentRevisionHistory entry={entry} />
-      {entry.review_status === "changes_requested" ? <details><summary>按导师意见补一下</summary><form onSubmit={(event) => void resubmit(event, entry)}>
+      {entry.review_status === "changes_requested" && currentStudentEntry(entry, student, papers) ? <details><summary>按导师意见补一下</summary><form onSubmit={(event) => void resubmit(event, entry)}>
         <label>改完后的内容<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label>
         <label>材料说明<textarea name="evidence" rows={3} defaultValue={entry.evidence} placeholder="也可改为提供 GitHub 链接或附件" /></label>
         {entry.kind === "文献" ? <label>论文题目 / DOI<input name="literatureRef" required defaultValue={entry.literature_ref} /></label> : <input type="hidden" name="literatureRef" value={entry.literature_ref || ""} />}
@@ -2043,7 +2069,7 @@ function StudentProjectProgressPanel({ student, onRefresh, onToast, returnedOnly
 }) {
   const [busy, setBusy] = useState<number | null>(null);
   const entries = [...student.progress]
-    .filter((entry) => entry.kind === "项目" && (!returnedOnly || entry.review_status === "changes_requested"))
+    .filter((entry) => entry.kind === "项目" && (!returnedOnly || (entry.review_status === "changes_requested" && currentStudentEntry(entry, student))))
     .sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
 
   async function resubmit(event: FormEvent<HTMLFormElement>, entry: StudentProgress) {
@@ -2079,7 +2105,7 @@ function StudentProjectProgressPanel({ student, onRefresh, onToast, returnedOnly
       {entry.attachments?.length ? <div className="student-attachment-list" aria-label="课题附件">{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><span>↧</span><b>{attachment.file_name}</b><small>V{attachment.revision_number || 1} · {fileSizeText(attachment.size_bytes)}</small></a>)}</div> : null}
       {entry.reviewer_note ? <blockquote><b>导师回复</b><span>{entry.reviewer_note}</span></blockquote> : null}
       <StudentRevisionHistory entry={entry} />
-      {entry.review_status === "changes_requested" ? <details><summary>按导师意见补一下</summary><form onSubmit={(event) => void resubmit(event, entry)}>
+      {entry.review_status === "changes_requested" && currentStudentEntry(entry, student) ? <details><summary>按导师意见补一下</summary><form onSubmit={(event) => void resubmit(event, entry)}>
         <label>改完后的内容<textarea name="summary" rows={3} required defaultValue={entry.summary} /></label>
         <label>材料说明<textarea name="evidence" rows={3} defaultValue={entry.evidence} placeholder="也可改为提供 GitHub 链接或附件" /></label>
         <label>关联培养节点<select name="linkedMilestoneId" defaultValue={entry.project?.milestone_id && student.milestones.some((milestone) => milestone.id === entry.project?.milestone_id && milestone.status !== "completed") ? String(entry.project.milestone_id) : ""}><option value="">暂不关联节点</option>{student.milestones.filter((milestone) => milestone.status !== "completed").sort((a, b) => a.sort_order - b.sort_order).map((milestone) => <option key={milestone.id} value={milestone.id}>{milestone.title} · {milestoneStatusLabels[milestone.status]}</option>)}</select></label>

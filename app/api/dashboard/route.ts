@@ -3,6 +3,7 @@ import { getStudentScope, scopeSql } from "../../../lib/authorization";
 import { requireAppUser } from "../../../lib/feishu-auth";
 import { evidenceDisplayRef, type ProgressAssessment, type ReviewStatus } from "../../../lib/progress-evidence";
 import { deriveStudentNextAction } from "../../../lib/student-next-action";
+import { isCurrentResearchTrack } from "../../../lib/progress-track";
 
 type StudentRow = {
   id: string;
@@ -353,10 +354,11 @@ export async function GET(request: Request) {
     }
 
     const mappedProgress = progressRows.map((entry) => {
+      const currentRevision = revisionRows.find((revision) => (
+        revision.progress_entry_id === entry.id && revision.revision_number === entry.current_revision
+      ));
       const currentSnapshot = revisionSnapshot(
-        revisionRows.find((revision) => (
-          revision.progress_entry_id === entry.id && revision.revision_number === entry.current_revision
-        ))?.snapshot_json ?? "{}",
+        currentRevision?.snapshot_json ?? "{}",
       );
       const aiSummaryOrigin = entry.kind === "组会" && evidenceRows.some((source) => (
           source.progress_entry_id === entry.id
@@ -364,6 +366,7 @@ export async function GET(request: Request) {
         ));
       return {
         ...entry,
+        current_revision_created_at: currentRevision?.created_at ?? entry.submitted_at,
         paper: entry.paper_id || entry.paper_candidate_id ? {
           id: entry.paper_id ?? 0,
           title: entry.paper_title ?? "未命名论文",
@@ -430,6 +433,14 @@ export async function GET(request: Request) {
     }));
     const pending = mappedProgress
       .filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review")
+      .filter((entry) => {
+        const student = studentResult.results.find((row) => row.id === entry.student_id);
+        return isCurrentResearchTrack({ paperId: entry.paper?.id, milestoneId: entry.project?.milestone_id, proposalVersion: entry.project?.proposal_version }, {
+          proposal: student?.proposal_version != null ? { status: student.proposal_status ?? "draft", version: student.proposal_version } : null,
+          papers: paperRows.filter((paper) => paper.student_id === entry.student_id),
+          milestones: milestoneRows.filter((milestone) => milestone.student_id === entry.student_id),
+        });
+      })
       .map((entry) => {
         const claimStale = entry.review_status === "in_review"
           && entry.reviewed_by_user_id !== viewer.id
@@ -498,11 +509,12 @@ export async function GET(request: Request) {
         now: new Date(),
         cadenceDays: student.cadenceDays,
         currentFocus: student.currentFocus,
+        proposal: student.proposalVersion !== null ? { status: student.proposalStatus ?? "draft", version: student.proposalVersion } : null,
         progress: student.progress.map((entry) => ({
           id: entry.id,
           kind: entry.kind,
           title: entry.title,
-          submittedAt: entry.submitted_at,
+          submittedAt: entry.current_revision_created_at,
           reviewStatus: entry.review_status,
           reviewerNote: entry.reviewer_note,
           paper: entry.paper ? {
@@ -514,6 +526,7 @@ export async function GET(request: Request) {
           } : null,
           project: entry.project ? {
             milestoneId: entry.project.milestone_id,
+            proposalVersion: entry.project.proposal_version,
             nextAction: entry.project.next_action,
             nextActionDueDate: entry.project.next_action_due_date,
             blocker: entry.project.blocker,

@@ -34,46 +34,52 @@ export function substantiveProgressSql(studentCount: number) {
 
 export function acceptedTrackProgressSql(studentCount: number) {
   const ids = placeholders(studentCount);
-  return `WITH accepted_tracks AS (
-    SELECT p.id, p.student_id,
-      CASE WHEN current_paper.id IS NOT NULL THEN 'paper' ELSE 'project' END AS track_type,
+  return `WITH accepted_candidates AS (
+    SELECT p.id, p.student_id, p.review_status,
+      CASE WHEN ppd.progress_entry_id IS NOT NULL THEN 'paper' ELSE 'project' END AS track_type,
+      CASE WHEN ppd.progress_entry_id IS NOT NULL THEN 'paper:' || ppd.paper_id ELSE 'project' END AS track_key,
       COALESCE(ppd.next_action, jpd.next_action, '') AS next_action,
       COALESCE(ppd.next_action_due_date, jpd.next_action_due_date, '') AS next_action_due_date,
       COALESCE(ppd.blocker, jpd.blocker, '') AS blocker,
       r.created_at AS current_revision_created_at,
       r.reviewed_at AS confirmed_at,
-      ROW_NUMBER() OVER (
-        PARTITION BY p.student_id, CASE WHEN current_paper.id IS NOT NULL THEN 'paper' ELSE 'project' END
-        ORDER BY r.created_at DESC, p.id DESC
-      ) AS track_rank
+      CASE WHEN ppd.progress_entry_id IS NOT NULL THEN current_paper.status IN ('active', 'on_hold')
+        WHEN jpd.milestone_id IS NULL THEN 1
+        ELSE current_milestone.archived_at IS NULL AND current_milestone.status != 'completed'
+          AND current_proposal.status = 'approved' AND current_proposal.current_version = jpd.proposal_version
+      END AS action_is_current
     FROM progress_entries p
     JOIN progress_revisions r
       ON r.progress_entry_id = p.id AND r.revision_number = p.current_revision
     LEFT JOIN paper_progress_details ppd ON ppd.progress_entry_id = p.id
     LEFT JOIN student_papers current_paper
       ON current_paper.id = ppd.paper_id AND current_paper.student_id = p.student_id
-      AND current_paper.status IN ('active', 'on_hold')
     LEFT JOIN project_progress_details jpd ON jpd.progress_entry_id = p.id
     LEFT JOIN research_milestones current_milestone
       ON current_milestone.id = jpd.milestone_id
-      AND current_milestone.archived_at IS NULL AND current_milestone.status != 'completed'
     LEFT JOIN research_proposals current_proposal
       ON current_proposal.id = current_milestone.proposal_id
-      AND current_proposal.student_id = p.student_id AND current_proposal.status = 'approved'
-      AND current_proposal.current_version = jpd.proposal_version
+      AND current_proposal.student_id = p.student_id
     WHERE p.student_id IN (${ids})
       AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)
-      AND p.review_status = 'accepted' AND r.review_status = 'accepted'
-      AND (p.assessment = 'substantive' OR p.assessment = 'supporting')
-      AND r.assessment = p.assessment
-      AND r.reviewed_at IS NOT NULL
+      AND p.review_status IN ('accepted', 'submitted', 'in_review', 'changes_requested')
+      AND r.review_status = p.review_status
+      AND (p.review_status != 'accepted' OR (
+        p.assessment IN ('substantive', 'supporting') AND r.assessment = p.assessment AND r.reviewed_at IS NOT NULL
+      ))
       AND (current_paper.id IS NOT NULL OR current_proposal.id IS NOT NULL
         OR (jpd.progress_entry_id IS NOT NULL AND jpd.milestone_id IS NULL))
+  ), accepted_tracks AS (
+    SELECT *, ROW_NUMBER() OVER (
+      PARTITION BY student_id, track_key
+      ORDER BY julianday(current_revision_created_at) DESC, id DESC
+    ) AS track_rank
+    FROM accepted_candidates
   )
-  SELECT id, student_id, track_type, next_action, next_action_due_date, blocker,
+  SELECT id, student_id, track_type, track_key, next_action, next_action_due_date, blocker,
     current_revision_created_at, confirmed_at
-  FROM accepted_tracks WHERE track_rank = 1
-  ORDER BY student_id, track_type`;
+  FROM accepted_tracks WHERE track_rank = 1 AND review_status = 'accepted' AND action_is_current = 1
+  ORDER BY student_id, track_key`;
 }
 
 export function latestSubmittedSql(studentCount: number) {
@@ -105,7 +111,10 @@ export function outstandingProgressSql(studentCount: number) {
     r.created_at AS current_revision_created_at,
     CASE WHEN current_paper.id IS NOT NULL THEN 'paper'
       WHEN current_proposal.id IS NOT NULL OR (jpd.progress_entry_id IS NOT NULL AND jpd.milestone_id IS NULL)
-        THEN 'project' ELSE NULL END AS track_type
+        THEN 'project' ELSE NULL END AS track_type,
+    CASE WHEN current_paper.id IS NOT NULL THEN 'paper:' || current_paper.id
+      WHEN current_proposal.id IS NOT NULL OR (jpd.progress_entry_id IS NOT NULL AND jpd.milestone_id IS NULL)
+        THEN 'project' ELSE NULL END AS track_key
   FROM progress_entries p
   JOIN progress_revisions r
     ON r.progress_entry_id = p.id AND r.revision_number = p.current_revision

@@ -26,7 +26,7 @@ test("research paper selection is URL-backed and restores the selected paper", (
   assert.match(applyNavigation, /setResearchPaperId\(intent\.view === "research".*intent\.paperId \?\? null/u);
   assert.match(researchView, /onSelectPaper=\{\(paperId\) => navigateStudent\(\{ view: "research", researchTrack: "paper", paperId \}\)\}/u);
   assert.match(researchTracks, /const selectedPaperEntries = leadPaper \? paperEntries\.filter/u);
-  assert.match(researchTracks, /const latestPaperEntry = selectedPaperEntries\[0\]/u);
+  assert.match(researchTracks, /const latestPaperEntry = selectedPaperEntries\.find\(\(entry\) => entry\.review_status !== "rejected"\)/u);
   assert.doesNotMatch(researchTracks, /latestPaperEntry[^;]*\?\? paperEntries\[0\]/u);
   assert.doesNotMatch(researchTracks, /setSelectedPaperId/u);
 });

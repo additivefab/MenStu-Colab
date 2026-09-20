@@ -38,6 +38,7 @@ type TrackProgressRow = {
   id: number;
   student_id: string;
   track_type: "paper" | "project";
+  track_key: string;
   next_action: string;
   next_action_due_date: string;
   blocker: string;
@@ -63,6 +64,7 @@ type OutstandingProgressRow = {
   revision_reviewed_by_user_id: number | null;
   current_revision_created_at: string;
   track_type: "paper" | "project" | null;
+  track_key: string | null;
 };
 
 type ProposalRow = {

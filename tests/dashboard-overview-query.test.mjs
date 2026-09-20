@@ -194,7 +194,7 @@ test("a newer outstanding track prevents an older accepted next action from resu
 
   const accepted = db.prepare(acceptedTrackProgressSql(1)).all("student-d");
   const outstanding = db.prepare(outstandingProgressSql(1)).all("student-d");
-  assert.equal(accepted.length, 1);
+  assert.equal(accepted.length, 0);
   assert.equal(outstanding[0].track_type, "paper");
   assert.deepEqual(filterCurrentAcceptedTracks(accepted, outstanding), []);
   db.close();
@@ -336,9 +336,80 @@ test("latest submission requires parent and current revision review states to ag
 });
 
 test("accepted and outstanding track authority compares revision creation time, not late review time", () => {
-  const accepted = [{ track_type: "paper", current_revision_created_at: "2026-08-01T00:00:00Z", confirmed_at: "2026-08-10T00:00:00Z" }];
-  const outstanding = [{ track_type: "paper", current_revision_created_at: "2026-08-02T00:00:00Z" }];
+  const accepted = [{ id: 10, track_type: "paper", track_key: "paper:1", current_revision_created_at: "2026-08-01T00:00:00Z", confirmed_at: "2026-08-10T00:00:00Z" }];
+  const outstanding = [{ id: 11, track_type: "paper", track_key: "paper:1", current_revision_created_at: "2026-08-02T00:00:00Z" }];
   assert.deepEqual(filterCurrentAcceptedTracks(accepted, outstanding), []);
+});
+
+test("retiring the latest project baseline cannot resurrect a superseded general-project blocker", () => {
+  const db = database();
+  const old = insertAccepted(db, "student-retired", 1);
+  db.prepare("INSERT INTO project_progress_details VALUES (?, NULL, NULL, '旧行动', '2026-08-01', '旧困难')").run(old);
+  const proposal = db.prepare("INSERT INTO research_proposals (student_id, status, current_version) VALUES ('student-retired', 'approved', 1) RETURNING id").get();
+  const milestone = db.prepare("INSERT INTO research_milestones (proposal_id, status) VALUES (?, 'in_progress') RETURNING id").get(proposal.id);
+  const latest = insertAccepted(db, "student-retired", 2);
+  db.prepare("INSERT INTO project_progress_details VALUES (?, ?, 1, '最新安排', '2026-09-30', '')").run(latest, milestone.id);
+  const rows = () => db.prepare(acceptedTrackProgressSql(1)).all("student-retired");
+  assert.equal(rows()[0].id, latest);
+  for (const change of [
+    "UPDATE research_milestones SET status = 'completed'",
+    "UPDATE research_milestones SET status = 'in_progress', archived_at = '2026-09-20'",
+    "UPDATE research_milestones SET archived_at = NULL; UPDATE research_proposals SET current_version = 2",
+    "UPDATE research_proposals SET current_version = 1, status = 'draft'",
+  ]) {
+    db.exec(change);
+    assert.deepEqual(rows(), [], change);
+  }
+  db.exec("UPDATE research_proposals SET status = 'approved'; UPDATE project_progress_details SET next_action = '', blocker = '' WHERE milestone_id IS NOT NULL");
+  assert.equal(rows()[0].id, latest);
+  assert.equal(rows()[0].next_action, "");
+  assert.equal(rows()[0].blocker, "");
+  db.close();
+});
+
+test("each paper retains its own baseline and a pending revision only supersedes its matching paper", () => {
+  const db = database();
+  const paperIds = [];
+  for (let index = 1; index <= 2; index++) {
+    const paper = db.prepare("INSERT INTO student_papers (student_id, status) VALUES ('student-papers', 'active') RETURNING id").get();
+    paperIds.push(paper.id);
+    const progressId = insertAccepted(db, "student-papers", index);
+    db.prepare("INSERT INTO paper_progress_details VALUES (?, ?, ?, '2026-08-01', '')").run(progressId, paper.id, `论文${index}`);
+  }
+  const rows = db.prepare(acceptedTrackProgressSql(1)).all("student-papers");
+  assert.equal(rows.length, 2);
+  const pending = [{ id: 100, track_type: "paper", track_key: `paper:${paperIds[1]}`, current_revision_created_at: "2026-08-20T00:00:00Z" }];
+  assert.deepEqual(filterCurrentAcceptedTracks(rows, pending).map((row) => row.track_key), [`paper:${paperIds[0]}`]);
+  db.prepare("UPDATE student_papers SET status = 'closed' WHERE id = ?").run(paperIds[1]);
+  assert.deepEqual(db.prepare(acceptedTrackProgressSql(1)).all("student-papers").map((row) => row.track_key), [`paper:${paperIds[0]}`]);
+  db.close();
+});
+
+test("same-instant submissions follow the ID ordering and never suppress another track", () => {
+  const accepted = [{ id: 20, track_type: "paper", track_key: "paper:1", current_revision_created_at: "2026-09-12 08:00:00" }];
+  const pending = { id: 21, track_type: "paper", track_key: "paper:1", current_revision_created_at: "2026-09-12T08:00:00Z" };
+  assert.deepEqual(filterCurrentAcceptedTracks(accepted, [pending]), []);
+  assert.deepEqual(filterCurrentAcceptedTracks(accepted, [{ ...pending, id: 19 }]), accepted);
+  assert.deepEqual(filterCurrentAcceptedTracks(accepted, [{ ...pending, track_key: "paper:2" }]), accepted);
+  assert.deepEqual(filterCurrentAcceptedTracks(accepted, [{ ...pending, track_type: "project", track_key: "project" }]), accepted);
+});
+
+test("a retired newer submission remains a barrier to older accepted project work without staying in the inbox", () => {
+  const db = database();
+  const old = insertAccepted(db, "student-barrier", 1);
+  db.prepare("INSERT INTO project_progress_details VALUES (?, NULL, NULL, '过时的行动', '2026-08-01', '旧困难')").run(old);
+  const proposal = db.prepare("INSERT INTO research_proposals (student_id, status, current_version) VALUES ('student-barrier', 'approved', 1) RETURNING id").get();
+  const milestone = db.prepare("INSERT INTO research_milestones (proposal_id, status) VALUES (?, 'in_progress') RETURNING id").get(proposal.id);
+  const newer = insertAccepted(db, "student-barrier", 2);
+  db.prepare("INSERT INTO project_progress_details VALUES (?, ?, 1, '新方案的安排', '2026-09-30', '')").run(newer, milestone.id);
+  db.prepare("UPDATE progress_entries SET review_status = 'submitted', status = 'pending', assessment = NULL WHERE id = ?").run(newer);
+  db.prepare("UPDATE progress_revisions SET review_status = 'submitted', assessment = NULL, reviewed_at = NULL WHERE progress_entry_id = ?").run(newer);
+  assert.deepEqual(db.prepare(acceptedTrackProgressSql(1)).all("student-barrier"), []);
+  assert.equal(db.prepare(outstandingProgressSql(1)).all("student-barrier").length, 1);
+  db.exec("UPDATE research_proposals SET status = 'draft'");
+  assert.deepEqual(db.prepare(acceptedTrackProgressSql(1)).all("student-barrier"), []);
+  assert.deepEqual(db.prepare(outstandingProgressSql(1)).all("student-barrier"), []);
+  db.close();
 });
 
 test("overview SQL enforces the supported 100-student request bound", () => {

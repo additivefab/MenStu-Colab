@@ -1,4 +1,6 @@
-import { calendarDayDiff, daysSinceInShanghai, shanghaiDateKey } from "./dashboard-overview/dates.ts";
+import { calendarDayDiff, daysSinceInShanghai, instantTimestamp, shanghaiDateKey } from "./dashboard-overview/dates.ts";
+import { activeBlockerText } from "./progress-blocker.ts";
+import { isCurrentResearchTrack } from "./progress-track.ts";
 
 type ProgressStatus = "submitted" | "in_review" | "accepted" | "changes_requested" | "rejected";
 
@@ -6,6 +8,7 @@ export type StudentNextActionInput = {
   now: Date;
   cadenceDays: number;
   currentFocus: string;
+  proposal: { status: string; version: number } | null;
   progress: Array<{
     id: number;
     kind: string;
@@ -14,7 +17,7 @@ export type StudentNextActionInput = {
     reviewStatus: ProgressStatus;
     reviewerNote: string;
     paper: null | { id: number; title: string; nextAction: string; nextActionDueDate: string; blocker: string };
-    project: null | { milestoneId: number | null; nextAction: string; nextActionDueDate: string; blocker: string };
+    project: null | { milestoneId: number | null; proposalVersion: number | null; nextAction: string; nextActionDueDate: string; blocker: string };
   }>;
   papers: Array<{ id: number; title: string; status: string; currentStage: string }>;
   milestones: Array<{ id: number; title: string; targetDate: string | null; status: string }>;
@@ -67,10 +70,22 @@ function compareCandidates(left: StudentActionCandidate, right: StudentActionCan
 export function deriveStudentNextAction(input: StudentNextActionInput) {
   const candidates: StudentActionCandidate[] = [];
   const sortedProgress = [...input.progress].sort((a, b) => (
-    new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime() || b.id - a.id
+    instantTimestamp(b.submittedAt) - instantTimestamp(a.submittedAt) || b.id - a.id
   ));
+  const currentMilestones = input.proposal?.status === "approved" ? input.milestones : [];
+  function isCurrentTrack(entry: StudentNextActionInput["progress"][number]) {
+    return isCurrentResearchTrack({ paperId: entry.paper?.id, milestoneId: entry.project?.milestoneId, proposalVersion: entry.project?.proposalVersion }, input);
+  }
+  const currentProgress = sortedProgress.filter(isCurrentTrack);
+  const outstanding = sortedProgress.filter((entry) => ["submitted", "in_review", "changes_requested"].includes(entry.reviewStatus));
+  function hasNewerSubmission(accepted: StudentNextActionInput["progress"][number]) {
+    return outstanding.some((entry) => (
+      (accepted.paper ? entry.paper?.id === accepted.paper.id : Boolean(entry.project))
+      && sortedProgress.indexOf(entry) < sortedProgress.indexOf(accepted)
+    ));
+  }
 
-  for (const entry of sortedProgress) {
+  for (const entry of currentProgress) {
     if ((entry.kind === "论文" || entry.kind === "项目") && entry.reviewStatus === "changes_requested") {
       candidates.push({
         id: `supplement-${entry.id}`,
@@ -107,7 +122,7 @@ export function deriveStudentNextAction(input: StudentNextActionInput) {
     });
   }
 
-  for (const milestone of input.milestones.filter((item) => item.status !== "completed")) {
+  for (const milestone of currentMilestones.filter((item) => item.status !== "completed")) {
     const due = dueState(milestone.targetDate, input.now);
     if (milestone.status === "blocked") {
       candidates.push({
@@ -142,12 +157,12 @@ export function deriveStudentNextAction(input: StudentNextActionInput) {
     }
   }
 
-  const waitingProgress = sortedProgress.filter((entry) => entry.reviewStatus === "submitted" || entry.reviewStatus === "in_review");
+  const waitingProgress = currentProgress.filter((entry) => entry.reviewStatus === "submitted" || entry.reviewStatus === "in_review");
   for (const paper of input.papers.filter((item) => item.status === "active")) {
-    const latestPaper = sortedProgress.find((entry) => entry.kind === "论文" && entry.paper?.id === paper.id);
-    if (!latestPaper?.paper || latestPaper.reviewStatus !== "accepted") continue;
+    const latestPaper = sortedProgress.find((entry) => entry.paper?.id === paper.id && entry.reviewStatus === "accepted");
+    if (!latestPaper?.paper || hasNewerSubmission(latestPaper)) continue;
     const due = dueState(latestPaper.paper.nextActionDueDate || null, input.now);
-    const blocker = latestPaper.paper.blocker.trim();
+    const blocker = activeBlockerText(latestPaper.paper.blocker);
     const action = latestPaper.paper.nextAction.trim();
     if (blocker || action) {
       candidates.push({
@@ -167,27 +182,20 @@ export function deriveStudentNextAction(input: StudentNextActionInput) {
     }
   }
 
-  const latestProjectByTrack = new Map<string, (typeof sortedProgress)[number]>();
-  for (const entry of sortedProgress) {
-    if (!entry.project) continue;
-    const key = entry.project.milestoneId ? `milestone-${entry.project.milestoneId}` : "unlinked";
-    if (!latestProjectByTrack.has(key)) latestProjectByTrack.set(key, entry);
-  }
-  for (const latestProject of latestProjectByTrack.values()) {
-    if (!latestProject.project || latestProject.reviewStatus !== "accepted") continue;
+  // Select the accepted project baseline before lifecycle checks so a retired
+  // milestone cannot uncover an older, superseded general-project action.
+  const latestProject = sortedProgress.find((entry) => entry.project && entry.reviewStatus === "accepted");
+  if (latestProject?.project && isCurrentTrack(latestProject) && !hasNewerSubmission(latestProject)) {
     const authoritativeMilestone = latestProject.project.milestoneId
-      ? input.milestones.find((item) => item.id === latestProject.project?.milestoneId)
+      ? currentMilestones.find((item) => item.id === latestProject.project?.milestoneId)
       : null;
-    if (authoritativeMilestone) {
-      const milestoneDue = dueState(authoritativeMilestone.targetDate, input.now);
-      if (authoritativeMilestone.status === "completed" || authoritativeMilestone.status === "blocked" || milestoneDue.overdue || (milestoneDue.days !== null && milestoneDue.days <= 7)) {
-        continue;
-      }
-    }
     const due = dueState(latestProject.project.nextActionDueDate || null, input.now);
-    const blocker = latestProject.project.blocker.trim();
+    const blocker = activeBlockerText(latestProject.project.blocker);
     const action = latestProject.project.nextAction.trim();
-    if (blocker || action) {
+    const milestoneDue = dueState(authoritativeMilestone?.targetDate ?? null, input.now);
+    const coveredByMilestone = authoritativeMilestone?.status === "blocked"
+      || (!blocker && (milestoneDue.overdue || (milestoneDue.days !== null && milestoneDue.days <= 7)));
+    if ((blocker || action) && !coveredByMilestone) {
       candidates.push({
         id: latestProject.project.milestoneId ? `project-milestone-${latestProject.project.milestoneId}` : `project-${latestProject.id}`,
         priority: blocker ? 32 : due.overdue ? 25 : 72,

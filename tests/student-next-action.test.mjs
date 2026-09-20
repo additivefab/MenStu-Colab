@@ -7,6 +7,7 @@ const base = {
   now: new Date("2026-08-24T10:00:00+08:00"),
   cadenceDays: 14,
   currentFocus: "完成消融实验",
+  proposal: { status: "approved", version: 1 },
   progress: [],
   papers: [],
   milestones: [],
@@ -182,4 +183,45 @@ test("due-soon guidance remains urgent even when it has not been acknowledged", 
   });
   assert.equal(result.primary?.kind, "guidance");
   assert.equal(result.primary?.targetId, 14);
+});
+
+const oldProject = { id: 51, kind: "项目", title: "旧课题记录", submittedAt: "2026-08-20T01:00:00Z", reviewStatus: "accepted", reviewerNote: "", paper: null, project: { milestoneId: null, proposalVersion: null, nextAction: "旧行动", nextActionDueDate: "2026-08-20", blocker: "旧困难" } };
+const linkedProject = { ...oldProject, id: 52, title: "最新节点进展", submittedAt: "2026-08-23T01:00:00Z", project: { ...oldProject.project, milestoneId: 9, proposalVersion: 1, nextAction: "最新安排", nextActionDueDate: "2026-09-20", blocker: "已解决" } };
+const currentMilestone = { id: 9, title: "实验节点", targetDate: "2026-09-20", status: "in_progress" };
+
+test("a new project baseline supersedes old general work even after the new node retires", () => {
+  const input = { ...base, milestones: [currentMilestone], progress: [oldProject, linkedProject] };
+  assert.equal(deriveStudentNextAction(input).primary.title, "最新安排");
+  for (const patch of [
+    { milestones: [{ ...currentMilestone, status: "completed" }] },
+    { milestones: [] },
+    { proposal: { status: "draft", version: 1 } },
+    { proposal: { status: "approved", version: 2 } },
+  ]) {
+    const result = deriveStudentNextAction({ ...input, ...patch });
+    assert.equal(result.candidates.some((item) => ["旧行动", "旧困难", "最新安排"].includes(item.title)), false);
+  }
+});
+
+test("current resubmissions pause old actions, rejected records do not erase accepted difficulties", () => {
+  const pending = { ...linkedProject, id: 53, reviewStatus: "submitted", submittedAt: "2026-08-24T08:00:00Z" };
+  const input = { ...base, milestones: [currentMilestone], progress: [oldProject, pending] };
+  assert.equal(deriveStudentNextAction(input).primary.kind, "waiting");
+  const rejected = deriveStudentNextAction({ ...input, progress: [oldProject, { ...pending, reviewStatus: "rejected" }] });
+  assert.equal(rejected.primary.title, "旧困难");
+  const sameTime = { ...pending, submittedAt: oldProject.submittedAt };
+  assert.equal(deriveStudentNextAction({ ...input, progress: [oldProject, sameTime] }).primary.kind, "waiting");
+});
+
+test("retired-node waits disappear from the work queue and real difficulties survive a nearby deadline", () => {
+  for (const reviewStatus of ["submitted", "in_review", "changes_requested"]) {
+    const result = deriveStudentNextAction({ ...base, milestones: [], progress: [{ ...linkedProject, reviewStatus }] });
+    assert.equal(result.waitingCount, 0);
+    assert.equal(result.candidates.length, 0);
+    const withOldWork = deriveStudentNextAction({ ...base, milestones: [], progress: [oldProject, { ...linkedProject, reviewStatus }] });
+    assert.equal(withOldWork.candidates.some((candidate) => candidate.title === "旧困难"), false);
+  }
+  const result = deriveStudentNextAction({ ...base, milestones: [{ ...currentMilestone, targetDate: "2026-08-25" }], progress: [{ ...linkedProject, project: { ...linkedProject.project, blocker: "缺关键设备，需导师协调" } }] });
+  assert.equal(result.primary.kind, "meeting");
+  assert.equal(result.primary.title, "缺关键设备，需导师协调");
 });

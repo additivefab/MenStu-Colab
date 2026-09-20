@@ -1,10 +1,14 @@
 export type AcceptedTrackAuthority = {
+  id: number;
   track_type: "paper" | "project";
+  track_key: string;
   current_revision_created_at: string;
 };
 
 export type OutstandingTrackAuthority = {
+  id: number;
   track_type: "paper" | "project" | null;
+  track_key: string | null;
   current_revision_created_at: string;
 };
 
@@ -66,7 +70,8 @@ export function filterCurrentAcceptedTracks<T extends AcceptedTrackAuthority>(
   outstanding: OutstandingTrackAuthority[],
 ) {
   return acceptedTracks.filter((track) => !outstanding.some((row) => (
-    row.track_type === track.track_type
-    && instantOrder(row.current_revision_created_at) > instantOrder(track.current_revision_created_at)
+    Boolean(row.track_key) && row.track_key === track.track_key
+    && (instantOrder(row.current_revision_created_at) > instantOrder(track.current_revision_created_at)
+      || (instantOrder(row.current_revision_created_at) === instantOrder(track.current_revision_created_at) && row.id > track.id))
   )));
 }
