@@ -10,11 +10,13 @@ export const overviewOwnerLabels: Record<OverviewOwner, string> = {
 export function overviewActionLabel(student: MentorOverviewStudent) {
   switch (student.primaryAction) {
     case "resolve_blocker": return "处理阻塞";
+    case "follow_up": return student.issues[0]?.sourceType === "milestone" ? "跟进节点"
+      : student.issues[0]?.sourceType === "guidance" ? "跟进指导" : "跟进下一步";
     case "review_progress": return "立即审核";
     case "review_proposal": return "审核方案";
     case "verify_guidance": return "核对验收";
     case "view_guidance": return "查看指导";
-    case "view_progress": return "查看待补交";
+    case "view_progress": return student.primaryReasonCode === "STUDENT_CHANGES_REQUESTED" ? "查看待补交" : "查看进展";
     case "view_proposal": return "查看待修改";
     case "complete_profile": return "查看档案缺口";
     default: return "查看";
@@ -39,6 +41,7 @@ export function overviewActionHref(student: MentorOverviewStudent) {
     case "verify_guidance":
     case "view_guidance": return targetId ? `${studentPath}#guidance-${targetId}` : `${studentPath}#guidance`;
     case "view_progress": return targetId ? `${studentPath}#progress-${targetId}` : `${studentPath}#evidence`;
+    case "follow_up":
     case "resolve_blocker": {
       if (!targetId) return `${studentPath}#outlook`;
       if (primaryIssue?.sourceType === "milestone") return `${studentPath}#milestone-${targetId}`;

@@ -74,6 +74,9 @@ test("overview actions use a fixed route whitelist and reject an arbitrary propo
     "/students/student-1#progress-38",
   );
   assert.equal(overviewActionLabel(student({ primaryAction: "complete_profile" })), "查看档案缺口");
+  assert.equal(overviewActionLabel(student({ primaryAction: "view_progress", primaryReasonCode: "ON_TRACK_NEXT_ACTION" })), "查看进展");
+  assert.equal(overviewActionLabel(student({ primaryAction: "view_progress", primaryReasonCode: "STUDENT_CHANGES_REQUESTED" })), "查看待补交");
+  assert.equal(overviewActionHref(student({ primaryAction: "follow_up", primaryActionTargetId: "12&next=https://evil.test" })), "/students/student-1#outlook");
 });
 
 test("overview UI keeps old views, accessible drawer, responsive cards, and read-only data flow", async () => {

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { assembleMentorOverview } from "../lib/dashboard-overview/assemble.ts";
 import { assertMentorOverviewResponse, mentorOverviewResponseJsonBytes } from "../lib/dashboard-overview/contract.ts";
+import { overviewActionHref, overviewActionLabel } from "../components/dashboard-overview/overview-actions.ts";
 
 const NOW = "2026-08-24T08:00:00.000Z";
 
@@ -52,6 +53,59 @@ function pending(overrides = {}) {
 }
 
 const admin = { id: 10, role: "admin" };
+
+test("approval keeps the confirmed progress and follows up an overdue plan without inventing a blocker", () => {
+  const input = inputOf();
+  const confirmedAt = "2026-09-12T08:00:00.000Z";
+  const now = "2026-09-20T08:00:00.000Z";
+  input.reviewableStudentIds = ["student-1"];
+  input.outstanding = [pending({ id: 12, track_type: "paper" })];
+  const before = assembleMentorOverview(input, admin, now).students[0];
+  assert.equal(before.primaryAction, "review_progress");
+  assert.equal(before.counters.actionableByMentor, 1);
+
+  input.outstanding = [];
+  input.substantive = [{ id: 12, student_id: "student-1", kind: "论文", title: "讨论完修改意见", confirmed_at: confirmedAt }];
+  input.acceptedTracks = [{
+    id: 12, student_id: "student-1", track_type: "paper", next_action: "按照意见修改",
+    next_action_due_date: "2026-08-31", blocker: "",
+    current_revision_created_at: "2026-08-24T00:00:00.000Z", confirmed_at: confirmedAt,
+  }];
+  const response = assembleMentorOverview(input, admin, now);
+  const after = response.students[0];
+  assert.doesNotThrow(() => assertMentorOverviewResponse(response));
+  assert.equal(after.primaryReasonCode, "NEXT_ACTION_OVERDUE");
+  assert.equal(after.primaryAction, "follow_up");
+  assert.equal(overviewActionLabel(after), "跟进下一步");
+  assert.equal(overviewActionHref(after), "/students/student-1#progress-12");
+  assert.deepEqual(after.counters, { actionableByMentor: 0, waitingForStudent: 0, blocked: 0, overdue: 1 });
+  assert.equal(after.latestSubstantiveAt, confirmedAt);
+  assert.equal(after.nextActionDueDate, "2026-08-31");
+
+  input.acceptedTracks[0].blocker = "缺少实验设备";
+  const blocked = assembleMentorOverview(input, admin, now).students[0];
+  assert.equal(blocked.primaryAction, "resolve_blocker");
+  assert.equal(overviewActionLabel(blocked), "处理阻塞");
+  assert.equal(blocked.counters.blocked, 1);
+  assert.equal(blocked.counters.overdue, 1);
+});
+
+test("overdue milestones and guidance keep their own follow-up destinations", () => {
+  const input = inputOf();
+  input.milestones = [{ id: 31, student_id: "student-1", proposal_title: "研究方案", title: "实验验证", target_date: "2026-08-20", status: "in_progress", sort_order: 1, updated_at: NOW }];
+  const milestone = assembleMentorOverview(input, admin, NOW).students[0];
+  assert.equal(milestone.primaryAction, "follow_up");
+  assert.equal(milestone.counters.blocked, 0);
+  assert.equal(overviewActionLabel(milestone), "跟进节点");
+  assert.equal(overviewActionHref(milestone), "/students/student-1#milestone-31");
+
+  input.milestones = [];
+  input.guidance = [{ id: 41, student_id: "student-1", mentor_user_id: 10, title: "实验建议", next_action: "补充实验", due_date: "2026-08-20", verification_mode: "mentor_verify", student_reported_at: null, created_at: NOW, updated_at: NOW }];
+  const guidance = assembleMentorOverview(input, admin, NOW).students[0];
+  assert.equal(guidance.primaryAction, "follow_up");
+  assert.equal(overviewActionLabel(guidance), "跟进指导");
+  assert.equal(overviewActionHref(guidance), "/students/student-1#guidance-41");
+});
 
 test("empty admin scope assembles a non-leaking zero response", () => {
   const response = assembleMentorOverview(inputOf(0), admin, NOW);

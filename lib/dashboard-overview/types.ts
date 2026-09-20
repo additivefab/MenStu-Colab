@@ -27,6 +27,7 @@ export type OverviewOwner = "mentor" | "student" | "coordination" | "setup";
 
 export type OverviewAction =
   | "resolve_blocker"
+  | "follow_up"
   | "review_progress"
   | "review_proposal"
   | "verify_guidance"

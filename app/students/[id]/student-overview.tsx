@@ -6,6 +6,7 @@ import Link from "next/link";
 import { AiRecordActions, DeletedAiRecords } from "../../../components/ai-record-actions";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { paperDeadlineState, paperStageMeta, paperStages, type PaperStage } from "../../../lib/paper-progress";
+import { progressFollowUpNotice } from "../../../lib/progress-follow-up";
 
 type ProgressStatus = "pending" | "substantive" | "supporting" | "supplement" | "rejected";
 type ReviewStatus = "submitted" | "in_review" | "accepted" | "changes_requested" | "rejected";
@@ -591,6 +592,11 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       const payload = (await response.json()) as { error?: string; message?: string };
       if (!response.ok) throw new Error(payload.error || "指导意见保存失败");
       setGuidanceMessage(action === "start_review" ? "已接手，可以审核这条进展。" : action === "release_review" ? "已释放审核。" : payload.message || "审核结果已保存。");
+      if (action === "substantive" || action === "supporting") {
+        setProgressFilter("all");
+        setSelectedId(entry.id);
+        window.history.replaceState(null, "", `#progress-${entry.id}`);
+      }
       await load();
     } catch (reviewError) {
       setGuidanceMessage(reviewError instanceof Error ? reviewError.message : "指导意见保存失败");
@@ -673,6 +679,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   if (!student) return <main className="student-workspace"><Link href="/">← 返回首页</Link><h1>学生档案</h1><p role="alert">{error || "学生不存在"}</p><button onClick={() => void load()}>重新加载</button></main>;
   const draft = entry ? guidanceDraft(entry) : null;
   const imported = meetingSummaries.find((item) => item.progress_entry_id === entry?.id);
+  const followUpNotice = entry ? progressFollowUpNotice(entry, new Date()) : null;
 
   return <main className="student-workspace">
     <nav className="sw-breadcrumb"><Link href="/?mentorView=students">← 返回学生列表</Link><span>探研 / 学生档案</span></nav>
@@ -708,6 +715,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
             <div className="sw-actions"><button className="primary" disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim() || !draft.nextAction.trim() || !draft.acceptanceCriteria.trim()} onClick={() => void reviewProgress(entry, "supplement", { nextAction: draft.nextAction, dueDate: draft.dueDate, acceptanceCriteria: draft.acceptanceCriteria })}>{reviewBusy === entry.id ? "发送中…" : "退回并发送指导"}</button><button onClick={() => updateGuidanceDraft(entry, { open: false })}>取消</button></div>
           </div> : null}
           <section className="sw-record-body"><h3>本次进展</h3><p>{entry.summary || "尚未填写"}</p>{entry.evidence ? <><h3>证据说明</h3><p>{entry.evidence}</p></> : null}</section>
+          {followUpNotice ? <p className="sw-message">{followUpNotice}</p> : null}
           {entry.paper || entry.project ? <div className="sw-next-step">{entry.paper ? <div><span>论文下一步</span><p>{entry.paper.next_action || "尚未填写"}{entry.paper.next_action_due_date ? <small>期限 {entry.paper.next_action_due_date}</small> : null}</p>{entry.paper.blocker ? <p className="sw-blocker">需要协助：{entry.paper.blocker}</p> : null}</div> : null}{entry.project ? <div><span>课题下一行动</span><p>{entry.project.next_action || "尚未填写"}{entry.project.next_action_due_date ? <small>期限 {entry.project.next_action_due_date}</small> : null}</p><small>关联课题节点：{entry.project.milestone_title || "未关联"}{entry.project.milestone_target_date ? ` · ${entry.project.milestone_target_date}` : ""}</small>{entry.project.blocker ? <p className="sw-blocker">需要协助：{entry.project.blocker}</p> : null}</div> : null}</div> : null}
           {entry.attachments.length || entry.evidence_sources.some((source) => source.source_type !== "attachment") ? <section className="sw-materials"><h3>相关材料</h3>{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url} target="_blank" rel="noreferrer"><span>{attachment.file_name}</span><small>{(attachment.size_bytes / 1024 / 1024).toFixed(1)} MB ↗</small></a>)}{entry.evidence_sources.filter((source) => source.source_type !== "attachment").map((source) => <div key={source.id}>{source.source_ref && ["git", "url"].includes(source.source_type) ? <a href={source.source_ref} target="_blank" rel="noreferrer">{source.label} ↗</a> : <span>{source.label}{source.source_ref ? ` · ${source.source_ref}` : ""}</span>}</div>)}</section> : <p className="sw-muted sw-materials">{entry.summary_only ? "历史纪要的来源信息见下方记录详情" : "未附材料"}</p>}
           {entry.reviewer_note || entry.assessment ? <section className="sw-feedback"><h3>审核结果</h3>{entry.assessment ? <span>{entry.assessment === "substantive" ? "实质性进展" : "支持性工作"}{entry.reviewer_name ? ` · ${entry.reviewer_name}` : ""}</span> : null}{entry.reviewer_note ? <p>{entry.reviewer_note}</p> : null}</section> : null}

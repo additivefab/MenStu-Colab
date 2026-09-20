@@ -85,7 +85,7 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
         occurredAt: milestone.updatedAt,
         sourceType: "milestone",
         sourceId: milestone.id,
-        action: "resolve_blocker",
+        action: "follow_up",
         actionTargetId: milestone.id,
       });
     }
@@ -102,7 +102,7 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
       occurredAt: action.occurredAt,
       sourceType: action.sourceType,
       sourceId: action.id,
-      action: overdue ? "resolve_blocker" : "view_progress",
+      action: overdue ? "follow_up" : "view_progress",
       actionTargetId: action.id,
     });
   }
@@ -138,7 +138,7 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
         occurredAt: wait.occurredAt,
         sourceType: "guidance",
         sourceId: wait.id,
-        action: "view_guidance",
+        action: "follow_up",
         actionTargetId: wait.id,
       });
     }

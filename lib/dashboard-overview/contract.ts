@@ -83,6 +83,7 @@ const reasonCodes = new Set<OverviewReasonCode>([
 const owners = new Set<OverviewOwner>(["mentor", "student", "coordination", "setup"]);
 const actions = new Set<OverviewAction>([
   "resolve_blocker",
+  "follow_up",
   "review_progress",
   "review_proposal",
   "verify_guidance",
