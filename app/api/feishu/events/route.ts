@@ -1,4 +1,5 @@
-import { getFeishuConfig } from "../../../../lib/feishu-auth";
+import { getFeishuBotConfig } from "../../../../lib/feishu-auth";
+import { FeishuBotConfigError } from "../../../../lib/feishu-bot-config";
 import { parseFeishuEvent, secureTextEqual } from "../../../../lib/feishu-events";
 import { stageFeishuMeetingSummary } from "../../../../lib/feishu-message-import";
 
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
   try {
     const rawBody = await request.text();
     if (rawBody.length > 220_000) return Response.json({ error: "事件内容过大" }, { status: 413 });
-    const config = getFeishuConfig();
+    const config = getFeishuBotConfig();
     if (!config.verificationToken) return Response.json({ error: "事件验证尚未配置" }, { status: 503 });
     const payload = await parseFeishuEvent(rawBody, request.headers, config.encryptKey) as FeishuEventPayload;
 
@@ -54,6 +55,9 @@ export async function POST(request: Request) {
 
     return Response.json({ code: 0, ...await stageFeishuMeetingSummary(header.event_id ?? "", payload.event) });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "飞书事件处理失败" }, { status: 400 });
+    return Response.json(
+      { error: error instanceof Error ? error.message : "飞书事件处理失败" },
+      { status: error instanceof FeishuBotConfigError ? 503 : 400 },
+    );
   }
 }

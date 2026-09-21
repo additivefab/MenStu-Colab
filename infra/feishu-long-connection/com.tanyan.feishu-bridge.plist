@@ -13,6 +13,12 @@
   <string>/Users/xiaosheyang123/.local/share/tanyan-feishu-bridge</string>
   <key>EnvironmentVariables</key>
   <dict>
+    <!-- Fill in the new bot App ID to use a separate Keychain entry; never store secrets here. -->
+    <key>FEISHU_BOT_APP_ID</key>
+    <string></string>
+    <!-- Empty uses com.tanyan.feishu-bot-app-secret in dedicated bot mode. -->
+    <key>FEISHU_BOT_KEYCHAIN_SERVICE</key>
+    <string></string>
     <key>FEISHU_APP_ID</key>
     <string>cli_aa0d8658e8b89cb6</string>
     <key>FEISHU_KEYCHAIN_SERVICE</key>

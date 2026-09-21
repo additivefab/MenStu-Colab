@@ -57,12 +57,24 @@ npm test
 2. 在飞书开放平台创建企业自建应用，添加“网页应用”和“机器人”能力。
 3. 网页应用主页填写 `https://progress.tz-ndt.com/`。
 4. 应用身份权限至少申请“以应用的身份发消息”（`im:message:send_as_bot`）。
-5. 启用会议总结导入前，申请机器人所在群消息读取、`minutes:minutes:readonly`、`minutes:minutes.artifacts:read` 和 `docx:document:readonly`；长连接订阅 `im.message.receive_v1`。无需不存在的 `im:message.history:readonly`。
+5. 启用会议总结导入前，申请 `im:message.group_msg.include_bot:read`（含其他机器人消息）、`im:message:readonly`、`minutes:minutes.artifacts:read` 和 `docx:document:readonly`；长连接订阅 `im.message.receive_v1`。历史消息读取使用 `im:message:readonly`，并按控制台要求开通群消息读取权限。
 6. 第一次发布时只将佘阳加入应用可用范围；完成首次登录后再逐步增加学生。
 7. 将学生的飞书身份与系统学生记录绑定。
 8. 对私有 GitHub 仓库安装只读 GitHub App；网站只接收元数据，本地 Agent 负责读取完整代码。
 
 飞书密钥、GitHub 凭据和其他秘密信息不得写入仓库，应通过部署环境的加密变量配置。
+
+### 更换群机器人并保留原账号
+
+原 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 继续用于飞书登录、通讯录身份查询及原账号提醒，管理员 Open ID 配置保持不变。同一用户在不同应用中的 Open ID 不同，因此重建群机器人不能直接替换原登录应用凭据。学生独立登录及既有档案关联无需迁移。
+
+1. 在新应用启用机器人能力、上述消息与纪要读取权限，以及 `im:message:send_as_bot`。长连接订阅 `im.message.receive_v1`；只用机器人时无需配置新的网页应用或 OAuth 重定向地址。妙记 AI 产物权限以新应用控制台要求为准；原应用还开通过 `minutes:minutes:readonly`，如控制台要求则同时开通。
+2. 站点加密环境变量配置新应用的 `FEISHU_BOT_APP_ID` 和 `FEISHU_BOT_APP_SECRET`，长连接 bridge 配置相同的一对值。任一 `FEISHU_BOT_APP_ID` / `FEISHU_BOT_APP_SECRET` / `FEISHU_BOT_VERIFICATION_TOKEN` / `FEISHU_BOT_ENCRYPT_KEY` 非空即启用独立模式；缺少 ID 或 Secret 会拒绝启动或接收事件，不会混用原应用凭据。四项都为空时保留原单应用行为。
+3. 使用本仓库 launchd 启动脚本时，在安装的 plist 中设置 `FEISHU_BOT_APP_ID`。新 Secret 存到以新 App ID 为 account、`com.tanyan.feishu-bot-app-secret` 为 service 的独立 Keychain 项；可用 `FEISHU_BOT_KEYCHAIN_SERVICE` 指定其他独立项。脚本不会在新项缺失时回退原登录应用。不要把 Secret 写入 plist。
+4. 更新安装目录中的 `run-bridge.zsh`，重新打包并替换安装目录的 `bridge.cjs`，然后重新加载 launchd 服务。仅修改仓库源码不会更新已运行的桥接服务；先部署支持独立配置的站点，再同步切换站点与 bridge 的新机器人配置。
+5. 长连接不使用 webhook 验证 Token 或 Encrypt Key。若改用 `/api/feishu/events`，须另配新机器人的 `FEISHU_BOT_VERIFICATION_TOKEN`，以及需要加密时的 `FEISHU_BOT_ENCRYPT_KEY`；独立模式不会继承原应用的验证值。该 webhook 只处理消息入库，链接补全、历史扫描与群内回复仍由长连接 bridge 完成。
+
+发布新应用后，在可用范围内的同组织成员可将已开启对外共享的机器人加入外部群。已离开组织的同学不能自行添加这个自建机器人。新应用读取既有文档时可能需要重新授予文档访问权限；原机器人的授权不会自动迁移。官方说明：[外部群机器人](https://open.feishu.cn/document/develop-robots/add-bot-to-external-group)、[接收群消息](https://open.feishu.cn/document/server-docs/im-v1/message/events/receive)、[文档阅读权限](https://open.feishu.cn/document/server-docs/docs/docs/docx-v1/document/raw_content)。
 
 ### 飞书身份安全机制
 

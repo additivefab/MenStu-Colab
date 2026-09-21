@@ -1,4 +1,5 @@
-import { getFeishuConfig } from "../../../../lib/feishu-auth";
+import { getFeishuBotConfig } from "../../../../lib/feishu-auth";
+import { FeishuBotConfigError } from "../../../../lib/feishu-bot-config";
 import { verifyLongConnectionRelay } from "../../../../lib/feishu-long-connection";
 import { type FeishuMessageEvent, stageFeishuMeetingSummary } from "../../../../lib/feishu-message-import";
 
@@ -12,7 +13,7 @@ export async function POST(request: Request) {
   try {
     const rawBody = await request.text();
     if (rawBody.length > 220_000) return Response.json({ error: "事件内容过大" }, { status: 413 });
-    const config = getFeishuConfig();
+    const config = getFeishuBotConfig();
     if (!config.appId || !config.appSecret) {
       return Response.json({ error: "飞书长连接尚未配置" }, { status: 503 });
     }
@@ -23,7 +24,7 @@ export async function POST(request: Request) {
 
     const event = JSON.parse(rawBody) as LongConnectionEvent;
     if (event.event_type && event.event_type !== "im.message.receive_v1") return Response.json({ code: 0 });
-    if (event.app_id && event.app_id !== config.appId) {
+    if ((config.mode === "dedicated" || event.app_id) && event.app_id !== config.appId) {
       return Response.json({ error: "事件应用不匹配" }, { status: 403 });
     }
     const messageId = event.message?.message_id ?? "";
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "飞书长连接事件处理失败" },
-      { status: 400 },
+      { status: error instanceof FeishuBotConfigError ? 503 : 400 },
     );
   }
 }

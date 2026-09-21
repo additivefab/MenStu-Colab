@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { ensureDatabase, getD1 } from "./database";
 import { resolvePersona, type AppPersona } from "./persona-policy";
 import { localSessionGuardSql } from "./local-auth-service";
+import { resolveFeishuBotConfig } from "./feishu-bot-config";
 
 const SESSION_COOKIE = "tanyan_session";
 const PERSONA_COOKIE = "tanyan_persona";
@@ -76,6 +77,10 @@ type UserRow = {
 
 function runtimeEnv() {
   return env as unknown as Record<string, string | undefined>;
+}
+
+export function getFeishuBotConfig() {
+  return resolveFeishuBotConfig(runtimeEnv());
 }
 
 export function getFeishuConfig() {

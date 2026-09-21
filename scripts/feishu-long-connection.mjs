@@ -14,15 +14,15 @@ import {
   isFeishuMentionOnly,
 } from "../lib/feishu-events.ts";
 import { formatFeishuImportFeedback } from "../lib/feishu-import-feedback.ts";
+import { resolveFeishuBotConfig } from "../lib/feishu-bot-config.ts";
 
-const appId = process.env.FEISHU_APP_ID?.trim() ?? "";
-const appSecret = process.env.FEISHU_APP_SECRET?.trim() ?? "";
+const { appId, appSecret } = resolveFeishuBotConfig(process.env);
 const siteUrl = process.env.TANYAN_SITE_URL?.trim() || "https://progress.tz-ndt.com";
 const relayUrl = new URL("/api/feishu/long-connection", siteUrl);
 const curlBin = process.env.TANYAN_CURL_BIN?.trim() || "/usr/bin/curl";
 
 if (!/^cli_[0-9a-fA-F]{16}$/.test(appId) || !appSecret) {
-  throw new Error("请配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET");
+  throw new Error("请配置有效的机器人 App ID 和 App Secret（独立机器人使用 FEISHU_BOT_APP_ID / FEISHU_BOT_APP_SECRET）");
 }
 if (relayUrl.protocol !== "https:") throw new Error("TANYAN_SITE_URL 必须使用 HTTPS");
 
@@ -192,7 +192,8 @@ function postRelayWithCurl(rawBody, timestamp, nonce, signature) {
 }
 
 async function forwardOnce(event) {
-  const rawBody = JSON.stringify(event);
+  // SDK events and synthetic history events may omit app_id; bind every relay to this bridge's app.
+  const rawBody = JSON.stringify({ ...event, app_id: appId });
   const timestamp = String(Math.floor(Date.now() / 1000));
   const nonce = randomBytes(18).toString("base64url");
   return await postRelayWithCurl(rawBody, timestamp, nonce, relaySignature(rawBody, timestamp, nonce));
