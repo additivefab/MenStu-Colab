@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { PasswordField } from "../../components/password-field";
 import styles from "../../components/local-login.module.css";
 
 export default function ActivateAccount() {
@@ -36,10 +37,10 @@ export default function ActivateAccount() {
     <div className="access-brand"><div className="brand-mark">探</div><strong>探研</strong></div>
     <h1>{username ? "密码已设置" : "设置独立登录密码"}</h1>
     {username ? <><p>你的账号：<strong>{username}</strong></p><p>登录后即可继续使用原学生档案。</p><button type="button" onClick={() => window.location.assign("/")}>返回登录</button></> : <>
-      <p>密码须为 15–128 个字符，可以使用较长的短语。</p>
+      <p>密码须为 8–128 个字符。</p>
       <form className={styles.form} onSubmit={submit}>
-        <label>新密码<input name="password" type="password" autoComplete="new-password" required minLength={15} maxLength={128} /></label>
-        <label>再次输入密码<input name="confirmation" type="password" autoComplete="new-password" required minLength={15} maxLength={128} /></label>
+        <PasswordField label="新密码" name="password" autoComplete="new-password" required minLength={8} maxLength={128} />
+        <PasswordField label="再次输入密码" name="confirmation" autoComplete="new-password" required minLength={8} maxLength={128} />
         {error ? <p className={styles.error} role="alert">{error}</p> : null}
         <button className="primary" disabled={busy}>{busy ? "正在设置…" : "保存密码"}</button>
       </form>

@@ -43,7 +43,13 @@ test('Workers HTTP flow: original account -> activation -> login -> scoped data 
     const page=await mf.dispatchFetch(origin+'/activate');
     assert.equal(page.status,200);
     assert.match(await page.text(),/设置独立登录密码/);
-    const password='My independent research password!';
+    const password='Study26!';
+    const tooShort=await send('/api/auth/local/activate',{token,password:'Study26'});
+    assert.equal(tooShort.status,400);
+    assert.match((await tooShort.json()).error,/8–128/);
+    const sharedPassword=await send('/api/auth/local/activate',{token,password:'123456789'});
+    assert.equal(sharedPassword.status,400);
+    assert.match((await sharedPassword.json()).error,/统一初始密码/);
     const activation=await send('/api/auth/local/activate',{token,password});
     assert.equal(activation.status,200,await activation.clone().text());
     assert.equal((await send('/api/auth/local/activate',{token,password})).status,400);
@@ -104,9 +110,14 @@ test('Workers HTTP flow: original account -> activation -> login -> scoped data 
     }
     assert.equal((await send('/api/auth/persona',{persona:'student'},initialCookie)).status,401);
     assert.equal((await mf.dispatchFetch(origin+'/api/auth/local/password',{headers:{cookie:initialCookie}})).status,200);
-    const newPersonal='Student two personal password 2026!';
+    const newPersonal='MyStudy8';
     assert.equal((await send('/api/auth/local/password',{currentPassword:'incorrect',newPassword:newPersonal},initialCookie)).status,400);
-    assert.equal((await send('/api/auth/local/password',{currentPassword:'123456789',newPassword:'123456789'},initialCookie)).status,400);
+    const shortChange=await send('/api/auth/local/password',{currentPassword:'123456789',newPassword:'MyStudy'},initialCookie);
+    assert.equal(shortChange.status,400);
+    assert.match((await shortChange.json()).error,/8–128/);
+    const sharedChange=await send('/api/auth/local/password',{currentPassword:'123456789',newPassword:'123456789'},initialCookie);
+    assert.equal(sharedChange.status,400);
+    assert.match((await sharedChange.json()).error,/统一初始密码/);
     const initialChanged=await send('/api/auth/local/password',{currentPassword:'123456789',newPassword:newPersonal},initialCookie);
     assert.equal(initialChanged.status,200,await initialChanged.clone().text());
     assert.equal((await mf.dispatchFetch(origin+'/api/dashboard',{headers:{cookie:initialCookie}})).status,401);

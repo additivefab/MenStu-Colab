@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import { PasswordField } from "./password-field";
 import styles from "./local-login.module.css";
 
 export function ChangePassword({ requiredChange = false }: { requiredChange?: boolean }) {
@@ -37,10 +38,10 @@ export function ChangePassword({ requiredChange = false }: { requiredChange?: bo
 
   const content = account?.enabled ? <form className={styles.form} onSubmit={submit}>
       <label>独立登录名<input name="username" autoComplete="username" value={account.username ?? ""} readOnly /></label>
-      <label>原密码<input name="currentPassword" type="password" autoComplete="current-password" required maxLength={256} /></label>
-      <label>新密码<input name="newPassword" type="password" autoComplete="new-password" required minLength={15} maxLength={128} /></label>
-      <label>再次输入新密码<input name="confirmation" type="password" autoComplete="new-password" required minLength={15} maxLength={128} /></label>
-      <p className={styles.help}>新密码须为 15–128 个字符。修改成功后，所有设备都需要重新登录。</p>
+      <PasswordField label="原密码" name="currentPassword" autoComplete="current-password" required maxLength={256} />
+      <PasswordField label="新密码" name="newPassword" autoComplete="new-password" required minLength={8} maxLength={128} />
+      <PasswordField label="再次输入新密码" name="confirmation" autoComplete="new-password" required minLength={8} maxLength={128} />
+      <p className={styles.help}>新密码须为 8–128 个字符。修改成功后，所有设备都需要重新登录。</p>
       {error ? <p className={styles.error} role="alert">{error}</p> : null}
       <button className="primary" disabled={busy}>{busy ? "正在修改…" : "保存新密码并重新登录"}</button>
     </form> : <p className={styles.help} role="status">{error || (account ? "独立登录尚未开通，请联系管理员获取密码设置链接。" : "正在读取独立账号…")}</p>;

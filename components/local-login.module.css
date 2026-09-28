@@ -17,3 +17,9 @@
 .controls button:disabled, .card button:disabled { opacity: .6; cursor: wait; }
 .changePassword { margin-top: 20px; border-top: 1px solid #dfe5ec; padding-top: 12px; }
 .changePassword summary { padding: 10px 0; cursor: pointer; font-size: 15px; font-weight: 600; }
+.passwordField { display: grid; gap: 8px; min-width: 0; }
+.passwordControl { position: relative; min-width: 0; }
+.passwordControl input { padding-right: 52px; }
+.form .passwordToggle { position: absolute; top: 1px; right: 1px; bottom: 1px; width: 44px; min-height: 42px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: #49576b; cursor: pointer; }
+.form .passwordToggle:hover { background: #eef3fa; color: #244e87; }
+.form .passwordToggle:focus-visible { outline: 2px solid #244e87; outline-offset: 2px; }

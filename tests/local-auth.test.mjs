@@ -67,19 +67,26 @@ test('scrypt salts passwords, preserves Unicode, verifies failures and enforces 
   assert.equal(await verifyPassword('incorrect password input', first), false);
   assert.equal(await verifyPassword(password, null), false);
   assert.equal(await verifyPassword(password, 'malformed'), false);
-  assert.ok(passwordError('short'));
+  assert.equal(passwordError('Study26!'), null);
+  assert.match(passwordError('Study26'), /8–128/);
+  assert.equal(passwordError('x'.repeat(128)), null);
   assert.ok(passwordError('x'.repeat(129)));
+  assert.equal(await verifyPassword('Study26!', await hashPassword('Study26!')), true);
+  await assert.rejects(hashPassword('123456789'), /统一初始密码/);
   const unicode = '科研进展密码短语需要足够长才能安全使用🔒';
   assert.equal(await verifyPassword(unicode, await hashPassword(unicode)), true);
 });
 
 test('activation and local login reuse exact app_user and student, preserving historical work and Feishu binding', async () => {
+  const password = 'Study26!';
   const {db,d1} = fixture();
   const before = db.prepare('SELECT * FROM progress_entries').all();
   const invitation = await issueLocalActivation(d1,3,1,'student-001');
   assert.equal(db.prepare('SELECT count(*) AS n FROM app_users').get().n,4);
   assert.equal(db.prepare('SELECT count(*) AS n FROM app_sessions').get().n,0);
   assert.equal(db.prepare('SELECT activation_hash FROM local_credentials').get().activation_hash,digest(invitation.token));
+  await assert.rejects(activateLocalLogin(d1,invitation.token,'Study26'), /8–128/);
+  await assert.rejects(activateLocalLogin(d1,invitation.token,'123456789'), /统一初始密码/);
   const result = await activateLocalLogin(d1,invitation.token,password);
   assert.equal(result.username,'why');
   assert.equal(db.prepare('SELECT activation_hash FROM local_credentials').get().activation_hash,null);
@@ -179,10 +186,11 @@ test('changing password requires current password and session, revokes every old
   await activateLocalLogin(d1,link.token,password);
   const first=await loginLocally(d1,'why',password);
   const second=await loginLocally(d1,'why',password);
-  const updated='An updated research password 2026!';
+  const updated='Change8!';
   const before=db.prepare('SELECT * FROM progress_entries').all();
   await assert.rejects(changeLocalPassword(d1,1,digest(first.token),'incorrect current password',updated));
-  await assert.rejects(changeLocalPassword(d1,1,digest(first.token),password,'123456789'));
+  await assert.rejects(changeLocalPassword(d1,1,digest(first.token),password,'Change8'), /8–128/);
+  await assert.rejects(changeLocalPassword(d1,1,digest(first.token),password,'123456789'), /统一初始密码/);
   await assert.rejects(changeLocalPassword(d1,1,digest(first.token),password,password));
   await assert.rejects(changeLocalPassword(d1,1,digest('missing-session'),password,updated));
   assert.ok(sessionUser(db,first.token));
