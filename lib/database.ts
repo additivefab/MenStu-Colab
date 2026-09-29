@@ -1,13 +1,14 @@
 import { env } from "cloudflare:workers";
 import { provisionInitialStudentLogins } from "./initial-student-logins";
 import { provisionLocalOnlyStudentLogins } from "./local-only-student-logins";
-import { localAuthSchemaStatements } from "./local-auth-schema";
+import { localAuthSchemaStatements, upgradeLocalCredentialsSchema } from "./local-auth-schema";
+import { provisionAdministratorLogins } from "./administrator-logins";
 import { progressResolutionSchemaStatements } from "./progress-resolution-schema";
 import { createProgressDeletionsSql, protectDeletedProgressSql } from "./ai-record-deletion";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-export const CURRENT_SCHEMA_VERSION = 23;
+export const CURRENT_SCHEMA_VERSION = 24;
 
 const REQUIRED_TABLES = [
   "students",
@@ -120,6 +121,7 @@ export async function ensureDatabase() {
   databaseReadyPromise ??= prepareDatabase().then(async () => {
     await provisionInitialStudentLogins(getD1());
     await provisionLocalOnlyStudentLogins(getD1());
+    await provisionAdministratorLogins(getD1());
   }).catch((error) => {
     databaseReadyPromise = null;
     throw error;
@@ -129,6 +131,12 @@ export async function ensureDatabase() {
 
 async function migrateDatabase(previousVersion: number | null) {
   const d1 = getD1();
+  if (previousVersion === 23) {
+    await upgradeLocalCredentialsSchema(d1);
+    await d1.prepare("UPDATE app_schema_meta SET version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND version = 23")
+      .bind(CURRENT_SCHEMA_VERSION).run();
+    return;
+  }
   await d1.batch([
     d1.prepare(`CREATE TABLE IF NOT EXISTS app_schema_meta (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -637,6 +645,7 @@ async function migrateDatabase(previousVersion: number | null) {
   await ensureColumn("meeting_requests", "request_hash", "TEXT NOT NULL DEFAULT ''");
   await d1.batch(localAuthSchemaStatements.map((statement) => d1.prepare(statement)));
   await ensureColumn("local_credentials", "must_change_password", "INTEGER NOT NULL DEFAULT 0");
+  await upgradeLocalCredentialsSchema(d1);
   await ensureColumn("app_sessions", "auth_method", "TEXT NOT NULL DEFAULT 'feishu'");
   await ensureColumn("app_sessions", "local_credential_version", "INTEGER");
   await ensureColumn("app_sessions", "local_student_id", "TEXT");

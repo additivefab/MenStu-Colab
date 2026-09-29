@@ -895,7 +895,8 @@ export const progressResolutionAttachments = sqliteTable("progress_resolution_at
 
 export const localCredentials = sqliteTable("local_credentials", {
   appUserId: integer("app_user_id").primaryKey().references(() => appUsers.id),
-  studentId: text("student_id").notNull().references(() => students.id),
+  studentId: text("student_id").references(() => students.id),
+  authorizedRole: text("authorized_role").notNull().default("student"),
   username: text("username").notNull().unique(),
   passwordHash: text("password_hash"),
   mustChangePassword: integer("must_change_password").notNull().default(0),
@@ -903,7 +904,10 @@ export const localCredentials = sqliteTable("local_credentials", {
   activationExpiresAt: text("activation_expires_at"),
   version: integer("version").notNull().default(1),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-}, (table) => [check("local_credentials_version", sql`${table.version} >= 1`)]);
+}, (table) => [
+  check("local_credentials_version", sql`${table.version} >= 1`),
+  check("local_credentials_role", sql`${table.authorizedRole} IN ('student', 'admin', 'superadmin')`),
+]);
 
 export const localAuthEvents = sqliteTable("local_auth_events", {
   id: integer("id").primaryKey({ autoIncrement: true }),

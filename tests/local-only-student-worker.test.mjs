@@ -81,7 +81,7 @@ test('local-only students: automatic provisioning, forced password change, scope
     }
     assert.equal((await db.prepare('SELECT count(*) AS n FROM app_users').first()).n,3);
     assert.equal((await db.prepare('SELECT count(*) AS n FROM local_credentials').first()).n,2);
-    assert.equal((await db.prepare('SELECT version FROM app_schema_meta').first()).version,23);
+    assert.equal((await db.prepare('SELECT version FROM app_schema_meta').first()).version,24);
     assert.equal(outbound,0);
   } finally { await mf.dispose(); }
 });

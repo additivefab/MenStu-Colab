@@ -8,9 +8,10 @@ export async function POST(request: Request) {
     const body = await readLocalAuthBody(request);
     const auth = await requireAppUser(request, ["superadmin"]);
     if ("response" in auth) return auth.response;
-    if (!Number.isSafeInteger(body.userId) || typeof body.studentId !== "string" || !body.studentId
+    if (!Number.isSafeInteger(body.userId) || !(body.studentId === null || (typeof body.studentId === "string" && body.studentId))
       || !["initialize", "issue", "disable"].includes(String(body.action))) throw new LocalAuthError("账号参数无效");
     if (body.action === "initialize") {
+      if (typeof body.studentId !== "string") throw new LocalAuthError("开通学生登录须关联学生档案");
       const result = await initializeLocalLogin(getD1(), auth.user.id, body.userId as number, body.studentId);
       return Response.json({ ...result, message: "已开通，初始密码为 123456789，首次登录必须修改" }, { headers: privateAuthHeaders });
     }

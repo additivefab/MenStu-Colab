@@ -15,7 +15,7 @@ const pairs=[...provisioning.matchAll(/WHERE u.id=(\d+) AND u.student_id='([^']+
 test('deployment initializes exactly the 22 verified original students with distinct hashes and preserves identities and history',async()=>{
  const db=new DatabaseSync(':memory:');
  db.exec('PRAGMA foreign_keys=ON');
- for(const name of names.filter(n=>!n.startsWith('0023_'))) db.exec(await readFile(new URL(name,directory),'utf8'));
+ for(const name of names.filter(n=>n<'0023_')) db.exec(await readFile(new URL(name,directory),'utf8'));
  for(const s of confirmedRoster) db.prepare("INSERT INTO students(id,display_name,degree,grade_year,stage) VALUES (?,?,?,?,'实验')").run(s.id,s.name,s.degree,s.gradeYear);
  for(const [id,studentId] of pairs) db.prepare("INSERT INTO app_users(id,feishu_open_id,display_name,role,student_id) VALUES (?,?,'原学生','student',?)").run(id,`original-${id}`,studentId);
  db.exec("INSERT INTO app_users(id,feishu_open_id,display_name,role,student_id) VALUES (1,'admin-1','管理者','superadmin','student-002'),(24,'admin-2','另一管理者','superadmin',NULL);");
@@ -23,6 +23,7 @@ test('deployment initializes exactly the 22 verified original students with dist
  const users=db.prepare('SELECT * FROM app_users').all();
  const history=db.prepare('SELECT * FROM progress_entries').all();
  db.exec(rollout);
+ for(const name of names.filter(n=>n>='0024_')) db.exec(await readFile(new URL(name,directory),'utf8'));
  db.exec(provisioning);
  const credentials=db.prepare('SELECT * FROM local_credentials').all();
  assert.equal(credentials.length,22);
@@ -34,7 +35,7 @@ test('deployment initializes exactly the 22 verified original students with dist
  assert.deepEqual(db.prepare('SELECT * FROM app_users').all(),users);
  assert.deepEqual(db.prepare('SELECT * FROM progress_entries').all(),history);
  assert.equal(db.prepare('SELECT count(*) AS n FROM local_credentials WHERE app_user_id IN (1,24)').get().n,0);
- assert.equal(db.prepare('SELECT version FROM app_schema_meta').get().version,23);
+ assert.equal(db.prepare('SELECT version FROM app_schema_meta').get().version,24);
  // Replaying only the initialization statements cannot reset a personal password or re-enable a disabled account.
  const personal=await hashPassword('An individually chosen password!');
  db.prepare('UPDATE local_credentials SET password_hash=?,must_change_password=0,version=2 WHERE app_user_id=2').run(personal);
@@ -51,7 +52,7 @@ test('deployment initializes exactly the 22 verified original students with dist
 test('deployment skips inactive, elevated and mismatched bindings without creating users by name',async()=>{
  const db=new DatabaseSync(':memory:');
  db.exec('PRAGMA foreign_keys=ON');
- for(const name of names.filter(n=>!n.startsWith('0023_'))) db.exec(await readFile(new URL(name,directory),'utf8'));
+ for(const name of names.filter(n=>n<'0023_')) db.exec(await readFile(new URL(name,directory),'utf8'));
  for(const s of confirmedRoster) db.prepare("INSERT INTO students(id,display_name,degree,grade_year,stage) VALUES (?,?,?,?,'实验')").run(s.id,s.name,s.degree,s.gradeYear);
  db.exec(`INSERT INTO app_users(id,feishu_open_id,display_name,role,student_id,active) VALUES
  (2,'inactive','温浩钰','student','student-001',0),
@@ -60,6 +61,7 @@ test('deployment skips inactive, elevated and mismatched bindings without creati
  (5,'inactive-student','李小博','student','student-025',1);
  UPDATE students SET active=0 WHERE id='student-025';`);
  db.exec(rollout);
+ for(const name of names.filter(n=>n>='0024_')) db.exec(await readFile(new URL(name,directory),'utf8'));
  db.exec(provisioning);
  assert.equal(db.prepare('SELECT count(*) AS n FROM local_credentials').get().n,0);
  assert.equal(db.prepare('SELECT count(*) AS n FROM app_users').get().n,4);

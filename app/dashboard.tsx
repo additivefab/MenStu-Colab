@@ -2811,7 +2811,7 @@ function FeishuModal({ viewer, onClose, onSwitchPersona, personaBusy, onLogout }
         <strong>当前界面：{viewer.activePersona === "student" ? "学生端" : "管理端"}</strong>
         <button className="primary" type="button" disabled={personaBusy} onClick={() => void onSwitchPersona(viewer.activePersona === "student" ? "management" : "student")}>{personaBusy ? "正在切换…" : viewer.activePersona === "student" ? "返回管理端" : "打开本人学生端"}</button>
       </div> : null}
-      {viewer.role === "student" && !viewer.canSwitchPersona ? <ChangePassword /> : null}
+      <ChangePassword />
       <div className="modal-actions"><button type="button" onClick={() => void onLogout()}>退出账号</button></div>
     </div>
   </div>;
@@ -3291,7 +3291,7 @@ function AccountManagement({ viewer, students }: { viewer: DashboardData["viewer
           </div>
           <button className="bind" disabled={busy === user.id || (selectedRole === "student" && !students.length)} onClick={() => void updateUser(user)}>{busy === user.id ? "保存中…" : selectedRole === "superadmin" ? "授予超级管理员" : "保存授权"}</button>
         </>}
-        {viewer.role === "superadmin" && user.student_id && (user.role === "student" || user.local_account) ? <LocalAccountActions userId={user.id} studentId={user.student_id} studentName={user.student_name || user.display_name} account={user.local_account} onChanged={loadUsers} /> : null}
+        {viewer.role === "superadmin" && ((user.role === "student" && user.student_id) || user.local_account) ? <LocalAccountActions userId={user.id} studentId={user.student_id} studentName={user.student_name || user.display_name} account={user.local_account} onChanged={loadUsers} /> : null}
       </div>;
     })}{!users.length ? <div className="empty-small">成员第一次从飞书打开应用后，账号会出现在这里。</div> : null}</div>
     {message ? <div className="account-message" role="status">{message}</div> : null}

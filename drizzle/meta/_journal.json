@@ -169,6 +169,13 @@
       "when": 1789895068572,
       "tag": "0023_initial_student_password",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1790681222834,
+      "tag": "0024_administrator_local_login",
+      "breakpoints": true
     }
   ]
 }

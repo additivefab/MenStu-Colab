@@ -5,9 +5,12 @@ export class LocalAuthError extends Error {
   status: number;
   constructor(message: string, status = 400) { super(message); this.status = status; }
 }
-const studentGuard = `EXISTS (SELECT 1 FROM app_users u JOIN students s ON s.id = u.student_id
-  WHERE u.id = local_credentials.app_user_id AND u.student_id = local_credentials.student_id
-    AND u.role = 'student' AND u.active = 1 AND s.active = 1)`;
+// Role is fixed at issuance: a student's password never inherits a later promotion.
+const accountGuard = `EXISTS (SELECT 1 FROM app_users u
+  WHERE u.id = local_credentials.app_user_id AND u.student_id IS local_credentials.student_id
+    AND u.role = local_credentials.authorized_role AND u.active = 1
+    AND (u.role IN ('admin', 'superadmin') OR (u.role = 'student'
+      AND EXISTS (SELECT 1 FROM students s WHERE s.id = u.student_id AND s.active = 1))))`;
 const adminGuard = `EXISTS (SELECT 1 FROM app_users actor WHERE actor.id = ? AND actor.active = 1 AND actor.role = 'superadmin')`;
 
 // All limits are durable and atomic across Workers; only hashed keys are stored.
@@ -27,22 +30,29 @@ export async function takeAuthAttempt(d1: D1Database, namespace: string, value: 
   }
 }
 
-export async function issueLocalActivation(d1: D1Database, actorId: number, userId: number, studentId: string) {
-  const username = studentLoginName(studentId);
+export async function issueLocalActivation(d1: D1Database, actorId: number, userId: number, studentId: string | null) {
+  const username = studentId ? studentLoginName(studentId) : "";
   const token = secretToken();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const requestId = crypto.randomUUID();
   const [update] = await d1.batch([
     d1.prepare(`INSERT INTO local_credentials
-        (app_user_id, student_id, username, activation_hash, activation_expires_at)
-      SELECT u.id, u.student_id, ?, ?, ? FROM app_users u JOIN students s ON s.id = u.student_id
-      WHERE u.id = ? AND u.student_id = ? AND u.active = 1 AND s.active = 1 AND u.role = 'student' AND ${adminGuard}
+        (app_user_id, student_id, authorized_role, username, activation_hash, activation_expires_at)
+      SELECT u.id, u.student_id, u.role,
+        CASE WHEN u.role = 'student' THEN ? ELSE existing.username END, ?, ?
+      FROM app_users u LEFT JOIN students s ON s.id = u.student_id
+        LEFT JOIN local_credentials existing ON existing.app_user_id = u.id
+      WHERE u.id = ? AND u.student_id IS ? AND u.active = 1 AND ${adminGuard}
+        AND ((u.role = 'student' AND s.active = 1) OR
+          (u.role IN ('admin', 'superadmin') AND existing.authorized_role = u.role
+            AND existing.student_id IS u.student_id))
       ON CONFLICT(app_user_id) DO UPDATE SET
         username = CASE WHEN local_credentials.username = local_credentials.student_id
           THEN excluded.username ELSE local_credentials.username END,
         activation_hash = excluded.activation_hash, activation_expires_at = excluded.activation_expires_at,
-        password_hash = NULL, version = local_credentials.version + 1, updated_at = CURRENT_TIMESTAMP
-      WHERE local_credentials.student_id = excluded.student_id RETURNING username`)
+        password_hash = NULL, authorized_role = excluded.authorized_role,
+        version = local_credentials.version + 1, updated_at = CURRENT_TIMESTAMP
+      WHERE local_credentials.student_id IS excluded.student_id RETURNING username`)
       .bind(username, digest(token), expiresAt, userId, studentId, actorId),
     d1.prepare(`INSERT INTO local_auth_events (app_user_id, actor_user_id, action, request_id)
       SELECT ?, ?, 'issue', ? WHERE changes() > 0`).bind(userId, actorId, requestId),
@@ -72,12 +82,12 @@ export async function initializeLocalLogin(d1: D1Database, actorId: number, user
   return { username };
 }
 
-export async function disableLocalLogin(d1: D1Database, actorId: number, userId: number, studentId: string) {
+export async function disableLocalLogin(d1: D1Database, actorId: number, userId: number, studentId: string | null) {
   const requestId = crypto.randomUUID();
   const [update] = await d1.batch([
     d1.prepare(`UPDATE local_credentials SET password_hash = NULL, activation_hash = NULL,
       activation_expires_at = NULL, version = version + 1, updated_at = CURRENT_TIMESTAMP
-      WHERE app_user_id = ? AND student_id = ? AND ${adminGuard}`)
+      WHERE app_user_id = ? AND student_id IS ? AND ${adminGuard}`)
       .bind(userId, studentId, actorId),
     d1.prepare(`INSERT INTO local_auth_events (app_user_id, actor_user_id, action, request_id)
       SELECT ?, ?, 'disable', ? WHERE changes() > 0`).bind(userId, actorId, requestId),
@@ -93,7 +103,7 @@ export async function activateLocalLogin(d1: D1Database, token: unknown, passwor
   if (error) throw new LocalAuthError(error);
   const tokenHash = digest(token);
   const row = await d1.prepare(`SELECT app_user_id, version, username FROM local_credentials
-    WHERE activation_hash = ? AND datetime(activation_expires_at) > CURRENT_TIMESTAMP AND ${studentGuard}`)
+    WHERE activation_hash = ? AND datetime(activation_expires_at) > CURRENT_TIMESTAMP AND ${accountGuard}`)
     .bind(tokenHash).first<{ app_user_id: number; version: number; username: string }>();
   if (!row) throw new LocalAuthError("设置链接无效或已过期，请联系管理员重新生成", 400);
   const encoded = await hashPassword(password as string);
@@ -102,7 +112,7 @@ export async function activateLocalLogin(d1: D1Database, token: unknown, passwor
     d1.prepare(`UPDATE local_credentials SET password_hash = ?, must_change_password = 0, activation_hash = NULL,
       activation_expires_at = NULL, version = version + 1, updated_at = CURRENT_TIMESTAMP
       WHERE app_user_id = ? AND version = ? AND activation_hash = ?
-        AND datetime(activation_expires_at) > CURRENT_TIMESTAMP AND ${studentGuard}`)
+        AND datetime(activation_expires_at) > CURRENT_TIMESTAMP AND ${accountGuard}`)
       .bind(encoded, row.app_user_id, row.version, tokenHash),
     d1.prepare(`INSERT INTO local_auth_events (app_user_id, actor_user_id, action, request_id)
       SELECT ?, ?, 'activate', ? WHERE changes() > 0`).bind(row.app_user_id, row.app_user_id, requestId),
@@ -122,8 +132,8 @@ export async function loginLocally(d1: D1Database, usernameInput: unknown, passw
   }
   await takeAuthAttempt(d1, "username", username, 10);
   const row = await d1.prepare(`SELECT app_user_id, student_id, password_hash, version
-    FROM local_credentials WHERE username = ? AND ${studentGuard}`)
-    .bind(username).first<{ app_user_id: number; student_id: string; password_hash: string | null; version: number }>();
+    FROM local_credentials WHERE username = ? AND ${accountGuard}`)
+    .bind(username).first<{ app_user_id: number; student_id: string | null; password_hash: string | null; version: number }>();
   const valid = await verifyPassword(password as string, row?.password_hash ?? null);
   if (!row || !valid) throw new LocalAuthError("账号或密码错误", 401);
   const token = secretToken();
@@ -133,7 +143,7 @@ export async function loginLocally(d1: D1Database, usernameInput: unknown, passw
     d1.prepare(`INSERT INTO app_sessions
         (token_hash, app_user_id, expires_at, auth_method, local_credential_version, local_student_id)
       SELECT ?, app_user_id, ?, 'local', version, student_id FROM local_credentials
-      WHERE app_user_id = ? AND version = ? AND password_hash = ? AND ${studentGuard}`)
+      WHERE app_user_id = ? AND version = ? AND password_hash = ? AND ${accountGuard}`)
       .bind(digest(token), expiresAt, row.app_user_id, row.version, row.password_hash),
     d1.prepare(`UPDATE app_users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ? AND changes() > 0`).bind(row.app_user_id),
     d1.prepare(`DELETE FROM local_auth_attempts WHERE key = ?
@@ -144,9 +154,9 @@ export async function loginLocally(d1: D1Database, usernameInput: unknown, passw
   return { token, expiresAt };
 }
 
-export async function localAccountForStudent(d1: D1Database, userId: number) {
+export async function localAccountForUser(d1: D1Database, userId: number) {
   return d1.prepare(`SELECT username, password_hash IS NOT NULL AS enabled FROM local_credentials
-    WHERE app_user_id = ? AND ${studentGuard}`).bind(userId).first<{ username: string; enabled: number }>();
+    WHERE app_user_id = ? AND ${accountGuard}`).bind(userId).first<{ username: string; enabled: number }>();
 }
 
 export async function changeLocalPassword(d1: D1Database, userId: number, sessionHash: string, currentPassword: unknown, newPassword: unknown) {
@@ -155,7 +165,7 @@ export async function changeLocalPassword(d1: D1Database, userId: number, sessio
   const error = passwordError(newPassword);
   if (error) throw new LocalAuthError(error);
   const row = await d1.prepare(`SELECT password_hash, version FROM local_credentials
-    WHERE app_user_id = ? AND ${studentGuard}`).bind(userId)
+    WHERE app_user_id = ? AND ${accountGuard}`).bind(userId)
     .first<{ password_hash: string | null; version: number }>();
   const valid = await verifyPassword(currentPassword as string, row?.password_hash ?? null);
   if (!row || !valid) throw new LocalAuthError("原密码不正确或独立登录尚未开通", 400);
@@ -165,12 +175,12 @@ export async function changeLocalPassword(d1: D1Database, userId: number, sessio
   const [update] = await d1.batch([
     d1.prepare(`UPDATE local_credentials SET password_hash = ?, must_change_password = 0, version = version + 1,
       activation_hash = NULL, activation_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
-      WHERE app_user_id = ? AND version = ? AND password_hash = ? AND ${studentGuard}
+      WHERE app_user_id = ? AND version = ? AND password_hash = ? AND ${accountGuard}
         AND EXISTS (SELECT 1 FROM app_sessions s WHERE s.token_hash = ?
           AND s.app_user_id = local_credentials.app_user_id AND datetime(s.expires_at) > CURRENT_TIMESTAMP
           AND (s.auth_method = 'feishu' OR (s.auth_method = 'local'
             AND s.local_credential_version = local_credentials.version
-            AND s.local_student_id = local_credentials.student_id)))`)
+            AND s.local_student_id IS local_credentials.student_id)))`)
       .bind(encoded, userId, row.version, row.password_hash, sessionHash),
     d1.prepare(`INSERT INTO local_auth_events (app_user_id, actor_user_id, action, request_id)
       SELECT ?, ?, 'change_password', ? WHERE changes() > 0`).bind(userId, userId, requestId),
@@ -181,8 +191,9 @@ export async function changeLocalPassword(d1: D1Database, userId: number, sessio
 }
 
 export const localSessionGuardSql = `(s.auth_method = 'feishu' OR (
-  s.auth_method = 'local' AND u.role = 'student' AND c.password_hash IS NOT NULL
-  AND c.version = s.local_credential_version AND c.student_id = u.student_id
-  AND s.local_student_id = u.student_id
-  AND EXISTS (SELECT 1 FROM students student WHERE student.id = u.student_id AND student.active = 1)
+  s.auth_method = 'local' AND u.role = c.authorized_role AND c.password_hash IS NOT NULL
+  AND c.version = s.local_credential_version AND c.student_id IS u.student_id
+  AND s.local_student_id IS u.student_id
+  AND (u.role IN ('admin', 'superadmin') OR (u.role = 'student'
+    AND EXISTS (SELECT 1 FROM students student WHERE student.id = u.student_id AND student.active = 1)))
 ))`;
