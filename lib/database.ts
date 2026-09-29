@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { provisionInitialStudentLogins } from "./initial-student-logins";
+import { provisionLocalOnlyStudentLogins } from "./local-only-student-logins";
 import { localAuthSchemaStatements } from "./local-auth-schema";
 import { progressResolutionSchemaStatements } from "./progress-resolution-schema";
 import { createProgressDeletionsSql, protectDeletedProgressSql } from "./ai-record-deletion";
@@ -116,7 +117,10 @@ async function prepareDatabase() {
 }
 
 export async function ensureDatabase() {
-  databaseReadyPromise ??= prepareDatabase().then(() => provisionInitialStudentLogins(getD1())).catch((error) => {
+  databaseReadyPromise ??= prepareDatabase().then(async () => {
+    await provisionInitialStudentLogins(getD1());
+    await provisionLocalOnlyStudentLogins(getD1());
+  }).catch((error) => {
     databaseReadyPromise = null;
     throw error;
   });

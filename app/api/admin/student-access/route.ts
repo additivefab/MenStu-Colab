@@ -53,9 +53,9 @@ export async function GET(request: Request) {
     d1.prepare(`SELECT student_id, contact_kind, active
       FROM student_feishu_identity_bindings ORDER BY student_id`)
       .all<{ student_id: string; contact_kind: string; active: number }>(),
-    d1.prepare(`SELECT student_id, role, active FROM app_users
+    d1.prepare(`SELECT student_id, feishu_open_id, role, active FROM app_users
       WHERE student_id IS NOT NULL ORDER BY student_id`)
-      .all<{ student_id: string; role: string; active: number }>(),
+      .all<{ student_id: string; feishu_open_id: string; role: string; active: number }>(),
   ]);
   const byStudent = new Map(bindings.results.map((item) => [item.student_id, item]));
   const usersByStudent = new Map(existingUsers.results.map((item) => [item.student_id, item]));
@@ -69,7 +69,8 @@ export async function GET(request: Request) {
         ? binding.active === 1 ? "verified" : "conflict"
         : !existingUser
           ? "contact_required"
-          : existingUser.active === 1 && existingUser.role !== "pending" ? "existing_login" : "conflict";
+          : existingUser.active === 1 && existingUser.role !== "pending"
+            && /^ou_[A-Za-z0-9_-]{8,}$/.test(existingUser.feishu_open_id) ? "existing_login" : "conflict";
       return {
         id: student.id,
         name: student.name,
@@ -158,7 +159,7 @@ export async function POST(request: Request) {
     for (const student of confirmedRoster) {
       const existing = existingByStudent.get(student.id);
       if (existing) {
-        if (existing.active !== 1 || existing.role === "pending" || !existing.feishu_open_id) {
+        if (existing.active !== 1 || existing.role === "pending" || !/^ou_[A-Za-z0-9_-]{8,}$/.test(existing.feishu_open_id)) {
           return Response.json({ error: `${student.name} 的现有账号尚未完成身份核验` }, { status: 409 });
         }
         prepared.push({ studentId: student.id, openId: existing.feishu_open_id, contactKind: "existing_login" });

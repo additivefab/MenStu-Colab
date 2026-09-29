@@ -79,7 +79,7 @@ export async function POST(request: Request) {
       WHERE u.student_id = ? AND u.role = 'student' AND u.active = 1`)
       .bind(studentId)
       .first<RecipientRow>();
-    if (!recipient) {
+    if (!recipient || !/^ou_[A-Za-z0-9_-]{8,}$/.test(recipient.feishu_open_id)) {
       return Response.json({ error: "该学生尚未绑定飞书账号" }, { status: 409 });
     }
 
