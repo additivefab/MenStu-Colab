@@ -47,21 +47,22 @@ function fixture() {
   return {db,d1};
 }
 
-test('concurrent provisioning creates only two exact student accounts and preserves all existing data', async () => {
+test('concurrent provisioning creates only three exact student accounts and preserves all existing data', async () => {
   const {db,d1} = fixture();
   try {
     const before = ['students','app_users','local_credentials','progress_entries'].map(t => db.prepare(`SELECT * FROM ${t}`).all());
     await Promise.all([provisionLocalOnlyStudentLogins(d1), provisionLocalOnlyStudentLogins(d1)]);
-    const accounts = db.prepare(`SELECT u.*,c.username,c.password_hash,c.must_change_password FROM app_users u
+    const accounts = db.prepare(`SELECT u.*,c.username,c.password_hash,c.must_change_password,c.authorized_role FROM app_users u
       JOIN local_credentials c ON c.app_user_id=u.id WHERE u.id>2 ORDER BY u.student_id`).all();
-    assert.equal(accounts.length,2);
-    assert.notEqual(accounts[0].password_hash,accounts[1].password_hash);
-    for (const [index,id,username] of [[0,'student-005','mjur'],[1,'student-006','abbasi']]) {
+    assert.equal(accounts.length,3);
+    assert.equal(new Set(accounts.map(a=>a.password_hash)).size,3);
+    for (const [index,id,username] of [[0,'student-005','mjur'],[1,'student-006','abbasi'],[2,'student-026','zhh']]) {
       const a=accounts[index];
       assert.equal(a.student_id,id);
       assert.equal(a.feishu_open_id,`local:${id}`);
       assert.equal(a.username,username);
       assert.equal(a.role,'student');
+      assert.equal(a.authorized_role,'student');
       assert.equal(a.active,1);
       assert.equal(a.must_change_password,1);
       assert.equal(await verifyPassword('123456789',a.password_hash),true);
@@ -70,7 +71,7 @@ test('concurrent provisioning creates only two exact student accounts and preser
     assert.deepEqual(db.prepare('SELECT * FROM app_users WHERE id<=2').all(),before[1]);
     assert.deepEqual(db.prepare('SELECT * FROM local_credentials WHERE app_user_id=1').all(),before[2]);
     assert.deepEqual(db.prepare('SELECT * FROM progress_entries').all(),before[3]);
-    assert.equal(db.prepare('SELECT count(*) AS n FROM local_login_rollouts').get().n,2);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM local_login_rollouts').get().n,3);
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
   } finally { db.close(); }
 });
@@ -84,7 +85,7 @@ test('replay cannot reset personal passwords, re-enable disabled credentials, or
     const credentials=db.prepare('SELECT * FROM local_credentials').all();
     await provisionLocalOnlyStudentLogins(d1);
     assert.deepEqual(db.prepare('SELECT * FROM local_credentials').all(),credentials);
-    db.exec("DELETE FROM local_credentials WHERE student_id IN ('student-005','student-006'); DELETE FROM app_users WHERE student_id IN ('student-005','student-006')");
+    db.exec("DELETE FROM local_credentials WHERE student_id IN ('student-005','student-006','student-026'); DELETE FROM app_users WHERE student_id IN ('student-005','student-006','student-026')");
     await provisionLocalOnlyStudentLogins(d1);
     assert.equal(db.prepare('SELECT count(*) AS n FROM app_users').get().n,2);
   } finally { db.close(); }
@@ -110,8 +111,8 @@ test('conflicting, disabled, elevated, renamed, and already verified identities 
       const before=db.prepare('SELECT * FROM app_users').all();
       const creds=db.prepare('SELECT * FROM local_credentials').all();
       await provisionLocalOnlyStudentLogins(d1);
-      assert.deepEqual(db.prepare("SELECT * FROM app_users WHERE student_id IS NULL OR student_id!='student-006'").all(),before);
-      assert.deepEqual(db.prepare("SELECT * FROM local_credentials WHERE username!='abbasi'").all(),creds);
+      assert.deepEqual(db.prepare("SELECT * FROM app_users WHERE student_id IS NULL OR student_id NOT IN ('student-006','student-026')").all(),before);
+      assert.deepEqual(db.prepare("SELECT * FROM local_credentials WHERE username NOT IN ('abbasi','zhh')").all(),creds);
       assert.equal(db.prepare("SELECT count(*) AS n FROM local_credentials WHERE username='abbasi'").get().n,1);
     } finally { db.close(); }
   }
@@ -120,11 +121,30 @@ test('conflicting, disabled, elevated, renamed, and already verified identities 
 test('a failed transaction leaves no partial users, credentials, or completion markers', async () => {
   const {db,d1}=fixture();
   try {
-    db.exec(`CREATE TRIGGER reject_second_credential BEFORE INSERT ON local_credentials WHEN NEW.username='abbasi'
+    db.exec(`CREATE TRIGGER reject_third_credential BEFORE INSERT ON local_credentials WHEN NEW.username='zhh'
       BEGIN SELECT RAISE(ABORT,'test failure'); END;`);
     await assert.rejects(provisionLocalOnlyStudentLogins(d1),/test failure/);
     assert.equal(db.prepare('SELECT count(*) AS n FROM app_users').get().n,2);
     assert.equal(db.prepare('SELECT count(*) AS n FROM local_credentials').get().n,1);
     assert.equal(db.prepare('SELECT count(*) AS n FROM local_login_rollouts').get().n,0);
   } finally { db.close(); }
+});
+
+test('the new zhh enrollment never takes over a renamed profile, occupied username, or existing user', async () => {
+  for (const conflict of [
+    "UPDATE students SET display_name='不同的人' WHERE id='student-026'",
+    "UPDATE local_credentials SET username='zhh' WHERE app_user_id=1",
+    "INSERT INTO app_users(feishu_open_id,display_name,role,student_id) VALUES ('ou_existing_zhh','钟昊航','student','student-026')",
+  ]) {
+    const {db,d1}=fixture();
+    try {
+      db.exec(conflict);
+      const original=db.prepare("SELECT * FROM app_users WHERE student_id='student-026'").all();
+      const originalCredential=db.prepare("SELECT * FROM local_credentials WHERE username='zhh'").all();
+      await provisionLocalOnlyStudentLogins(d1);
+      assert.deepEqual(db.prepare("SELECT * FROM app_users WHERE student_id='student-026'").all(),original);
+      assert.deepEqual(db.prepare("SELECT * FROM local_credentials WHERE username='zhh'").all(),originalCredential);
+      assert.equal(db.prepare("SELECT count(*) AS n FROM local_login_rollouts WHERE rollout_key='local-only-students-20261001:student-026'").get().n,0);
+    } finally {db.close();}
+  }
 });

@@ -31,7 +31,7 @@ test('local-only students: automatic provisioning, forced password change, scope
       .bind(s.id,s.name,s.degree,s.gradeYear).run();
     await db.prepare("INSERT INTO app_users(id,feishu_open_id,display_name,role) VALUES (1,'ou_test_admin_123','测试管理员','superadmin')").run();
     await db.prepare("INSERT INTO app_sessions(token_hash,app_user_id,expires_at) VALUES (?,1,datetime('now','+1 day'))").bind(digest('local-only-admin')).run();
-    for (const id of ['student-005','student-006']) {
+    for (const id of ['student-005','student-006','student-026']) {
       await db.prepare("INSERT INTO progress_entries(student_id,kind,title,submitted_by_user_id) VALUES (?,'实验',?,1)").bind(id,`原档案-${id}`).run();
     }
     await db.prepare("INSERT INTO progress_revisions(progress_entry_id,revision_number,snapshot_json,submitted_by_user_id) SELECT id,1,'{}',1 FROM progress_entries").run();
@@ -39,7 +39,7 @@ test('local-only students: automatic provisioning, forced password change, scope
     const send=(path,body,cookie='')=>mf.dispatchFetch(origin+path,{method:'POST',headers:{'content-type':'application/json',origin,cookie,'cf-connecting-ip':'127.0.0.2'},body:JSON.stringify(body)});
     const cookieOf=response=>response.headers.getSetCookie().find(c=>c.startsWith('tanyan_session=')).split(';')[0];
     const get=(path,cookie)=>mf.dispatchFetch(origin+path,{headers:{cookie}});
-    for (const [id,username,password] of [['student-005','mjur','Jalil26!'],['student-006','abbasi','Abbasi26']]) {
+    for (const [id,username,password] of [['student-005','mjur','Jalil26!'],['student-006','abbasi','Abbasi26'],['student-026','zhh','Zhong26!']]) {
       const first=await send('/api/auth/local/login',{username,password:'123456789'});
       assert.equal(first.status,200,await first.clone().text());
       const initialCookie=cookieOf(first);
@@ -72,15 +72,15 @@ test('local-only students: automatic provisioning, forced password change, scope
     assert.equal(verification.status,409,await verification.clone().text());
     assert.match((await verification.json()).error,/Muhammad Jalil Ur Rehman.*尚未完成身份核验/);
     const access=await get('/api/admin/student-access','tanyan_session=local-only-admin');
-    for (const student of (await access.json()).students.filter(s=>['student-005','student-006'].includes(s.id))) {
+    for (const student of (await access.json()).students.filter(s=>['student-005','student-006','student-026'].includes(s.id))) {
       assert.equal(student.status,'conflict');
       assert.equal(student.verified,false);
     }
     for (const table of ['notification_deliveries','student_feishu_identity_bindings','student_identity_binding_batches']) {
       assert.equal((await db.prepare(`SELECT count(*) AS n FROM ${table}`).first()).n,0);
     }
-    assert.equal((await db.prepare('SELECT count(*) AS n FROM app_users').first()).n,3);
-    assert.equal((await db.prepare('SELECT count(*) AS n FROM local_credentials').first()).n,2);
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM app_users').first()).n,4);
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM local_credentials').first()).n,3);
     assert.equal((await db.prepare('SELECT version FROM app_schema_meta').first()).version,24);
     assert.equal(outbound,0);
   } finally { await mf.dispose(); }
