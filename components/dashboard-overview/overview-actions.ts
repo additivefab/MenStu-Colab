@@ -43,13 +43,18 @@ export function overviewActionHref(student: MentorOverviewStudent) {
     case "verify_guidance":
     case "view_guidance": return targetId ? `${studentPath}#guidance-${targetId}` : `${studentPath}#guidance`;
     case "review_resolution":
-    case "view_resolution":
+    case "view_resolution": return targetId && (primaryIssue?.resolutionKind === "blocker" || primaryIssue?.resolutionKind === "next_action")
+      ? `${studentPath}#progress-resolution-${targetId}-${primaryIssue.resolutionKind}`
+      : `${studentPath}#${student.primaryReasonCode === "STUDENT_RESOLUTION_CHANGES_REQUESTED" ? "tasks" : "tasks-pending"}`;
     case "view_progress": return targetId ? `${studentPath}#progress-${targetId}` : `${studentPath}#evidence`;
     case "follow_up":
     case "resolve_blocker": {
       if (!targetId) return `${studentPath}#outlook`;
       if (primaryIssue?.sourceType === "milestone") return `${studentPath}#milestone-${targetId}`;
       if (primaryIssue?.sourceType === "guidance") return `${studentPath}#guidance-${targetId}`;
+      if (primaryIssue?.sourceType === "paper" || primaryIssue?.sourceType === "progress") {
+        return `${studentPath}#progress-resolution-${targetId}-${student.primaryAction === "resolve_blocker" ? "blocker" : "next_action"}`;
+      }
       return `${studentPath}#progress-${targetId}`;
     }
     case "complete_profile":

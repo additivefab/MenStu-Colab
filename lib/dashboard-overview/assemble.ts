@@ -176,6 +176,7 @@ export function assembleMentorOverview(
         return [{
           id: resolution.id,
           progressEntryId: row.id,
+          itemKind: kind,
           title: `${kind === "blocker" ? "困难" : "后续计划"} · ${title}`,
           occurredAt: resolution.submitted_at,
           status: resolution.status,

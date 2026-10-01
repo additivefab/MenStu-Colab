@@ -77,7 +77,7 @@ test("approval keeps the confirmed progress and follows up an overdue plan witho
   assert.equal(after.primaryReasonCode, "NEXT_ACTION_OVERDUE");
   assert.equal(after.primaryAction, "follow_up");
   assert.equal(overviewActionLabel(after), "跟进下一步");
-  assert.equal(overviewActionHref(after), "/students/student-1#progress-12");
+  assert.equal(overviewActionHref(after), "/students/student-1#progress-resolution-12-next_action");
   assert.deepEqual(after.counters, { actionableByMentor: 0, waitingForStudent: 0, blocked: 0, overdue: 1 });
   assert.equal(after.latestSubstantiveAt, confirmedAt);
   assert.equal(after.nextActionDueDate, "2026-08-31");
@@ -255,7 +255,7 @@ test("reported outcomes replace only their original reminders with one review pe
   assert.equal(row.primaryState, "mentor");
   assert.equal(row.primaryAction, "review_resolution");
   assert.equal(overviewActionLabel(row), "确认处理结果");
-  assert.equal(overviewActionHref(row), "/students/student-1#progress-18");
+  assert.equal(overviewActionHref(row), "/students/student-1#progress-resolution-18-blocker");
   assert.deepEqual(row.counters, { actionableByMentor: 2, waitingForStudent: 0, blocked: 0, overdue: 0 });
   assert.equal(row.issues.length, 2);
   assert.equal(row.nextAction, null);
@@ -291,7 +291,7 @@ test("returned outcomes wait for student supplementation and reopening restores 
   assert.equal(row.primaryState, "student");
   assert.equal(row.primaryReasonCode, "STUDENT_RESOLUTION_CHANGES_REQUESTED");
   assert.equal(overviewActionLabel(row), "查看待补充");
-  assert.equal(overviewActionHref(row), "/students/student-1#progress-18");
+  assert.equal(overviewActionHref(row), "/students/student-1#progress-resolution-18-blocker");
   assert.deepEqual(row.counters, { actionableByMentor: 0, waitingForStudent: 1, blocked: 0, overdue: 0 });
   assert.doesNotThrow(() => assertMentorOverviewResponse(returned));
 

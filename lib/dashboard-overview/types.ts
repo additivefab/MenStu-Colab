@@ -54,6 +54,7 @@ export type OverviewIssue = {
   sourceId: string | number | null;
   action: OverviewAction;
   actionTargetId: string | number | null;
+  resolutionKind?: "blocker" | "next_action";
 };
 
 export type OverviewMilestoneFact = {
@@ -98,6 +99,7 @@ export type OverviewStudentWaitFact = {
 export type OverviewResolutionFact = {
   id: number;
   progressEntryId: number;
+  itemKind: "blocker" | "next_action";
   title: string;
   occurredAt: string | null;
   status: "pending" | "changes_requested";

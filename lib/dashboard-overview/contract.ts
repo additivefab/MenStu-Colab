@@ -229,7 +229,9 @@ function assertNoSensitiveFields(value: unknown, path = "$", active = new WeakSe
 
 function assertIssue(value: unknown, path: string) {
   assertRecord(value, path);
-  assertExactKeys(value, issueKeys, path);
+  const hasResolutionKind = Object.prototype.hasOwnProperty.call(value, "resolutionKind");
+  assertExactKeys(value, hasResolutionKind ? [...issueKeys, "resolutionKind"] : issueKeys, path);
+  if (hasResolutionKind) assertMember(value.resolutionKind, new Set(["blocker", "next_action"]), `${path}.resolutionKind`);
   assertMember(value.code, reasonCodes, `${path}.code`);
   assertMember(value.state, states, `${path}.state`);
   assertString(value.label, `${path}.label`, false);

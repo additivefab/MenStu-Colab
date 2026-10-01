@@ -1,6 +1,9 @@
 export type ProgressResolutionKind = "blocker" | "next_action";
 export type ProgressResolutionStatus = "open" | "pending" | "resolved" | "changes_requested";
 export type ProgressResolutionAction = "submit" | "confirm" | "request_changes" | "reopen";
+// Direct mentor confirmation has its own command; the audit records a confirmation
+// from open/changes_requested without inventing a student submission.
+export type ProgressResolutionCommand = ProgressResolutionAction | "resolve";
 
 export type ProgressResolutionRow = {
   id: number;
@@ -49,9 +52,10 @@ export type ProgressResolutionItem = {
 export function progressResolutionKey(progressEntryId: number, revisionNumber: number, kind: ProgressResolutionKind) {
   return `${progressEntryId}:${revisionNumber}:${kind}`;
 }
-export function resolutionTransition(status: ProgressResolutionStatus, action: ProgressResolutionAction): ProgressResolutionStatus | null {
+export function resolutionTransition(status: ProgressResolutionStatus, action: ProgressResolutionCommand): ProgressResolutionStatus | null {
   if (action === "submit" && (status === "open" || status === "changes_requested")) return "pending";
   if (action === "confirm" && status === "pending") return "resolved";
+  if (action === "resolve" && (status === "open" || status === "changes_requested")) return "resolved";
   if (action === "request_changes" && status === "pending") return "changes_requested";
   if (action === "reopen" && status === "resolved") return "open";
   return null;

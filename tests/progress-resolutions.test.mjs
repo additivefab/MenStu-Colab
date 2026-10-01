@@ -5,7 +5,7 @@ import test from "node:test";
 import { resolutionTransition, progressResolutionKey } from "../lib/progress-resolution.ts";
 import { progressResolutionSchemaStatements } from "../lib/progress-resolution-schema.ts";
 import { acceptedTrackProgressSql } from "../lib/dashboard-overview/query-sql.ts";
-import { insertResolutionSql, updateResolutionSql, insertResolutionEventSql, insertResolutionAuditSql,
+import { insertResolutionSql, insertConfirmedResolutionSql, updateResolutionSql, insertResolutionEventSql, insertResolutionAuditSql,
   resolutionSourceGuardSql, resolutionStudentAuthoritySql, resolutionReviewerAuthoritySql,
   resolutionUploadGuardSql } from "../lib/progress-resolution-sql.ts";
 
@@ -44,11 +44,11 @@ function perform(db, { version = 0, action = "submit", kind = "blocker", actor =
   const guardArgs = ['s1',18,1,actor,'s1',...(submit ? [] : ['s1']),...files];
   db.exec("BEGIN");
   try {
-    const changed = version === 0 ? db.prepare(insertResolutionSql(guard)).all('s1',18,1,kind,'原记录','困难原文',
-      kind === 'next_action' ? '2026-09-13' : null,'project',note,actor,request,...guardArgs) :
+    const changed = version === 0 ? db.prepare(submit ? insertResolutionSql(guard) : insertConfirmedResolutionSql(guard)).all('s1',18,1,kind,'原记录','困难原文',
+      kind === 'next_action' ? '2026-09-13' : null,'project',note,...(submit ? [actor] : []),request,...guardArgs) :
       db.prepare(updateResolutionSql(guard)).all(next,action,note,action,actor,action,action,note,next,request,
         18,1,kind,version,from,action,actor,...guardArgs);
-    db.prepare(insertResolutionEventSql).all(actor,action,from,note,request,replayHash,18,1,kind,request,version+1);
+    db.prepare(insertResolutionEventSql).all(actor,action === "resolve" ? "confirm" : action,from,note,request,replayHash,18,1,kind,request,version+1);
     if (failAudit) throw new Error("injected failure");
     db.prepare(insertResolutionAuditSql).run(actor,request,request);
     for (const key of files) {
@@ -323,5 +323,97 @@ test("actual handlers accept normalized admin over legacy mentor only with revie
   assert.equal((await route.PATCH(review("mentor-review-allowed-0001"))).status,200);
   assert.equal(db.prepare("SELECT status FROM progress_resolutions").get().status,"resolved");
   assert.equal(db.prepare("SELECT COUNT(*) n FROM progress_resolution_events").get().n,2);
+  db.close();
+});
+
+function reviewRequest(overrides = {}) {
+  return new Request("http://localhost/api/progress-resolutions", {
+    method: "PATCH", headers: { Origin: "http://localhost", "Content-Type": "application/json" },
+    body: JSON.stringify({ progressEntryId: 18, revisionNumber: 1, itemKind: "next_action", expectedVersion: 0,
+      action: "resolve", note: "已核对修改稿，图表与文字修改均已完成", requestId: "mentor-direct-resolution-0001", ...overrides }),
+  });
+}
+
+test("mentor can close an open plan with evidence, replay, reopen and reclose without a fake student submission", async () => {
+  const { db, route, setActor } = await endpointFixture();
+  setActor({ id: 4, role: "admin", studentId: null });
+  const before = db.prepare("SELECT * FROM progress_entries WHERE id=18").get();
+  assert.equal((await route.PATCH(reviewRequest({ note: "   " }))).status, 400);
+  assert.equal((await route.PATCH(reviewRequest({ action: "confirm" }))).status, 409);
+  const response = await route.PATCH(reviewRequest());
+  assert.equal(response.status, 200, JSON.stringify(await response.json()));
+  assert.equal((await route.PATCH(reviewRequest())).status, 200);
+  assert.equal((await route.PATCH(reviewRequest({ note: "不同依据" }))).status, 400);
+  assert.equal((await route.PATCH(reviewRequest({ action: "confirm" }))).status, 400);
+  assert.equal((await route.PATCH(reviewRequest({ requestId: "stale-direct-resolution-0002" }))).status, 409);
+  const data = await (await route.GET(new Request("http://localhost/api/progress-resolutions?studentId=s1"))).json();
+  const plan = data.items.find(item => item.itemKind === "next_action");
+  assert.equal(plan.status, "resolved"); assert.equal(plan.version, 1);
+  assert.equal(plan.submissionNote, ""); assert.equal(plan.submittedAt, null);
+  assert.equal(plan.history.length, 1); assert.equal(plan.history[0].action, "confirm");
+  assert.equal(plan.history[0].actorName, "审核管理员"); assert.equal(plan.history[0].note, plan.reviewerNote);
+  assert.equal(data.items.find(item => item.itemKind === "blocker").status, "open");
+  const stored = db.prepare("SELECT * FROM progress_resolutions").get();
+  assert.equal(stored.submitted_by_user_id, null); assert.ok(stored.resolved_at);
+  assert.deepEqual(db.prepare("SELECT action,from_status,to_status FROM progress_resolution_events").all().map(x => ({ ...x })),
+    [{ action: "confirm", from_status: "open", to_status: "resolved" }]);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM progress_audit_events WHERE action='resolution_confirm'").get().n, 1);
+  assert.equal((await route.PATCH(reviewRequest({ action: "reopen", expectedVersion: 1, note: "复核发现需补充图表", requestId: "mentor-direct-reopen-0002" }))).status, 200);
+  assert.equal((await route.PATCH(reviewRequest({ expectedVersion: 2, requestId: "mentor-direct-reclose-0003" }))).status, 200);
+  assert.equal(db.prepare("SELECT version FROM progress_resolutions").get().version, 3);
+  assert.deepEqual(db.prepare("SELECT * FROM progress_entries WHERE id=18").get(), before);
+  assert.equal(db.prepare("SELECT next_action FROM project_progress_details WHERE progress_entry_id=18").get().next_action, "完成画图");
+  db.close();
+});
+
+test("direct mentor resolution respects roles, assignment, self-review and current source guards", async () => {
+  const { db, route, setActor } = await endpointFixture();
+  for (const actor of [{ id: 1, role: "student", studentId: "s1" }, { id: 3, role: "admin", studentId: null }, { id: 2, role: "superadmin", studentId: "s1" }]) {
+    setActor(actor); assert.equal((await route.PATCH(reviewRequest())).status, 403);
+  }
+  setActor({ id: 4, role: "admin", studentId: null });
+  db.exec("UPDATE app_users SET active=0 WHERE id=4");
+  assert.equal((await route.PATCH(reviewRequest())).status, 409);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM progress_resolution_events").get().n, 0);
+  db.exec("UPDATE app_users SET active=1 WHERE id=4");
+  assert.equal((await route.PATCH(reviewRequest({ revisionNumber: 2 }))).status, 409);
+  db.exec("UPDATE progress_entries SET review_status='submitted' WHERE id=18");
+  assert.equal((await route.PATCH(reviewRequest())).status, 409);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM progress_resolutions").get().n, 0);
+  db.close();
+});
+
+test("direct mentor resolution preserves returned student evidence and ordinary pending confirmation", async () => {
+  const { db, route, setActor } = await endpointFixture();
+  assert.equal((await route.POST(submissionRequest())).status, 200);
+  setActor({ id: 2, role: "superadmin", studentId: null });
+  const target = { itemKind: "blocker", expectedVersion: 1 };
+  assert.equal((await route.PATCH(reviewRequest(target))).status, 409);
+  assert.equal((await route.PATCH(reviewRequest({ ...target, action: "request_changes", requestId: "return-student-result-0001" }))).status, 200);
+  // Promotion cannot permit the original submitter to review their own result.
+  db.exec("UPDATE app_users SET role='superadmin',student_id=NULL WHERE id=1");
+  setActor({ id: 1, role: "superadmin", studentId: null });
+  assert.equal((await route.PATCH(reviewRequest({ ...target, expectedVersion: 2 }))).status, 409);
+  setActor({ id: 2, role: "superadmin", studentId: null });
+  assert.equal((await route.PATCH(reviewRequest({ ...target, expectedVersion: 2 }))).status, 200);
+  const data = await (await route.GET(new Request("http://localhost/api/progress-resolutions?studentId=s1"))).json();
+  const item = data.items.find(item => item.itemKind === "blocker");
+  assert.equal(item.status, "resolved"); assert.equal(item.history.length, 3);
+  assert.equal(item.history.find(event => event.action === "submit").attachments.length, 1);
+  assert.equal(item.submissionNote, "设备已归还并完成复测");
+  db.close();
+});
+
+test("direct resolution guards prevent stale source, revoked assignment and audit partial commits", () => {
+  for (const change of ["UPDATE mentor_student_assignments SET can_review=0 WHERE mentor_user_id=4",
+    "UPDATE progress_entries SET current_revision=2 WHERE id=18", "UPDATE students SET active=0 WHERE id='s1'"]) {
+    const db = fixture(); db.exec(change);
+    assert.equal(perform(db, { action: "resolve", actor: 4 }), 0);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM progress_resolution_events").get().n, 0);
+    db.close();
+  }
+  const db = fixture();
+  assert.throws(() => perform(db, { action: "resolve", failAudit: true }), /injected failure/);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM progress_resolutions").get().n, 0);
   db.close();
 });

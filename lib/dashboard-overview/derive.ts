@@ -180,6 +180,7 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
       sourceId: resolution.id,
       action: !returned && resolution.canReview ? "review_resolution" : "view_resolution",
       actionTargetId: resolution.progressEntryId,
+      ...(resolution.itemKind ? { resolutionKind: resolution.itemKind } : {}),
     });
   }
 

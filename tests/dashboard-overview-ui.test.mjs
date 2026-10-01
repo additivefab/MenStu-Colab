@@ -88,8 +88,8 @@ test("overview actions use a fixed route whitelist and reject an arbitrary propo
   assert.equal(overviewActionHref(student({ primaryAction: "follow_up", primaryActionTargetId: "12&next=https://evil.test" })), "/students/student-1#outlook");
   assert.equal(overviewActionLabel(student({ primaryAction: "review_resolution" })), "确认处理结果");
   assert.equal(overviewActionLabel(student({ primaryAction: "view_resolution", primaryReasonCode: "STUDENT_RESOLUTION_CHANGES_REQUESTED" })), "查看待补充");
-  assert.equal(overviewActionHref(student({ primaryAction: "review_resolution", primaryActionTargetId: 18 })), "/students/student-1#progress-18");
-  assert.equal(overviewActionHref(student({ primaryAction: "view_resolution", primaryActionTargetId: "18&next=https://evil.test" })), "/students/student-1#evidence");
+  assert.equal(overviewActionHref(student({ primaryAction: "review_resolution", primaryActionTargetId: 18 })), "/students/student-1#tasks-pending");
+  assert.equal(overviewActionHref(student({ primaryAction: "view_resolution", primaryActionTargetId: "18&next=https://evil.test" })), "/students/student-1#tasks-pending");
 });
 
 test("overview UI keeps old views, accessible drawer, responsive cards, and read-only data flow", async () => {
@@ -135,4 +135,15 @@ test("overview UI keeps old views, accessible drawer, responsive cards, and read
   assert.match(css, /\.group-overview-issue-list article \{[^}]*grid-template-columns:\s*27px/);
   assert.match(css, /--state-color:\s*#925f14/);
   assert.match(css, /--state-color:\s*#656d71/);
+});
+
+
+test("mentor follow-up opens the precise blocker or plan and pending results retain their kind", () => {
+  for (const kind of ["blocker", "next_action"]) {
+    const expected = `/students/student-1#progress-resolution-12-${kind}`;
+    assert.equal(overviewActionHref(student({ primaryAction: kind === "blocker" ? "resolve_blocker" : "follow_up", primaryActionTargetId: 12, issues: [{ sourceType: "paper" }] })), expected);
+    assert.equal(overviewActionHref(student({ primaryAction: "review_resolution", primaryActionTargetId: 12, issues: [{ sourceType: "resolution", resolutionKind: kind }] })), expected);
+  }
+  assert.equal(overviewActionHref(student({ primaryAction: "follow_up", primaryActionTargetId: 12, issues: [{ sourceType: "guidance" }] })), "/students/student-1#guidance-12");
+  assert.equal(overviewActionHref(student({ primaryAction: "follow_up", primaryActionTargetId: 12, issues: [{ sourceType: "milestone" }] })), "/students/student-1#milestone-12");
 });

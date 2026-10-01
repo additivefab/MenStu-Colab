@@ -207,3 +207,20 @@ test("completed cohort lookup batches more than 100 students and sorts completio
     assert.ok(adminData.items.every((item) => item.studentId !== "s2" && item.studentId !== "s3"));
   } finally { app.db.close(); }
 });
+
+
+test("completed tasks preserve a mentor-only confirmation without inventing a student result", async () => {
+  const app = await fixture();
+  try {
+    app.db.exec(`DELETE FROM progress_resolution_events WHERE resolution_id=20;
+      UPDATE progress_resolutions SET version=1,submission_note='',submitted_by_user_id=NULL,submitted_at=NULL,reviewer_note='导师已核对图表与修改稿' WHERE id=20;
+      INSERT INTO progress_resolution_events(resolution_id,actor_user_id,action,from_status,to_status,version,note,request_id,request_hash)
+        VALUES(20,2,'confirm','open','resolved',1,'导师已核对图表与修改稿','direct-confirm-20','hash');`);
+    const data = await (await app.get()).json();
+    const item = data.items.find(item => item.progressEntryId === 20);
+    assert.equal(item.status, "resolved"); assert.equal(item.submittedAt, null); assert.equal(item.submissionNote, "");
+    assert.equal(item.reviewerNote, "导师已核对图表与修改稿");
+    assert.equal(item.history.length, 1); assert.equal(item.history[0].action, "confirm");
+    assert.equal(item.history[0].actorName, "确认管理员"); assert.equal(item.history[0].note, item.reviewerNote);
+  } finally { app.db.close(); }
+});

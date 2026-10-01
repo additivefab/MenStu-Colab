@@ -36,8 +36,16 @@ export function updateResolutionSql(guard: string) {
     resolved_at = CASE WHEN ? = 'resolved' THEN CURRENT_TIMESTAMP ELSE NULL END,
     last_request_id = ?, updated_at = CURRENT_TIMESTAMP
     WHERE progress_entry_id = ? AND revision_number = ? AND item_kind = ?
-      AND version = ? AND status = ? AND (? = 'submit' OR submitted_by_user_id != ?)
+      AND version = ? AND status = ? AND (? = 'submit' OR submitted_by_user_id IS NOT ?)
       AND ${guard} RETURNING id`;
+}
+export function insertConfirmedResolutionSql(guard: string) {
+  return `INSERT INTO progress_resolutions
+    (student_id, progress_entry_id, revision_number, item_kind, source_title, source_text, source_due_date,
+      track_type, status, version, reviewer_note, resolved_at, last_request_id)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'resolved', 1, ?, CURRENT_TIMESTAMP, ?
+    WHERE ${guard}
+    ON CONFLICT(progress_entry_id, revision_number, item_kind) DO NOTHING RETURNING id`;
 }
 export const insertResolutionEventSql = `INSERT INTO progress_resolution_events
   (resolution_id, actor_user_id, action, from_status, to_status, version, note, request_id, request_hash)

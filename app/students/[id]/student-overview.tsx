@@ -316,6 +316,7 @@ function DetailBlock({ label, value }: { label: string; value: string }) {
 export default function StudentOverview({ studentId }: { studentId: string }) {
   const [tab, setTab] = useState<"progress" | "guidance" | "research" | "tasks">("progress");
   const [taskFilterRequest, setTaskFilterRequest] = useState<{ filter: "open" | "pending" | "completed"; key: number }>();
+  const [taskOpenRequest, setTaskOpenRequest] = useState<{ progressEntryId: number; itemKind: "blocker" | "next_action"; key: number }>();
   const [progressFilter, setProgressFilter] = useState<"pending" | "all" | "ai" | "returned" | "results">("pending");
   const [pendingResultEntryIds, setPendingResultEntryIds] = useState<number[]>([]);
   const [resultFilterRequest, setResultFilterRequest] = useState<{ filter: "pending"; key: number }>();
@@ -658,12 +659,21 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     function followHash() {
       const hash = window.location.hash.slice(1);
       if (!hash) return;
+      const resolutionMatch = /^progress-resolution-(\d+)-(blocker|next_action)$/.exec(hash);
+      if (resolutionMatch) {
+        setTab("tasks");
+        setTaskFilterRequest(undefined);
+        setTaskOpenRequest({ progressEntryId: Number(resolutionMatch[1]), itemKind: resolutionMatch[2] as "blocker" | "next_action", key: Date.now() });
+        setFocusTarget("");
+        return;
+      }
+      setTaskOpenRequest(undefined);
       const match = /^(?:review-progress|progress)-(\d+)$/.exec(hash);
       if (match) {
         setTab("progress"); setProgressFilter("all"); setSelectedId(Number(match[1]));
-      } else if (hash === "tasks" || hash === "tasks-completed") {
+      } else if (hash === "tasks" || hash === "tasks-completed" || hash === "tasks-pending") {
         setTab("tasks");
-        setTaskFilterRequest({ filter: hash === "tasks-completed" ? "completed" : "open", key: Date.now() });
+        setTaskFilterRequest({ filter: hash === "tasks-completed" ? "completed" : hash === "tasks-pending" ? "pending" : "open", key: Date.now() });
       } else if (hash.startsWith("guidance")) {
         setTab("guidance");
       } else if (["papers", "outputs", "proposal", "workflow", "audit", "milestones"].includes(hash) || hash.startsWith("milestone-")) {
@@ -697,11 +707,14 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
 
   function switchTab(next: typeof tab) {
     setTab(next); setFocusTarget("");
+    setTaskOpenRequest(undefined);
+    setTaskFilterRequest(next === "tasks" ? { filter: "open", key: Date.now() } : undefined);
     window.history.replaceState(null, "", `#${next === "progress" ? "evidence" : next === "guidance" ? "guidance" : next === "tasks" ? "tasks" : "papers"}`);
   }
 
   function viewCompletedTasks() {
     setTab("tasks");
+    setTaskOpenRequest(undefined);
     setTaskFilterRequest({ filter: "completed", key: Date.now() });
     setFocusTarget("sw-tasks");
     window.history.replaceState(null, "", "#tasks-completed");
@@ -763,7 +776,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     </section>
 
     <section id="sw-tasks" tabIndex={-1} hidden={tab !== "tasks"} aria-label="任务与结果">
-      {tab === "tasks" ? <ProgressResolutionPanel studentId={studentId} mode="staff" filterRequest={taskFilterRequest} refreshKey={aiRefreshKey} onChanged={load} /> : null}
+      {tab === "tasks" ? <ProgressResolutionPanel studentId={studentId} mode="staff" openRequest={taskOpenRequest} filterRequest={taskFilterRequest} refreshKey={aiRefreshKey} onChanged={load} /> : null}
     </section>
 
     <section id="sw-guidance" tabIndex={-1} hidden={tab !== "guidance"} className="sw-panel" aria-label="指导">
