@@ -56,7 +56,7 @@ export function resolutionTransition(status: ProgressResolutionStatus, action: P
   if (action === "submit" && (status === "open" || status === "changes_requested")) return "pending";
   if (action === "confirm" && status === "pending") return "resolved";
   if (action === "resolve" && (status === "open" || status === "changes_requested")) return "resolved";
-  if (action === "request_changes" && status === "pending") return "changes_requested";
+  if (action === "request_changes" && (status === "open" || status === "pending" || status === "changes_requested")) return "changes_requested";
   if (action === "reopen" && status === "resolved") return "open";
   return null;
 }

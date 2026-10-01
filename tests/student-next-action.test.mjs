@@ -285,3 +285,14 @@ test("a paused paper still shows an already submitted completion result waiting 
   assert.equal(result.primary.destination, "resolution");
   assert.equal(result.primary.waiting, true);
 });
+
+
+test("mentor feedback on a never-submitted plan is actionable for the student", () => {
+  const feedback = "补充对比实验，修改图表标注";
+  const result = deriveStudentNextAction({ ...base, progress: [resolutionProgress], resolutions: [
+    resolutionRow("blocker", "resolved"),
+    resolutionRow("next_action", "changes_requested", { submitted_by_user_id: null, submitted_at: null, reviewer_note: feedback }),
+  ] });
+  assert.equal(result.primary.destination, "resolution"); assert.equal(result.primary.itemKind, "next_action");
+  assert.equal(result.primary.detail, feedback); assert.equal(result.primary.waiting, false);
+});

@@ -9,7 +9,7 @@ import { getProgressFileBucket } from "../../../lib/progress-file-storage";
 import { deleteProgressFilesOrQueue } from "../../../lib/progress-file-cleanup";
 import { loadCompletedProgressResolutionItems, loadCurrentResolutionSources, loadProgressResolutionItems, loadProgressResolutions } from "../../../lib/progress-resolution-service";
 import { resolutionTransition, type ProgressResolutionCommand, type ProgressResolutionKind } from "../../../lib/progress-resolution";
-import { insertResolutionSql, insertConfirmedResolutionSql, updateResolutionSql, insertResolutionEventSql, insertResolutionAuditSql,
+import { insertResolutionSql, insertConfirmedResolutionSql, insertReturnedResolutionSql, updateResolutionSql, insertResolutionEventSql, insertResolutionAuditSql,
   resolutionSourceGuardSql, resolutionStudentAuthoritySql, resolutionReviewerAuthoritySql,
   resolutionUploadGuardSql } from "../../../lib/progress-resolution-sql";
 
@@ -116,7 +116,7 @@ async function readReplay(userId: number, requestId: string, hash: string) {
 }
 function resultMessage(action: ProgressResolutionCommand) {
   return action === "submit" ? "处理结果已提交，等待管理员确认" : action === "confirm" || action === "resolve" ? "已确认完成，该事项提醒已关闭" :
-    action === "request_changes" ? "已退回，请学生补充处理结果" : "事项已重新打开，学生可以继续处理";
+    action === "request_changes" ? "已退回修改，请学生按意见修改后提交结果" : "事项已重新打开，学生可以继续处理";
 }
 async function mutate(request: Request, isSubmission: boolean) {
   if (!assertSameOrigin(request)) return Response.json({ error: "请求来源无效" }, { status: 403 });
@@ -134,7 +134,7 @@ async function mutate(request: Request, isSubmission: boolean) {
   const action = isSubmission ? "submit" : clean(value("action"), 30) as ProgressResolutionCommand;
   if (!isSubmission && !["confirm", "resolve", "request_changes", "reopen"].includes(action)) throw new InputError("操作无效");
   const note = clean(value("note"), 4000);
-  if (action !== "confirm" && !note) throw new InputError(action === "submit" ? "请说明处理结果" : action === "resolve" ? "请填写完成情况与核实依据" : "请填写具体原因");
+  if (action !== "confirm" && !note) throw new InputError(action === "submit" ? "请说明处理结果" : action === "resolve" ? "请填写完成情况与核实依据" : action === "request_changes" ? "请填写具体修改意见" : "请填写具体原因");
   const requestId = clean(value("requestId"), 100);
   if (!/^[A-Za-z0-9_-]{16,100}$/u.test(requestId)) throw new InputError("缺少有效的请求标识，请刷新后重试");
   const parent = await getD1().prepare(`SELECT p.student_id FROM progress_entries p
@@ -163,7 +163,7 @@ async function mutate(request: Request, isSubmission: boolean) {
   if ((row?.version ?? 0) !== expectedVersion || (!isSubmission && row?.submitted_by_user_id === auth.user.id)) return conflict();
   const fromStatus = row?.status ?? "open";
   const nextStatus = resolutionTransition(fromStatus, action);
-  if (!nextStatus || (!row && !isSubmission && action !== "resolve")) return conflict();
+  if (!nextStatus || (!row && !isSubmission && action !== "resolve" && action !== "request_changes")) return conflict();
   const staged = await stageFiles(prepared, studentId, entryId, revisionNumber);
   const sourceGuard = resolutionSourceGuardSql(acceptedTrackProgressSql(1));
   const authority = isSubmission ? resolutionStudentAuthoritySql : resolutionReviewerAuthoritySql;
@@ -172,7 +172,8 @@ async function mutate(request: Request, isSubmission: boolean) {
     ...(isSubmission ? [] : [studentId]), ...staged.map((file) => file.storageKey)];
   const d1 = getD1();
   const eventAction = action === "resolve" ? "confirm" : action;
-  const mutation = !row ? d1.prepare(isSubmission ? insertResolutionSql(guard) : insertConfirmedResolutionSql(guard)).bind(studentId, entryId, revisionNumber,
+  const insertSql = isSubmission ? insertResolutionSql(guard) : action === "request_changes" ? insertReturnedResolutionSql(guard) : insertConfirmedResolutionSql(guard);
+  const mutation = !row ? d1.prepare(insertSql).bind(studentId, entryId, revisionNumber,
     itemKind, source.title, text, itemKind === "next_action" ? source.next_action_due_date || null : null,
     source.track_type, note, ...(isSubmission ? [auth.user.id] : []), requestId, ...guardArgs) : d1.prepare(updateResolutionSql(guard))
     .bind(nextStatus, action, note, action, auth.user.id, action, action, note, nextStatus, requestId,

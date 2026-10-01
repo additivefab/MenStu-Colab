@@ -47,6 +47,14 @@ export function insertConfirmedResolutionSql(guard: string) {
     WHERE ${guard}
     ON CONFLICT(progress_entry_id, revision_number, item_kind) DO NOTHING RETURNING id`;
 }
+export function insertReturnedResolutionSql(guard: string) {
+  return `INSERT INTO progress_resolutions
+    (student_id, progress_entry_id, revision_number, item_kind, source_title, source_text, source_due_date,
+      track_type, status, version, reviewer_note, last_request_id)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'changes_requested', 1, ?, ?
+    WHERE ${guard}
+    ON CONFLICT(progress_entry_id, revision_number, item_kind) DO NOTHING RETURNING id`;
+}
 export const insertResolutionEventSql = `INSERT INTO progress_resolution_events
   (resolution_id, actor_user_id, action, from_status, to_status, version, note, request_id, request_hash)
   SELECT id, ?, ?, ?, status, version, ?, ?, ? FROM progress_resolutions
