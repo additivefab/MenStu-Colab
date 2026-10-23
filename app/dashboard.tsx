@@ -387,6 +387,8 @@ type DashboardData = {
     acceptanceCriteria?: string;
     version?: number;
     progressEntryId?: number;
+    revisionNumber?: number;
+    itemKind?: ProgressResolutionKind;
   }>;
   studentNextAction?: {
     primary: {
@@ -1127,7 +1129,7 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
           {selected.task.type === "guidance_verification" && selected.task.context ? <div className="mentor-decision-fact"><span>原指导内容</span><strong>{selected.task.context}</strong></div> : null}
           {selected.task.type === "guidance_verification" && selected.task.nextAction ? <div className="mentor-decision-fact"><span>下一行动</span><strong>{selected.task.nextAction}</strong></div> : null}
           {selected.task.type === "guidance_verification" ? <div className="mentor-decision-fact"><span>验收标准</span><strong>{selected.task.acceptanceCriteria || "未设置；请进入指导记录补齐并核对"}</strong></div> : null}
-          {selected.task.type === "resolution_verification" ? <ProgressResolutionPanel studentId={selected.task.studentId} entryId={selected.task.progressEntryId} mode="staff" initialFilter="pending" onChanged={onRefresh} onConfirmed={() => selectTaskView("completed")} compact /> : null}
+          {selected.task.type === "resolution_verification" ? <ProgressResolutionPanel studentId={selected.task.studentId} entryId={selected.task.progressEntryId} mode="staff" initialFilter="pending" openRequest={selected.task.progressEntryId && selected.task.itemKind ? { progressEntryId: selected.task.progressEntryId, itemKind: selected.task.itemKind, revisionNumber: selected.task.revisionNumber, key: selected.task.id } : undefined} onChanged={onRefresh} onConfirmed={() => selectTaskView("completed")} compact /> : null}
           {selected.task.type !== "resolution_verification" ? <><div className="mentor-decision-effect"><b>下一步</b><span>{selected.task.type === "proposal_review" ? "打开当前版本，确认、批注或退回修改。" : selected.task.type === "guidance_verification" ? "核对学生的完成说明与验收标准，再作出导师确认。" : selected.task.type === "blocked_milestone" ? "进入学生档案，明确阻塞需要的资源、判断或协作。" : "进入学生档案，重排期限或记录跟进指导。"}</span></div>
           <div className="mentor-detail-actions">{selected.task.type === "proposal_review" ? <a className="primary button-link" href={`/?mentorView=research&researchTab=proposals&proposal=${selected.task.id}`}>进入方案审核</a> : selected.task.type === "guidance_verification" ? <><a className={selected.task.acceptanceCriteria ? "button-link" : "primary button-link"} href={`/students/${encodeURIComponent(selected.task.studentId)}#guidance`}>查看指导记录</a>{selected.task.acceptanceCriteria ? <button className="primary" disabled={workflowBusy === selected.task.id} onClick={() => void verifyGuidance(selected.task)}>{workflowBusy === selected.task.id ? "验收中…" : "确认验收"}</button> : null}</> : <a className="primary button-link" href={`/students/${encodeURIComponent(selected.task.studentId)}#workflow`}>进入学生档案</a>}</div></> : null}
         </article> : null}
@@ -1670,6 +1672,7 @@ function StudentNextAction({ action, student, papers, onPaper, onProject, onMeet
 
   return <section className="student-next-action-page" aria-labelledby="student-view-today-title">
     <header><h1 id="student-view-today-title">下一步行动</h1></header>
+    <div className="student-progress-independent"><p>问题可以继续跟进，新进展照常提交。</p><div><button type="button" onClick={() => onProject()}>记录课题进展</button><button type="button" onClick={() => onPaper()}>记录论文进展</button></div></div>
     <article className={`student-next-action-card ${focus.attention ? "attention" : ""}`}>
       <span>{focus.kicker}</span>
       <strong>{focus.title}</strong>
@@ -1777,7 +1780,7 @@ function StudentQuickProgressComposer({ kind, initialTargetId, student, papers, 
       <details className="quiet-details student-optional-fields">
         <summary>补充信息<span>阻塞、Git 链接{kind === "论文" ? "、稿件编号" : ""}</span></summary>
         <div>
-          <label className="wide">当前阻塞（可选）<textarea name="blocker" rows={2} placeholder="需要导师决策、数据或资源时填写。" /></label>
+          <label className="wide">本次新增问题（可选）<textarea name="blocker" rows={2} placeholder="填写新遇到、需要支持的问题；没有可留空。" /><small>已记录的问题会继续保留，不影响本次提交，无需重复填写。</small></label>
           <label className="wide">私有 GitHub 链接（可选）<input name="gitUrl" type="url" placeholder="https://github.com/…" /></label>
           {kind === "论文" ? <label className="wide">稿件编号 / DOI（可选）<input name="submissionIdentifier" placeholder="投稿后填写稿件号或 DOI" /></label> : null}
         </div>
@@ -2523,7 +2526,7 @@ export function ProgressModal({ students, papers = [], fixedKind, onClose, onSav
       <input name="studentId" type="hidden" value={students[0]?.id ?? ""} />
       <div className="paper-form-section"><h3>1 · 选择论文</h3><label>论文<select value={paperSelection} onChange={(event) => { const value = event.target.value; setPaperSelection(value); setPaperStage(papers.find((paper) => String(paper.id) === value)?.current_stage ?? "planning"); }}>{papers.map((paper) => <option key={paper.id} value={paper.id}>{paper.title}</option>)}<option value="new">＋ 添加论文</option></select></label>{selectedPaper ? <><input type="hidden" name="paperId" value={selectedPaper.id} /><div className="selected-paper-summary"><b>{selectedPaper.paper_type}</b><span>{selectedPaper.target_venue || "目标期刊/会议待定"}</span><em>{paperDeadlineState(selectedPaper.planned_submission_date).label}</em></div><div className="form-row"><label>目标期刊 / 会议<input name="targetVenue" defaultValue={selectedPaper.target_venue} placeholder="待定可留空" /></label><label>修订后的计划投稿日期<input name="plannedSubmissionDate" type="date" defaultValue={selectedPaper.planned_submission_date ?? ""} required /></label></div></> : <div className="form-row"><label>论文题目<input name="paperTitle" required placeholder="可先填写暂定题目" /></label><label>论文类型<select name="paperType" defaultValue="期刊论文">{paperTypes.map((type) => <option key={type}>{type}</option>)}</select></label><label>目标期刊 / 会议（可选）<input name="targetVenue" placeholder="例如：NDT & E International" /></label><label>计划投稿日期<input name="plannedSubmissionDate" type="date" min={minimumDate} required /></label></div>}</div>
       <div className="paper-form-section"><h3>2 · 阶段与版本</h3><label>当前阶段<select name="paperStage" value={paperStage} onChange={(event) => setPaperStage(event.target.value as PaperStage)}>{paperStages.map((stage) => <option key={stage} value={stage}>{paperStageMeta[stage].label}</option>)}</select></label><div className="paper-gate-hint"><b>阶段门</b><span>{paperStageMeta[paperStage].gate}</span></div><div className="form-row"><label>本轮更新标题<input name="title" required placeholder="例如：完成方法与实验章节内审稿" /></label><label>稿件版本<input name="manuscriptVersion" required placeholder="例如：v0.3、内审稿 2、R1" /></label></div><label>本轮已完成<textarea name="summary" required rows={3} placeholder="只写已完成、可检查的章节、实验、修改或投稿动作" /></label><label>文字证据（可选）<textarea name="evidence" rows={2} placeholder="章节页码、图表编号、评审记录；也可以只上传稿件附件" /></label></div>
-      <div className="paper-form-section"><h3>3 · 下一行动</h3><label>下一步<textarea name="nextAction" required rows={2} placeholder="例如：补充厚板数据消融实验并更新图 6" /></label><div className="form-row"><label>行动期限<input name="nextActionDueDate" type="date" min={minimumDate} required /></label><label>稿件编号 / DOI（投稿后可填）<input name="submissionIdentifier" placeholder="Manuscript ID、DOI 或送审编号" /></label></div><label>当前阻塞（可选）<textarea name="blocker" rows={2} placeholder="只写需要导师决策、资源或协作支持的问题；没有可留空" /></label></div>
+      <div className="paper-form-section"><h3>3 · 下一行动</h3><label>下一步<textarea name="nextAction" required rows={2} placeholder="例如：补充厚板数据消融实验并更新图 6" /></label><div className="form-row"><label>行动期限<input name="nextActionDueDate" type="date" min={minimumDate} required /></label><label>稿件编号 / DOI（投稿后可填）<input name="submissionIdentifier" placeholder="Manuscript ID、DOI 或送审编号" /></label></div><label>本次新增问题（可选）<textarea name="blocker" rows={2} placeholder="填写新遇到的问题；已有问题会继续保留，无需重复填写" /><small>未解决问题不影响本次进展提交。</small></label></div>
       <input type="hidden" name="literatureRef" value="" /><input type="hidden" name="gitUrl" value="" />
       <label>稿件与证据附件（可选）<input name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.json,.zip,.png,.jpg,.jpeg,.webp,.tif,.tiff" /><small>建议上传带版本号的稿件、回复信或关键图表；最多 5 个文件，单个不超过 50 MB，总计不超过 80 MB</small></label>
       {formError ? <p className="form-error">{formError}</p> : null}<div className="modal-actions"><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={busy}>{busy ? "正在上传并提交…" : "提交论文进度"}</button></div>

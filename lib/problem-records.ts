@@ -10,6 +10,7 @@ export type ProblemRecord = {
   content: string;
   status: ProblemRecordStatus;
   current: boolean;
+  sourceCurrent?: boolean;
   updatedAt: string | null;
   dueDate: string | null;
   href: string;

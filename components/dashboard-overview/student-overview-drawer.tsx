@@ -9,6 +9,8 @@ export function StudentOverviewDrawer({ student, onClose }: { student: MentorOve
   const drawerRef = useRef<HTMLElement>(null);
   const layerRef = useRef<HTMLDivElement>(null);
   const meta = overviewStateMeta[student.primaryState];
+  const progressIssues = student.issues.filter((issue) => issue.state !== "follow_up");
+  const problems = student.issues.filter((issue) => issue.state === "follow_up");
 
   useEffect(() => {
     const drawer = drawerRef.current;
@@ -60,16 +62,23 @@ export function StudentOverviewDrawer({ student, onClose }: { student: MentorOve
         <button type="button" ref={closeRef} onClick={onClose} aria-label="关闭学生进度摘要">×</button>
       </header>
       <section className={`group-overview-drawer-primary ${student.primaryState}`}>
-        <div><i aria-hidden="true">{meta.icon}</i><span><small>当前主状态</small><strong>{meta.label}</strong></span></div>
+        <div><i aria-hidden="true">{meta.icon}</i><span><small>当前进度状态</small><strong>{meta.label}</strong></span></div>
         <p>{student.primaryReasonLabel}</p>
         <dl><div><dt>下一责任人</dt><dd>{overviewOwnerLabels[student.nextOwner]}</dd></div><div><dt>最早期限</dt><dd>{earliestOverviewDueDate(student) ? overviewDate(earliestOverviewDueDate(student), true) : "暂无硬期限"}</dd></div></dl>
       </section>
 
       <section className="group-overview-drawer-section">
-        <header><div><h3>需关注事项</h3></div><strong>{student.issues.length}</strong></header>
-        <div className="group-overview-issue-list">{student.issues.map((issue, index) => <article className={issue.state} key={`${issue.code}-${issue.sourceType}-${issue.sourceId}-${index}`}>
+        <header><div><h3>进度事项</h3></div><strong>{progressIssues.length}</strong></header>
+        <div className="group-overview-issue-list">{progressIssues.map((issue, index) => <article className={issue.state} key={`${issue.code}-${issue.sourceType}-${issue.sourceId}-${index}`}>
           <i aria-hidden="true">{overviewStateMeta[issue.state].icon}</i><div><strong>{issue.label}</strong><small>{overviewStateMeta[issue.state].label} · {overviewOwnerLabels[issue.owner]}{issue.dueDate ? ` · 期限 ${overviewDate(issue.dueDate, true)}` : issue.occurredAt ? ` · ${overviewDate(issue.occurredAt)}` : ""}</small></div>
         </article>)}</div>
+      </section>
+
+      <section className="group-overview-drawer-section group-overview-problem-section">
+        <header><div><h3>待解决问题</h3><small>独立跟进，不影响继续提交进展</small></div><strong>{problems.length}</strong></header>
+        {problems.length ? <><div className="group-overview-issue-list">{problems.map((issue, index) => <article className="follow_up" key={`${issue.sourceType}-${issue.sourceId}-${index}`}>
+          <i aria-hidden="true">◇</i><div><strong>{issue.label}</strong><small>{issue.dueDate ? `问题跟进日期 ${overviewDate(issue.dueDate, true)}` : "单独记录，持续跟进"}</small></div>
+        </article>)}</div><a className="group-overview-problem-link" href={`/?mentorView=issues&issueStudent=${encodeURIComponent(student.studentId)}`}>查看问题记录 →</a></> : <p className="group-overview-problem-empty">暂无待解决问题</p>}
       </section>
 
       <section className="group-overview-drawer-section">

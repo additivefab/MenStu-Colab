@@ -1,5 +1,6 @@
 import {
   overviewStates,
+  overviewIssueStates,
   type MentorOverviewResponse,
   type OverviewAction,
   type OverviewOwner,
@@ -106,7 +107,8 @@ const sourceTypes = new Set<OverviewSourceType>([
   "profile",
   "resolution",
 ]);
-const states = new Set<OverviewState>(overviewStates);
+const states = new Set(overviewIssueStates);
+const primaryStates = new Set<OverviewState>(overviewStates);
 
 // Normalize snake_case, camelCase, kebab-case, and capitalization before matching.
 // Values are intentionally not scanned: a legitimate title can contain words such as
@@ -274,7 +276,7 @@ function assertStudent(value: unknown, path: string) {
   assertString(value.stage, `${path}.stage`, false);
   assertString(value.currentFocus, `${path}.currentFocus`);
   assertNullableInteger(value.cadenceDays, `${path}.cadenceDays`, 1);
-  assertMember(value.primaryState, states, `${path}.primaryState`);
+  assertMember(value.primaryState, primaryStates, `${path}.primaryState`);
   assertMember(value.primaryReasonCode, reasonCodes, `${path}.primaryReasonCode`);
   assertString(value.primaryReasonLabel, `${path}.primaryReasonLabel`, false);
   assertMember(value.nextOwner, owners, `${path}.nextOwner`);
@@ -298,8 +300,8 @@ function assertStudent(value: unknown, path: string) {
     if (!Object.is(actual, expected)) contractError(`${path}.${key}`, `必须与 ${path}.issues[0] 一致`);
   }
   assertInteger(value.additionalIssueCount, `${path}.additionalIssueCount`);
-  if (value.additionalIssueCount !== value.issues.length - 1) {
-    contractError(`${path}.additionalIssueCount`, "必须等于 issues.length - 1");
+  if (value.additionalIssueCount !== value.issues.filter((issue) => (issue as Record<string, unknown>).state !== "follow_up").length - 1) {
+    contractError(`${path}.additionalIssueCount`, "必须等于进度事项数量 - 1，独立问题另计");
   }
 
   const counters = value.counters;
@@ -309,7 +311,7 @@ function assertStudent(value: unknown, path: string) {
   const expectedCounters = {
     actionableByMentor: value.issues.filter((issue) => (issue as Record<string, unknown>).state === "mentor").length,
     waitingForStudent: value.issues.filter((issue) => (issue as Record<string, unknown>).state === "student").length,
-    blocked: value.issues.filter((issue) => (issue as Record<string, unknown>).code === "MILESTONE_BLOCKED").length,
+    blocked: value.issues.filter((issue) => (issue as Record<string, unknown>).state === "follow_up").length,
     overdue: value.issues.filter((issue) => ["MILESTONE_OVERDUE", "NEXT_ACTION_OVERDUE"].includes(String((issue as Record<string, unknown>).code))).length,
   };
   counterKeys.forEach((key) => {

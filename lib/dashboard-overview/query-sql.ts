@@ -175,7 +175,7 @@ export function milestoneOverviewSql(studentCount: number) {
 
 export function guidanceOverviewSql(studentCount: number) {
   const ids = placeholders(studentCount);
-  return `SELECT id, student_id, mentor_user_id, title, next_action, due_date,
+  return `SELECT id, student_id, mentor_user_id, guidance_type, title, next_action, due_date,
     verification_mode, student_reported_at, created_at, updated_at
   FROM student_guidance_notes
   WHERE student_id IN (${ids}) AND status = 'open'

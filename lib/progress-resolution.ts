@@ -40,6 +40,8 @@ export type ProgressResolutionItem = {
   dueDate: string | null;
   trackType: "paper" | "project";
   current: boolean;
+  /** Whether the source revision is still the entry's latest revision. Problems remain actionable either way. */
+  sourceCurrent?: boolean;
   canReview?: boolean;
   status: ProgressResolutionStatus;
   version: number;

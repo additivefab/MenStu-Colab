@@ -1,10 +1,11 @@
+import type { ProblemRecord } from "../problem-records";
 import type { AppUser } from "../feishu-auth";
 import { activeBlockerText } from "../progress-blocker.ts";
 import { progressResolutionKey, type ProgressResolutionRow } from "../progress-resolution.ts";
 import { canActOnProgressReview, canActOnProposalReview, canVerifyGuidance, filterCurrentAcceptedTracks } from "./authority.ts";
 import { isInCurrentShanghaiWeek } from "./dates.ts";
 import { countOverviewStates, deriveStudentOverview } from "./derive.ts";
-import type { MentorOverviewResponse, MentorOverviewStudent } from "./types.ts";
+import type { MentorOverviewResponse, MentorOverviewStudent, OverviewIssue } from "./types.ts";
 
 export type OverviewStudentRow = {
   id: string;
@@ -82,6 +83,7 @@ export type OverviewMilestoneRow = {
 };
 
 export type OverviewGuidanceRow = {
+  guidance_type?: string;
   id: number;
   student_id: string;
   mentor_user_id: number;
@@ -115,6 +117,7 @@ export type MentorOverviewAssemblyInput = {
   guidance: OverviewGuidanceRow[];
   papers: OverviewPaperRow[];
   resolutions?: ProgressResolutionRow[];
+  problemRecords?: ProblemRecord[];
 };
 
 function earliestAction(rows: OverviewTrackProgressRow[], waits: OverviewGuidanceRow[]) {
@@ -149,7 +152,8 @@ export function assembleMentorOverview(
     const outstanding = input.outstanding.filter((row) => row.student_id === student.id);
     const proposal = input.proposals.find((row) => row.student_id === student.id) ?? null;
     const milestones = input.milestones.filter((row) => row.student_id === student.id);
-    const guidance = input.guidance.filter((row) => row.student_id === student.id);
+    const studentGuidance = input.guidance.filter((row) => row.student_id === student.id);
+    const guidance = studentGuidance.filter((row) => row.guidance_type !== "blocker");
     const paper = input.papers.find((row) => row.student_id === student.id) ?? null;
     const canReview = reviewableIds.has(student.id);
     const tracks = filterCurrentAcceptedTracks(acceptedTracks, outstanding);
@@ -198,8 +202,24 @@ export function assembleMentorOverview(
     const currentAction = earliestAction(openTracks, waitingGuidance);
     const currentMilestone = milestones[0] ?? null;
 
+    const problems: OverviewIssue[] | undefined = input.problemRecords?.filter((record) => (
+      record.studentId === student.id && ["open", "pending", "changes_requested"].includes(record.status)
+    )).map((record) => ({
+      code: "MILESTONE_BLOCKED",
+      state: "follow_up",
+      label: `${record.status === "pending" ? "处理结果待确认" : record.status === "changes_requested" ? "处理结果待补充" : "待解决问题"}：${(record.content || record.title).replace(/\s+/g, " ").slice(0, 240)}`,
+      owner: "coordination",
+      dueDate: record.dueDate,
+      occurredAt: record.updatedAt,
+      sourceType: record.source === "progress" && record.trackType === "paper" ? "paper" : record.source,
+      sourceId: record.id,
+      action: "resolve_blocker",
+      actionTargetId: record.id,
+    }));
+
     const derived = deriveStudentOverview({
       studentId: student.id,
+      problems,
       cadenceDays: student.cadence_days,
       trackingStartedAt: student.tracking_started_at,
       latestSubstantiveAt: latestSubstantive?.confirmed_at ?? null,

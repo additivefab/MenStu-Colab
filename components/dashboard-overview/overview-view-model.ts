@@ -1,4 +1,4 @@
-import { overviewStateMeta, type MentorOverviewStudent, type OverviewState } from "../../lib/dashboard-overview/types.ts";
+import { overviewStateMeta, overviewStates, type MentorOverviewStudent, type OverviewState } from "../../lib/dashboard-overview/types.ts";
 import type { OverviewDegreeFilter } from "./overview-filters";
 
 export type OverviewUrlState = {
@@ -10,7 +10,7 @@ export type OverviewUrlState = {
 export function parseOverviewUrl(value: string): OverviewUrlState {
   const params = new URL(value).searchParams;
   const requestedState = params.get("state");
-  const state = requestedState && Object.prototype.hasOwnProperty.call(overviewStateMeta, requestedState)
+  const state = requestedState && overviewStates.includes(requestedState as OverviewState)
     ? requestedState as OverviewState
     : "all";
   const requestedDegree = params.get("degree");
@@ -37,7 +37,7 @@ export function sortOverviewStudents(left: MentorOverviewStudent, right: MentorO
 
 export function earliestOverviewDueDate(student: Pick<MentorOverviewStudent, "issues">) {
   return student.issues.reduce<string | null>((earliest, issue) => {
-    if (!issue.dueDate) return earliest;
+    if (issue.state === "follow_up" || !issue.dueDate) return earliest;
     return earliest === null || issue.dueDate < earliest ? issue.dueDate : earliest;
   }, null);
 }

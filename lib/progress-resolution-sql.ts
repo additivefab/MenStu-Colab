@@ -1,4 +1,4 @@
-// The source query is supplied by acceptedTrackProgressSql, never by a request.
+// The source query is a server-owned track or independent problem query, never request SQL.
 export function resolutionSourceGuardSql(sourceSql: string) {
   return `EXISTS (SELECT 1 FROM (${sourceSql}) current_source
     JOIN students active_student ON active_student.id = current_source.student_id AND active_student.active = 1

@@ -184,3 +184,14 @@ test("more than 100 students is outside the overview contract", () => {
   const response = responseOf(101);
   assert.throws(() => assertMentorOverviewResponse(response), /total.*不能超过 100/);
 });
+
+test("problem facts are counted independently and cannot become the progress primary state", () => {
+  const response = responseOf(1);
+  const row = response.students[0];
+  row.issues.push({ ...row.issues[0], code: "MILESTONE_BLOCKED", state: "follow_up", label: "待解决问题：等待设备", action: "resolve_blocker" });
+  row.counters.blocked = 1;
+  assert.equal(row.additionalIssueCount, 0);
+  assert.doesNotThrow(() => assertMentorOverviewResponse(response));
+  row.primaryState = "follow_up";
+  assert.throws(() => assertMentorOverviewResponse(response), /primaryState/);
+});

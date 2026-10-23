@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { resolutionTransition, progressResolutionKey } from "../lib/progress-resolution.ts";
 import { progressResolutionSchemaStatements } from "../lib/progress-resolution-schema.ts";
+import { acceptedBlockerSourcesSql } from "../lib/progress-blocker-sources.ts";
 import { acceptedTrackProgressSql } from "../lib/dashboard-overview/query-sql.ts";
 import { insertResolutionSql, insertConfirmedResolutionSql, insertReturnedResolutionSql, updateResolutionSql, insertResolutionEventSql, insertResolutionAuditSql,
   resolutionSourceGuardSql, resolutionStudentAuthoritySql, resolutionReviewerAuthoritySql,
@@ -40,7 +41,7 @@ function perform(db, { version = 0, action = "submit", kind = "blocker", actor =
   assert.ok(next, `invalid transition ${from} ${action}`);
   const submit = action === "submit";
   const authority = submit ? resolutionStudentAuthoritySql : resolutionReviewerAuthoritySql;
-  const guard = `${sourceGuard} AND ${authority} AND ${resolutionUploadGuardSql(files.length)}`;
+  const guard = `${kind === "blocker" ? resolutionSourceGuardSql(acceptedBlockerSourcesSql(1)) : sourceGuard} AND ${authority} AND ${resolutionUploadGuardSql(files.length)}`;
   const guardArgs = ['s1',18,1,actor,'s1',...(submit ? [] : ['s1']),...files];
   db.exec("BEGIN");
   try {
@@ -139,7 +140,7 @@ test("CAS rejects stale updates and concurrent identical requests cannot duplica
   db.close();
 });
 
-for (const change of ["new_progress", "revision", "deleted", "student_disabled", "assignment_revoked"]) {
+for (const change of ["deleted", "student_disabled", "assignment_revoked"]) {
   test(`source/authorization guard rejects ${change} after the page was opened`, () => {
     const db=fixture();perform(db);
     if(change==='new_progress') db.exec(`INSERT INTO progress_entries(id,student_id,kind,title,review_status)
@@ -157,6 +158,42 @@ for (const change of ["new_progress", "revision", "deleted", "student_disabled",
     db.close();
   });
 }
+
+for (const change of ["new_progress", "revision"]) {
+  test(`independent problem guard survives ${change} while the replaced plan guard rejects it`, () => {
+    const db = fixture();
+    perform(db, { kind: "blocker" });
+    perform(db, { kind: "next_action" });
+    if (change === "new_progress") db.exec(`INSERT INTO progress_entries(id,student_id,kind,title,review_status)
+      VALUES(19,'s1','项目','后续进展','submitted');
+      INSERT INTO project_progress_details(progress_entry_id,next_action,next_action_due_date) VALUES(19,'新计划','2026-10-01');
+      INSERT INTO progress_revisions(progress_entry_id,revision_number,snapshot_json,review_status,created_at)
+      VALUES(19,1,'{}','submitted','2026-09-14 01:00:00');`);
+    else db.exec("UPDATE progress_entries SET current_revision=2,review_status='submitted' WHERE id=18");
+    assert.equal(perform(db, { kind: "blocker", version: 1, action: "confirm" }), 1);
+    assert.equal(perform(db, { kind: "next_action", version: 1, action: "confirm" }), 0);
+    assert.equal(perform(db, { kind: "blocker", version: 2, action: "reopen" }), 1);
+    assert.deepEqual(db.prepare("SELECT item_kind,status FROM progress_resolutions ORDER BY item_kind").all().map(row => ({ ...row })),
+      [{ item_kind: "blocker", status: "open" }, { item_kind: "next_action", status: "pending" }]);
+    db.close();
+  });
+}
+
+test("independent problem sources preserve revision snapshots and never borrow newer details for an old revision", () => {
+  const db = fixture();
+  const read = () => db.prepare(acceptedBlockerSourcesSql(1)).all("s1");
+  const snapshot = { title: "原始问题说明", project: { blocker: "旧版本缺少设备" } };
+  db.prepare("UPDATE progress_revisions SET snapshot_json=? WHERE progress_entry_id=18").run(JSON.stringify(snapshot));
+  db.exec(`UPDATE progress_entries SET current_revision=2,title='新修订标题',review_status='submitted' WHERE id=18;
+    UPDATE project_progress_details SET blocker='新修订的数据问题' WHERE progress_entry_id=18;
+    INSERT INTO progress_revisions(progress_entry_id,revision_number,snapshot_json,review_status,created_at)
+      VALUES(18,2,'{"title":"新修订标题","project":{"blocker":"新修订的数据问题"}}','submitted','2026-09-15 01:00:00');`);
+  assert.deepEqual(read().map(row => [row.current_revision,row.title,row.blocker,row.source_current]),
+    [[1,"原始问题说明","旧版本缺少设备",0]]);
+  db.exec("UPDATE progress_revisions SET snapshot_json='{}' WHERE progress_entry_id=18 AND revision_number=1");
+  assert.deepEqual(read(), [], "an unrecoverable historical source must never acquire the newer revision's problem");
+  db.close();
+});
 
 test("D1-style batch rollback preserves upload lease and cannot partially resolve an item", () => {
   const db=fixture();
@@ -219,6 +256,7 @@ async function endpointFixture() {
   const common={
     database:{getD1:()=>d1,ensureDatabase:async()=>{}},
     "query-sql":{acceptedTrackProgressSql},
+    "progress-blocker-sources":{acceptedBlockerSourcesSql},
     "progress-blocker":blocker,"progress-resolution":resolution,"progress-resolution-sql":sql,
     "progress-evidence":evidence,"progress-attachments":attachment,
     "progress-file-storage":{getProgressFileBucket:()=>({
@@ -281,7 +319,7 @@ test("real endpoint contract uploads evidence, replays safely, confirms and down
   assert.equal(objects.size,1);db.close();
 });
 
-test("real endpoint returns stale history read-only and blocks stale submissions and cross-origin mutations", async()=>{
+test("real endpoint keeps old pending problems actionable after new progress and blocks cross-origin mutations", async()=>{
   const {db,route,setActor}=await endpointFixture();
   assert.equal((await route.POST(submissionRequest({withFile:false}))).status,200);
   db.exec(`INSERT INTO progress_entries(id,student_id,kind,title,review_status) VALUES(19,'s1','项目','最新记录','submitted');
@@ -289,11 +327,52 @@ test("real endpoint returns stale history read-only and blocks stale submissions
     INSERT INTO progress_revisions(progress_entry_id,revision_number,snapshot_json,review_status,created_at)
       VALUES(19,1,'{}','submitted','2026-09-14 01:00:00');`);
   const data=await(await route.GET(new Request("http://localhost/api/progress-resolutions?studentId=s1&entryId=18"))).json();
-  assert.equal(data.items.length,1);assert.equal(data.items[0].current,false);assert.equal(data.items[0].history.length,1);
+  assert.equal(data.items.length,1);assert.equal(data.items[0].current,true);assert.equal(data.items[0].history.length,1);
   assert.equal((await route.POST(submissionRequest({version:1,requestId:"request-stale-source-0001",withFile:false}))).status,409);
   setActor({id:2,role:"superadmin",studentId:null});
   assert.equal((await route.PATCH(new Request("http://localhost/api/progress-resolutions",{method:"PATCH",headers:{Origin:"https://another.example"},body:"{}"}))).status,403);
-  assert.equal(db.prepare("SELECT COUNT(*) n FROM progress_resolution_events").get().n,1);db.close();
+  assert.equal((await route.PATCH(reviewRequest({ itemKind:"blocker", expectedVersion:1, action:"confirm", requestId:"old-problem-confirm-0001" }))).status,200);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM progress_resolution_events").get().n,2);db.close();
+});
+
+test("unprocessed old problems remain open and can be resolved after a newer entry is submitted", async () => {
+  const { db, route, setActor } = await endpointFixture();
+  db.exec(`INSERT INTO progress_entries(id,student_id,kind,title,review_status) VALUES(19,'s1','项目','新进展','submitted');
+    INSERT INTO project_progress_details(progress_entry_id,next_action,next_action_due_date,blocker)
+      VALUES(19,'新计划','2026-10-01','尚未确认的新问题');
+    INSERT INTO progress_revisions(progress_entry_id,revision_number,snapshot_json,review_status,created_at)
+      VALUES(19,1,'{"project":{"blocker":"尚未确认的新问题"}}','submitted','2026-09-14 01:00:00');`);
+  const data = await (await route.GET(new Request("http://localhost/api/progress-resolutions?studentId=s1"))).json();
+  assert.deepEqual(data.items.map(item => [item.progressEntryId,item.itemKind,item.status,item.current,item.version]),
+    [[18,"blocker","open",true,0]]);
+  assert.equal((await route.POST(submissionRequest({ withFile: false }))).status, 200);
+  setActor({ id: 2, role: "superadmin", studentId: null });
+  assert.equal((await route.PATCH(reviewRequest({ itemKind: "blocker", action: "confirm", expectedVersion: 1 }))).status, 200);
+  assert.equal(db.prepare("SELECT review_status FROM progress_entries WHERE id=19").get().review_status, "submitted");
+  assert.equal(db.prepare("SELECT status FROM progress_resolutions WHERE progress_entry_id=18").get().status, "resolved");
+  db.close();
+});
+
+test("old revision problems remain actionable using original snapshot text and keep their audit after a new revision", async () => {
+  const { db, route, setActor } = await endpointFixture();
+  db.prepare("UPDATE progress_revisions SET snapshot_json=? WHERE progress_entry_id=18").run(JSON.stringify({ title: "第一版记录", project: { blocker: "第一版设备问题" } }));
+  db.exec(`UPDATE progress_entries SET current_revision=2,title='第二版记录',review_status='submitted' WHERE id=18;
+    UPDATE project_progress_details SET blocker='第二版的新问题' WHERE progress_entry_id=18;
+    INSERT INTO progress_revisions(progress_entry_id,revision_number,snapshot_json,review_status,created_at)
+      VALUES(18,2,'{"title":"第二版记录","project":{"blocker":"第二版的新问题"}}','submitted','2026-09-15 01:00:00');`);
+  const data = await (await route.GET(new Request("http://localhost/api/progress-resolutions?studentId=s1"))).json();
+  assert.equal(data.items.length, 1);
+  assert.deepEqual([data.items[0].revisionNumber,data.items[0].title,data.items[0].text,data.items[0].current,data.items[0].sourceCurrent],
+    [1,"第一版记录","第一版设备问题",true,false]);
+  assert.equal((await route.POST(submissionRequest({ withFile: false }))).status, 200);
+  setActor({ id: 2, role: "superadmin", studentId: null });
+  assert.equal((await route.PATCH(reviewRequest({ itemKind: "blocker", action: "confirm", expectedVersion: 1 }))).status, 200);
+  assert.equal((await route.PATCH(reviewRequest({ itemKind: "blocker", action: "reopen", expectedVersion: 2, requestId: "reopen-revised-problem-0001" }))).status, 200);
+  const stored = db.prepare("SELECT revision_number,source_title,source_text,status FROM progress_resolutions").get();
+  assert.deepEqual({ ...stored }, { revision_number: 1, source_title: "第一版记录", source_text: "第一版设备问题", status: "open" });
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM progress_resolution_events").get().n, 3);
+  assert.equal(db.prepare("SELECT blocker FROM project_progress_details WHERE progress_entry_id=18").get().blocker, "第二版的新问题");
+  db.close();
 });
 
 

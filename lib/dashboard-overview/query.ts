@@ -1,6 +1,7 @@
 import { getStudentScope, scopeSql } from "../authorization";
 import { getD1 } from "../database";
 import type { AppUser } from "../feishu-auth";
+import { loadProblemRecords } from "../problem-records-service";
 import { loadProgressResolutions } from "../progress-resolution-service";
 import { assembleMentorOverview } from "./assemble";
 import {
@@ -92,6 +93,7 @@ type MilestoneRow = {
 };
 
 type GuidanceRow = {
+  guidance_type: string;
   id: number;
   student_id: string;
   mentor_user_id: number;
@@ -145,7 +147,7 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
     };
   }
 
-  const [reviewableResult, substantiveResult, trackResult, submittedResult, outstandingResult, proposalResult, milestoneResult, guidanceResult, paperResult, resolutions] = await Promise.all([
+  const [reviewableResult, substantiveResult, trackResult, submittedResult, outstandingResult, proposalResult, milestoneResult, guidanceResult, paperResult, resolutions, problemRecords] = await Promise.all([
     viewer.role === "superadmin"
       ? Promise.resolve({ results: studentIds
         .filter((studentId) => studentId !== viewer.studentId)
@@ -161,6 +163,9 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
     d1.prepare(guidanceOverviewSql(studentIds.length)).bind(...studentIds).all<GuidanceRow>(),
     d1.prepare(paperPositionSql(studentIds.length)).bind(...studentIds).all<PaperRow>(),
     loadProgressResolutions(studentIds),
+    loadProblemRecords(d1, baseStudents.map((student) => ({
+      id: student.id, name: student.display_name, stage: student.stage, canRecord: false,
+    }))),
   ]);
   const reviewableRows = reviewableResult.results as Array<{ student_id: string }>;
   const substantiveRows = substantiveResult.results as SubstantiveRow[];
@@ -185,5 +190,6 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
     guidance: guidanceRows,
     papers: paperRows,
     resolutions,
+    problemRecords,
   }, viewer, now);
 }

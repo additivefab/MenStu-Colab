@@ -213,10 +213,10 @@ test("a blocker never borrows the separate next-action deadline", () => {
   }];
   const response = assembleMentorOverview(input, admin, NOW);
   const row = response.students[0];
-  assert.equal(row.primaryState, "follow_up");
-  assert.equal(overviewActionLabel(row), "查看问题记录");
-  assert.equal(overviewActionHref(row), "/?mentorView=issues&issueStudent=student-1");
-  assert.equal(row.issues[0].dueDate, null);
+  assert.equal(row.primaryState, "on_track");
+  assert.equal(overviewActionLabel(row), "查看进展");
+  assert.equal(overviewActionHref(row), "/students/student-1#progress-71");
+  assert.equal(row.issues.find((issue) => issue.state === "follow_up")?.dueDate, null);
   assert.equal(row.issues.find((issue) => issue.code === "ON_TRACK_NEXT_ACTION")?.dueDate, "2026-09-02");
   assert.equal(row.nextActionDueDate, "2026-09-02");
 });
@@ -260,8 +260,8 @@ test("reported outcomes replace only their original reminders with one review pe
   assert.equal(row.primaryState, "mentor");
   assert.equal(row.primaryAction, "review_resolution");
   assert.equal(overviewActionLabel(row), "确认处理结果");
-  assert.equal(overviewActionHref(row), "/students/student-1#progress-resolution-18-blocker");
-  assert.deepEqual(row.counters, { actionableByMentor: 2, waitingForStudent: 0, blocked: 0, overdue: 0 });
+  assert.equal(overviewActionHref(row), "/students/student-1#progress-resolution-18-next_action");
+  assert.deepEqual(row.counters, { actionableByMentor: 1, waitingForStudent: 0, blocked: 1, overdue: 0 });
   assert.equal(row.issues.length, 2);
   assert.equal(row.nextAction, null);
   assert.equal(row.nextActionDueDate, null);
@@ -293,17 +293,16 @@ test("returned outcomes wait for student supplementation and reopening restores 
   });
   const returned = assembleMentorOverview(input, admin, NOW);
   const row = returned.students[0];
-  assert.equal(row.primaryState, "student");
-  assert.equal(row.primaryReasonCode, "STUDENT_RESOLUTION_CHANGES_REQUESTED");
-  assert.equal(overviewActionLabel(row), "查看待补充");
-  assert.equal(overviewActionHref(row), "/students/student-1#progress-resolution-18-blocker");
-  assert.deepEqual(row.counters, { actionableByMentor: 0, waitingForStudent: 1, blocked: 0, overdue: 0 });
+  assert.equal(row.primaryState, "on_track");
+  assert.equal(row.issues.find((issue) => issue.state === "follow_up")?.code, "STUDENT_RESOLUTION_CHANGES_REQUESTED");
+  assert.equal(row.issues.find((issue) => issue.state === "follow_up")?.action, "view_resolution");
+  assert.deepEqual(row.counters, { actionableByMentor: 0, waitingForStudent: 0, blocked: 1, overdue: 0 });
   assert.doesNotThrow(() => assertMentorOverviewResponse(returned));
 
   input.resolutions[0].status = "open";
   const reopened = assembleMentorOverview(input, admin, NOW).students[0];
-  assert.equal(reopened.primaryState, "follow_up");
-  assert.equal(reopened.primaryAction, "resolve_blocker");
+  assert.equal(reopened.primaryState, "on_track");
+  assert.equal(reopened.issues.find((issue) => issue.state === "follow_up")?.action, "resolve_blocker");
   assert.equal(reopened.counters.blocked, 1);
 });
 
@@ -331,10 +330,12 @@ test("view-only and self-submitted outcomes remain visible without becoming exec
       acceptedTracks: [currentTrack({ next_action: "" })], ...scenario,
     }), admin, NOW);
     const row = response.students[0];
-    assert.equal(row.primaryAction, "view_resolution");
-    assert.match(row.primaryReasonLabel, /等待导师确认处理结果/);
-    assert.equal(row.nextOwner, "mentor");
-    assert.deepEqual(row.counters, { actionableByMentor: 0, waitingForStudent: 0, blocked: 0, overdue: 0 });
+    assert.equal(row.primaryState, "on_track");
+    const problem = row.issues.find((issue) => issue.state === "follow_up");
+    assert.equal(problem?.action, "view_resolution");
+    assert.match(problem?.label, /等待导师确认处理结果/);
+    assert.equal(problem?.owner, "mentor");
+    assert.deepEqual(row.counters, { actionableByMentor: 0, waitingForStudent: 0, blocked: 1, overdue: 0 });
     assert.doesNotThrow(() => assertMentorOverviewResponse(response));
   }
 });
@@ -346,6 +347,75 @@ test("closing a progress difficulty never closes a separate blocked research mil
     milestones: [{ id: 9, student_id: "student-1", proposal_title: "研究方案", title: "设备验证", target_date: null, status: "blocked", sort_order: 1, updated_at: NOW }],
   }), admin, NOW);
   assert.equal(response.students[0].counters.blocked, 2);
-  assert.deepEqual(new Set(response.students[0].issues.map((issue) => issue.sourceType)), new Set(["paper", "milestone"]));
+  assert.deepEqual(new Set(response.students[0].issues.filter((issue) => issue.state === "follow_up").map((issue) => issue.sourceType)), new Set(["paper", "milestone"]));
+  assert.doesNotThrow(() => assertMentorOverviewResponse(response));
+});
+
+function problemRecord(overrides = {}) {
+  return {
+    id: "progress:18:2:blocker", studentId: "student-1", studentName: "学生1",
+    source: "progress", trackType: "project", title: "旧进展的问题", content: "设备仍未到位",
+    status: "open", current: true, updatedAt: NOW, dueDate: null,
+    href: "/students/student-1#progress-resolution-18-blocker-revision-2", ...overrides,
+  };
+}
+
+test("canonical unresolved problems survive new progress without duplicating current blocker facts", () => {
+  const input = inputWithResolution({
+    acceptedTracks: [currentTrack({ next_action: "", blocker: "设备仍未到位" })],
+    resolutions: [], problemRecords: [problemRecord()],
+  });
+  const confirmed = assembleMentorOverview(input, admin, NOW);
+  assert.equal(confirmed.students[0].primaryState, "on_track");
+  assert.equal(confirmed.students[0].counters.blocked, 1);
+  assert.equal(confirmed.students[0].additionalIssueCount, 0);
+  assert.doesNotThrow(() => assertMentorOverviewResponse(confirmed));
+
+  input.outstanding = [pending({ track_type: "project", track_key: "project", current_revision_created_at: NOW })];
+  const newSubmission = assembleMentorOverview(input, admin, NOW);
+  assert.equal(newSubmission.students[0].primaryState, "mentor");
+  assert.equal(newSubmission.students[0].primaryReasonCode, "MENTOR_PROGRESS_REVIEW");
+  assert.equal(newSubmission.students[0].counters.blocked, 1);
+  assert.equal(newSubmission.students[0].counters.actionableByMentor, 1);
+  assert.equal(newSubmission.students[0].issues.filter((issue) => issue.state === "follow_up").length, 1);
+  assert.doesNotThrow(() => assertMentorOverviewResponse(newSubmission));
+});
+
+test("problem follow-up dates, reported outcomes, and requested supplements remain separate from progress", () => {
+  for (const status of ["open", "pending", "changes_requested"]) {
+    const input = inputWithResolution({
+      acceptedTracks: [currentTrack({ next_action: "推进下一轮实验", next_action_due_date: "2026-09-02" })],
+      problemRecords: [problemRecord({ status, dueDate: "2026-08-01" })],
+      guidance: [{ id: 41, student_id: "student-1", mentor_user_id: 10, guidance_type: "blocker", title: "记录设备问题", next_action: "等待设备维修", due_date: "2026-08-01", verification_mode: "mentor_verify", student_reported_at: status === "pending" ? NOW : null, created_at: NOW, updated_at: NOW }],
+    });
+    const response = assembleMentorOverview(input, admin, NOW);
+    const row = response.students[0];
+    assert.equal(row.primaryState, "on_track", status);
+    assert.equal(row.nextAction, "推进下一轮实验", status);
+    assert.equal(row.nextActionDueDate, "2026-09-02", status);
+    assert.deepEqual(row.counters, { actionableByMentor: 0, waitingForStudent: 0, blocked: 1, overdue: 0 }, status);
+    assert.doesNotThrow(() => assertMentorOverviewResponse(response));
+  }
+});
+
+test("resolved and historical problems leave progress unchanged and are not active problem counts", () => {
+  const input = inputWithResolution({
+    acceptedTracks: [currentTrack({ next_action: "" })],
+    problemRecords: [problemRecord({ status: "resolved" }), problemRecord({ id: "progress:17:1:blocker", status: "historical" }), problemRecord({ studentId: "outside-scope" })],
+  });
+  const response = assembleMentorOverview(input, admin, NOW);
+  assert.equal(response.students[0].primaryState, "on_track");
+  assert.equal(response.students[0].counters.blocked, 0);
+  assert.equal(response.students[0].issues.some((issue) => issue.state === "follow_up"), false);
+  assert.doesNotThrow(() => assertMentorOverviewResponse(response));
+});
+
+test("an unconfirmed first submission remains awaiting review even with a separate open problem", () => {
+  const input = { ...inputOf(), reviewableStudentIds: ["student-1"], outstanding: [pending()], problemRecords: [problemRecord()] };
+  const response = assembleMentorOverview(input, admin, NOW);
+  assert.equal(response.students[0].primaryState, "mentor");
+  assert.equal(response.students[0].latestSubstantiveAt, null);
+  assert.equal(response.weeklySubstantiveStudentCount, 0);
+  assert.equal(response.students[0].counters.blocked, 1);
   assert.doesNotThrow(() => assertMentorOverviewResponse(response));
 });

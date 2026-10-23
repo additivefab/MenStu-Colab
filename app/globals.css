@@ -1693,7 +1693,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .group-overview-intro > aside p { margin-top: 2px; font-size: 11px; }
 
 .group-overview-metrics { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 10px; }
-.group-overview-metrics-grid { min-width: 0; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.group-overview-metrics-grid { min-width: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
 .group-overview-metrics-grid button { --state-color: #6f7c83; --state-bg: #f1f3f3; min-width: 0; min-height: 88px; padding: 12px 13px; border: 1px solid #dde2e2; border-radius: 12px; display: grid; grid-template-columns: 29px auto; grid-template-rows: auto auto; align-items: center; column-gap: 10px; background: #fff; text-align: left; box-shadow: 0 2px 10px #20232107; }
 .group-overview-metrics-grid button.intervene, .group-overview-table-row.intervene, .group-overview-mobile-list article.intervene, .group-overview-drawer-primary.intervene, .group-overview-issue-list article.intervene { --state-color: #b64350; --state-bg: #fff0f2; }
 .group-overview-metrics-grid button.mentor, .group-overview-table-row.mentor, .group-overview-mobile-list article.mentor, .group-overview-drawer-primary.mentor, .group-overview-issue-list article.mentor { --state-color: #216da8; --state-bg: #edf6fd; }
@@ -2624,7 +2624,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .workspace-tools > .primary { min-height: 44px; white-space: nowrap; }
 .mentor-group-overview { gap: 16px; }
 .group-overview-metrics { grid-template-columns: minmax(0, 1fr) 156px; gap: 0; padding: 8px; border: 1px solid #e0e5eb; border-radius: 12px; background: #fff; }
-.group-overview-metrics-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
+.group-overview-metrics-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
 .group-overview-metrics-grid button { min-height: 76px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 10px; padding: 12px; border: 1px solid transparent; border-radius: 8px; box-shadow: none; }
 .group-overview-metrics-grid button:last-child { grid-column: auto; }
 .group-overview-metrics-grid button small { font-size: 14px; font-weight: 500; white-space: normal; }
@@ -2789,3 +2789,24 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 .local-login-return { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 10; }
 .local-login-return button { min-height: 44px; padding: 10px 18px; background: #fff; border: 1px solid #b9c4d2; border-radius: 8px; }
+
+/* Progress status and open problems are independent dimensions. */
+.group-overview-problem-link { display: inline-block; width: fit-content; margin-top: 5px; color: #52687a; font-size: 12px; line-height: 1.5; font-weight: 600; text-decoration: none; }
+.group-overview-problem-link:hover { text-decoration: underline; }
+.group-overview-problem-summary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin-top: 9px; padding-top: 9px; border-top: 1px solid #e1e6e6; color: #52687a; font-size: 12px; text-decoration: none; }
+.group-overview-problem-summary span { color: #52687a; font-size: 12px; }
+.group-overview-problem-summary b { font-weight: 650; }
+.group-overview-problem-section > .group-overview-problem-link { margin: 10px 14px; }
+.group-overview-problem-section header small, .group-overview-problem-empty { color: #75808a; font-size: 12px; }
+.group-overview-problem-empty { margin: 0; padding: 0 14px 12px; }
+.student-progress-independent { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px; margin-bottom: 16px; border: 1px solid #dce1df; border-radius: 12px; background: #fff; }
+.student-progress-independent p { margin: 0; color: #6a747a; font-size: 13px; line-height: 1.6; }
+.student-progress-independent > div { display: flex; gap: 8px; }
+.student-progress-independent button { padding: 9px 12px; border: 1px solid #d7ddda; border-radius: 8px; background: #fff; color: #35464e; white-space: nowrap; }
+@media (max-width: 900px) {
+  .group-overview-mobile-actions { display: grid; align-content: center; gap: 6px; padding: 10px; }
+  .group-overview-mobile-actions > a:first-child { padding: 9px 7px; border: 1px solid color-mix(in srgb, var(--state-color) 35%, #dfe3e3); border-radius: 8px; color: var(--state-color); background: var(--state-bg); font-size: 12px; font-weight: 650; text-align: center; text-decoration: none; }
+  .group-overview-mobile-actions .group-overview-problem-link { width: 100%; margin: 0; text-align: center; font-size: 11px; }
+  .student-progress-independent { flex-wrap: wrap; }
+  .student-progress-independent > div { flex-wrap: wrap; }
+}

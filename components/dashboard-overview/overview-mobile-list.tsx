@@ -16,10 +16,10 @@ export function OverviewMobileList({
         <button type="button" onClick={() => onOpen(student.studentId)} data-overview-student={student.studentId} aria-label={`打开 ${student.displayName} 的进度摘要`}>
           <header><span><i aria-hidden="true">{meta.icon}</i>{meta.label}</span><small>{overviewOwnerLabels[student.nextOwner]}</small></header>
           <h3>{student.displayName}<small>{student.grade}级{student.degreeLevel} · {student.stage}</small></h3>
-          <p>{student.primaryReasonLabel}{student.additionalIssueCount ? ` · 另有 ${student.additionalIssueCount} 项` : ""}</p>
+          <p>{student.primaryReasonLabel}{student.additionalIssueCount ? ` · 另有 ${student.additionalIssueCount} 项进度事项` : ""}</p>
           <dl><div><dt>下一步</dt><dd>{overviewNextActionText(student)}{student.nextActionDueDate ? ` · ${overviewDate(student.nextActionDueDate)}` : ""}</dd></div></dl>
         </button>
-        <a href={overviewActionHref(student)}>{overviewActionLabel(student)}</a>
+        <div className="group-overview-mobile-actions"><a href={overviewActionHref(student)}>{overviewActionLabel(student)}</a>{student.counters.blocked > 0 ? <a className="group-overview-problem-link" href={`/?mentorView=issues&issueStudent=${encodeURIComponent(student.studentId)}`}>待解决问题 {student.counters.blocked} 项</a> : null}</div>
       </article>;
     })}
   </div>;

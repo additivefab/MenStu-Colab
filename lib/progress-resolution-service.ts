@@ -1,12 +1,14 @@
 import { getD1 } from "./database";
 import { acceptedTrackProgressSql } from "./dashboard-overview/query-sql";
 import { activeBlockerText } from "./progress-blocker";
-import { progressResolutionKey, type ProgressResolutionRow, type ProgressResolutionItem, type ProgressResolutionKind, type ProgressResolutionHistory } from "./progress-resolution";
+import { acceptedBlockerSourcesSql } from "./progress-blocker-sources";
+import { progressResolutionKey, type ProgressResolutionRow, type ProgressResolutionItem, type ProgressResolutionHistory } from "./progress-resolution";
 
 type StoredResolution = ProgressResolutionRow & { source_title: string; source_text: string; source_due_date: string | null; track_type: "paper" | "project" };
 export type CurrentResolutionSource = {
   id: number; student_id: string; current_revision: number; title: string;
   track_type: "paper" | "project"; next_action: string; next_action_due_date: string; blocker: string;
+  source_current?: number;
 };
 
 export async function loadProgressResolutions(studentIds: string[]): Promise<ProgressResolutionRow[]> {
@@ -20,6 +22,12 @@ export async function loadProgressResolutions(studentIds: string[]): Promise<Pro
 
 export async function loadCurrentResolutionSources(studentId: string): Promise<CurrentResolutionSource[]> {
   return loadCurrentResolutionSourcesForStudents([studentId]);
+}
+
+export async function loadBlockerResolutionSources(studentId: string): Promise<CurrentResolutionSource[]> {
+  return (await getD1().prepare(`SELECT source.*, '' AS next_action, '' AS next_action_due_date
+    FROM (${acceptedBlockerSourcesSql(1)}) source`)
+    .bind(studentId).all<CurrentResolutionSource>()).results;
 }
 
 async function loadCurrentResolutionSourcesForStudents(studentIds: string[]): Promise<CurrentResolutionSource[]> {
@@ -50,11 +58,12 @@ export async function loadCompletedProgressResolutionItems(studentIds: string[])
     AND NOT EXISTS (SELECT 1 FROM progress_deletions d WHERE d.progress_entry_id = p.id)`;
   const [sources, stored, events, attachments] = await Promise.all([
     loadCurrentResolutionSourcesForStudents(studentIds),
-    getD1().prepare(`SELECT pr.*, s.display_name AS student_name FROM progress_resolutions pr
+    getD1().prepare(`SELECT pr.*, s.display_name AS student_name, s.active AS source_active,
+        p.current_revision AS latest_revision FROM progress_resolutions pr
       JOIN progress_entries p ON p.id = pr.progress_entry_id AND p.student_id = pr.student_id
       JOIN students s ON s.id = pr.student_id
       WHERE ${scope} ORDER BY julianday(pr.resolved_at) DESC, pr.id DESC`)
-      .bind(...studentIds).all<StoredResolution & { student_name: string }>(),
+      .bind(...studentIds).all<StoredResolution & { student_name: string; source_active: number; latest_revision: number }>(),
     getD1().prepare(`SELECT e.id, e.resolution_id, e.action, e.note, e.created_at, u.display_name AS actor_name
       FROM progress_resolution_events e
       JOIN progress_resolutions pr ON pr.id = e.resolution_id
@@ -99,7 +108,9 @@ export async function loadCompletedProgressResolutionItems(studentIds: string[])
       studentId: row.student_id, studentName: row.student_name,
       key, progressEntryId: row.progress_entry_id, revisionNumber: row.revision_number, itemKind: row.item_kind,
       title: row.source_title, text: row.source_text, dueDate: row.source_due_date, trackType: row.track_type,
-      current: currentKeys.has(key), canReview: false, status: row.status, version: row.version,
+      current: row.item_kind === "blocker" ? row.source_active === 1 : currentKeys.has(key),
+      sourceCurrent: row.revision_number === row.latest_revision,
+      canReview: false, status: row.status, version: row.version,
       submissionNote: row.submission_note, reviewerNote: row.reviewer_note,
       submittedAt: row.submitted_at, resolvedAt: row.resolved_at, history: historyByResolution.get(row.id) ?? [],
     };
@@ -107,8 +118,9 @@ export async function loadCompletedProgressResolutionItems(studentIds: string[])
 }
 
 export async function loadProgressResolutionItems(studentId: string, entryId?: number): Promise<ProgressResolutionItem[]> {
-  const [sources, stored] = await Promise.all([
+  const [sources, blockers, stored] = await Promise.all([
     loadCurrentResolutionSources(studentId),
+    loadBlockerResolutionSources(studentId),
     loadProgressResolutions([studentId]) as Promise<StoredResolution[]>,
   ]);
   const eventRows = (await getD1().prepare(`SELECT e.id, e.resolution_id, e.action, e.note, e.created_at,
@@ -128,18 +140,20 @@ export async function loadProgressResolutionItems(studentId: string, entryId?: n
     WHERE pr.student_id = ? AND NOT EXISTS (SELECT 1 FROM progress_deletions d WHERE d.progress_entry_id = p.id)
     ORDER BY a.id`).bind(studentId).all<{ id: number; event_id: number; file_name: string; size_bytes: number }>()).results;
   const items = new Map<string, ProgressResolutionItem>();
-  for (const source of sources) {
-    for (const itemKind of ["blocker", "next_action"] as ProgressResolutionKind[]) {
-      const text = itemKind === "blocker" ? activeBlockerText(source.blocker) : source.next_action.trim();
-      if (!text) continue;
-      const key = progressResolutionKey(source.id, source.current_revision, itemKind);
-      items.set(key, {
-        key, progressEntryId: source.id, revisionNumber: source.current_revision, itemKind,
-        title: source.title, text, dueDate: itemKind === "next_action" ? source.next_action_due_date || null : null,
-        trackType: source.track_type, current: true, status: "open", version: 0,
-        submissionNote: "", reviewerNote: "", submittedAt: null, resolvedAt: null, history: [],
-      });
-    }
+  for (const [source, itemKind] of [
+    ...sources.map((source) => [source, "next_action"] as const),
+    ...blockers.map((source) => [source, "blocker"] as const),
+  ]) {
+    const text = itemKind === "blocker" ? activeBlockerText(source.blocker) : source.next_action.trim();
+    if (!text) continue;
+    const key = progressResolutionKey(source.id, source.current_revision, itemKind);
+    items.set(key, {
+      key, progressEntryId: source.id, revisionNumber: source.current_revision, itemKind,
+      title: source.title, text, dueDate: itemKind === "next_action" ? source.next_action_due_date || null : null,
+      trackType: source.track_type, current: true, status: "open", version: 0,
+      sourceCurrent: source.source_current !== 0,
+      submissionNote: "", reviewerNote: "", submittedAt: null, resolvedAt: null, history: [],
+    });
   }
   for (const row of stored) {
     const key = progressResolutionKey(row.progress_entry_id, row.revision_number, row.item_kind);
@@ -149,6 +163,7 @@ export async function loadProgressResolutionItems(studentId: string, entryId?: n
       title: source?.title ?? row.source_title, text: source?.text ?? row.source_text,
       dueDate: source?.dueDate ?? row.source_due_date, trackType: source?.trackType ?? row.track_type,
       current: Boolean(source), status: row.status, version: row.version,
+      sourceCurrent: source?.sourceCurrent ?? false,
       submissionNote: row.submission_note, reviewerNote: row.reviewer_note,
       submittedAt: row.submitted_at, resolvedAt: row.resolved_at,
       history: eventRows.filter((event) => event.resolution_id === row.id).map((event) => ({

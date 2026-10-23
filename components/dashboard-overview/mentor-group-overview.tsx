@@ -154,7 +154,7 @@ export function MentorGroupOverview({ query, onQueryChange, refreshRequest, acti
           <OverviewTable students={filtered} selectedStudentId={selectedStudentId} onOpen={openStudent} />
           <OverviewMobileList students={filtered} onOpen={openStudent} />
         </>}
-    <details className="quiet-details group-overview-help"><summary>状态说明</summary><p>每人只显示当前最需处理的状态。进展统计仅包含导师确认的实质性进展，日期按北京时间计算。</p></details>
+    <details className="quiet-details group-overview-help"><summary>状态说明</summary><p>进度与问题独立跟踪。学生可继续提交下一次进展，待解决问题单独保留；新提交显示待审核，导师确认后才计入可信进展。日期按北京时间计算。</p></details>
     {active && selected ? <StudentOverviewDrawer student={selected} onClose={closeDrawer} /> : null}
   </section>;
 }

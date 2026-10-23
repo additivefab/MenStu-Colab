@@ -29,7 +29,7 @@ test("overview URL state accepts only supported filters and remains recoverable"
     degree: "all",
     studentId: null,
   });
-  assert.equal(parseOverviewUrl("https://example.test/?state=follow_up").state, "follow_up");
+  assert.equal(parseOverviewUrl("https://example.test/?state=follow_up").state, "all");
 });
 
 test("overview sorting is stable by state, earliest deadline, oldest trusted progress, then identity", () => {
@@ -39,15 +39,15 @@ test("overview sorting is stable by state, earliest deadline, oldest trusted pro
     student({ studentId: "b", displayName: "乙", primaryState: "mentor", issues: issue("2026-08-27") }),
     student({ studentId: "a", displayName: "甲", primaryState: "intervene", issues: issue("2026-08-24") }),
     student({ studentId: "c", displayName: "丙", primaryState: "mentor", issues: issue("2026-08-26") }),
-    student({ studentId: "g", displayName: "庚", primaryState: "follow_up", issues: issue(null) }),
+    student({ studentId: "g", displayName: "庚", primaryState: "on_track", issues: [{ state: "follow_up", dueDate: "2026-08-01" }] }),
     student({ studentId: "f", displayName: "己", primaryState: "on_track", latestSubstantiveAt: "2026-08-21T00:00:00Z" }),
     student({ studentId: "e", displayName: "戊", primaryState: "on_track", latestSubstantiveAt: null }),
   ];
-  assert.deepEqual(rows.sort(sortOverviewStudents).map((row) => row.studentId), ["a", "c", "b", "g", "d", "e", "f"]);
+  assert.deepEqual(rows.sort(sortOverviewStudents).map((row) => row.studentId), ["a", "c", "b", "d", "e", "g", "f"]);
 });
 
-test("earliest deadline is the minimum across all issues rather than the primary issue date", () => {
-  const row = student({ issues: [{ dueDate: "2026-09-30" }, { dueDate: null }, { dueDate: "2026-08-20" }] });
+test("earliest progress deadline ignores separate problem follow-up dates", () => {
+  const row = student({ issues: [{ dueDate: "2026-09-30" }, { dueDate: null }, { dueDate: "2026-08-20" }, { state: "follow_up", dueDate: "2026-08-01" }] });
   assert.equal(earliestOverviewDueDate(row), "2026-08-20");
 });
 

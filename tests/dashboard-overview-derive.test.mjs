@@ -38,7 +38,7 @@ test("mentor review outranks a routine blocked milestone while keeping its follo
 
   assert.equal(result.primaryState, "mentor");
   assert.equal(result.primaryReasonCode, "MENTOR_PROGRESS_REVIEW");
-  assert.equal(result.additionalIssueCount, 1);
+  assert.equal(result.additionalIssueCount, 0);
   assert.equal(result.issues.find((issue) => issue.code === "MILESTONE_BLOCKED")?.state, "follow_up");
   assert.equal(result.counters.actionableByMentor, 1);
 });
@@ -49,9 +49,10 @@ test("routine progress difficulties and blocked milestones remain neutral follow
     milestones: [{ id: 9, title: "设备验证", targetDate: "2026-08-28", status: "blocked", updatedAt: "2026-08-22T00:00:00Z" }],
   }), now);
 
-  assert.equal(result.primaryState, "follow_up");
-  assert.equal(result.primaryAction, "resolve_blocker");
-  assert.equal(result.issues.every((issue) => issue.state === "follow_up"), true);
+  assert.equal(result.primaryState, "on_track");
+  assert.equal(result.primaryAction, "view_student");
+  assert.equal(result.issues.filter((issue) => issue.state === "follow_up").length, 2);
+  assert.equal(result.additionalIssueCount, 0);
   assert.deepEqual(result.counters, { actionableByMentor: 0, waitingForStudent: 0, blocked: 2, overdue: 0 });
 });
 
@@ -87,7 +88,7 @@ test("routine follow-up does not suppress a stale student update or manufacture 
     blockers: [{ id: 21, label: "等待设备", dueDate: null, occurredAt: "2026-08-22T00:00:00Z", sourceType: "progress" }],
   }), now);
 
-  assert.equal(result.primaryState, "follow_up");
+  assert.equal(result.primaryState, "student");
   assert.equal(result.issues.some((issue) => issue.code === "STUDENT_CADENCE_OVERDUE"), true);
   assert.deepEqual(result.counters, { actionableByMentor: 0, waitingForStudent: 1, blocked: 1, overdue: 0 });
 });

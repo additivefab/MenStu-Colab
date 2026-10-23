@@ -168,6 +168,8 @@ type WorkflowTask = {
   acceptanceCriteria?: string;
   version?: number;
   progressEntryId?: number;
+  revisionNumber?: number;
+  itemKind?: "blocker" | "next_action";
 };
 
 function privateDashboardResponse(payload: Record<string, unknown>) {
@@ -687,16 +689,21 @@ export async function GET(request: Request) {
     const workflowTasks: WorkflowTask[] = [];
     for (let offset = 0; offset < studentIds.length; offset += 100) {
       const chunk = studentIds.slice(offset, offset + 100);
+      const chunkStudentIds = new Set(chunk);
       const currentTracks = await d1.prepare(acceptedTrackProgressSql(chunk.length)).bind(...chunk)
         .all<{ id: number; student_id: string; current_revision: number }>();
+      // Rows are already scoped to active students and exclude deleted sources.
+      // Problems remain reviewable after newer progress; plans still follow the current track.
       for (const item of resolutionRows.filter((row) => row.status === "pending"
+        && chunkStudentIds.has(row.student_id)
         && reviewableStudentIds.has(row.student_id) && row.submitted_by_user_id !== viewer.id
-        && currentTracks.results.some((track) => track.id === row.progress_entry_id && track.current_revision === row.revision_number))) {
+        && (row.item_kind === "blocker" || currentTracks.results.some((track) => track.id === row.progress_entry_id && track.current_revision === row.revision_number)))) {
         workflowTasks.push({
           id: item.id, type: "resolution_verification", studentId: item.student_id,
           studentName: nameById.get(item.student_id) ?? "学生",
           title: item.item_kind === "blocker" ? "确认困难处理结果" : "确认计划完成结果",
           detail: item.submission_note, targetDate: null, progressEntryId: item.progress_entry_id,
+          revisionNumber: item.revision_number, itemKind: item.item_kind,
         });
       }
     }

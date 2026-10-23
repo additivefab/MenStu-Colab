@@ -25,7 +25,7 @@ export function findProgressResolutionTarget<T extends Pick<ProgressResolutionIt
 ): T | undefined {
   const matches = items.filter((item) => item.progressEntryId === target.progressEntryId && item.itemKind === target.itemKind);
   if (target.revisionNumber !== undefined) return matches.find((item) => item.revisionNumber === target.revisionNumber);
-  return matches.find((item) => item.current)
+  return matches.filter((item) => item.current).sort((left, right) => right.revisionNumber - left.revisionNumber)[0]
     ?? matches.sort((left, right) => right.revisionNumber - left.revisionNumber)[0];
 }
 

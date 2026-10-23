@@ -101,6 +101,7 @@ function database() {
       blocker TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE student_guidance_notes (
+      guidance_type TEXT NOT NULL DEFAULT 'general',
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id TEXT NOT NULL,
       mentor_user_id INTEGER NOT NULL,

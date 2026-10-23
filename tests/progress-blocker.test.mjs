@@ -45,12 +45,14 @@ test("the same rule covers a full cohort and both personas without altering the 
   const onTimeBefore = structuredClone(onTimeInput);
   const onTime = assembleMentorOverview(onTimeInput, { id: 1, role: "superadmin" }, now);
   assert.doesNotThrow(() => assertMentorOverviewResponse(onTime));
-  assert.equal(onTime.counts.follow_up, 6);
+  assert.equal(onTime.counts.on_track, 26);
+  assert.equal(onTime.students.filter((row) => row.counters.blocked > 0).length, 6);
   assert.equal(onTime.counts.intervene, 0);
-  assert.equal(onTime.students.filter((row) => row.primaryAction === "resolve_blocker").length, 6);
+  assert.equal(onTime.students.filter((row) => row.primaryAction === "resolve_blocker").length, 0);
   assert.equal(onTime.students.every((row) => row.counters.overdue === 0 && row.counters.actionableByMentor === 0), true);
   for (const row of onTime.students.filter((item) => item.counters.blocked)) {
-    assert.equal(row.primaryReasonLabel, "当前阻塞：设备未到位，需导师协调");
+    assert.equal(row.primaryReasonLabel, "下一行动明确：完成修改");
+    assert.equal(row.issues.find((issue) => issue.state === "follow_up")?.label, "当前阻塞：设备未到位，需导师协调");
   }
   assert.deepEqual(onTimeInput, onTimeBefore);
 });

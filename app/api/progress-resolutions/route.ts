@@ -7,7 +7,8 @@ import { AttachmentInputError, attachmentStorageKey, validateProgressFiles } fro
 import { sha256Bytes, sha256Text } from "../../../lib/progress-evidence";
 import { getProgressFileBucket } from "../../../lib/progress-file-storage";
 import { deleteProgressFilesOrQueue } from "../../../lib/progress-file-cleanup";
-import { loadCompletedProgressResolutionItems, loadCurrentResolutionSources, loadProgressResolutionItems, loadProgressResolutions } from "../../../lib/progress-resolution-service";
+import { loadBlockerResolutionSources, loadCompletedProgressResolutionItems, loadCurrentResolutionSources, loadProgressResolutionItems, loadProgressResolutions } from "../../../lib/progress-resolution-service";
+import { acceptedBlockerSourcesSql } from "../../../lib/progress-blocker-sources";
 import { resolutionTransition, type ProgressResolutionCommand, type ProgressResolutionKind } from "../../../lib/progress-resolution";
 import { insertResolutionSql, insertConfirmedResolutionSql, insertReturnedResolutionSql, updateResolutionSql, insertResolutionEventSql, insertResolutionAuditSql,
   resolutionSourceGuardSql, resolutionStudentAuthoritySql, resolutionReviewerAuthoritySql,
@@ -154,7 +155,10 @@ async function mutate(request: Request, isSubmission: boolean) {
   const hash = await sha256Text(JSON.stringify({ entryId, revisionNumber, itemKind, expectedVersion, action, note,
     files: prepared.map(({ fileName, contentType, sizeBytes, contentSha256 }) => ({ fileName, contentType, sizeBytes, contentSha256 })) }));
   if (await readReplay(auth.user.id, requestId, hash)) return Response.json({ message: resultMessage(action) }, { headers: privateHeaders });
-  const [sources, rows] = await Promise.all([loadCurrentResolutionSources(studentId), loadProgressResolutions([studentId])]);
+  const [sources, rows] = await Promise.all([
+    itemKind === "blocker" ? loadBlockerResolutionSources(studentId) : loadCurrentResolutionSources(studentId),
+    loadProgressResolutions([studentId]),
+  ]);
   const source = sources.find((row) => row.id === entryId && row.current_revision === revisionNumber);
   if (!source) return conflict();
   const text = itemKind === "blocker" ? activeBlockerText(source.blocker) : source.next_action.trim();
@@ -165,7 +169,7 @@ async function mutate(request: Request, isSubmission: boolean) {
   const nextStatus = resolutionTransition(fromStatus, action);
   if (!nextStatus || (!row && !isSubmission && action !== "resolve" && action !== "request_changes")) return conflict();
   const staged = await stageFiles(prepared, studentId, entryId, revisionNumber);
-  const sourceGuard = resolutionSourceGuardSql(acceptedTrackProgressSql(1));
+  const sourceGuard = resolutionSourceGuardSql(itemKind === "blocker" ? acceptedBlockerSourcesSql(1) : acceptedTrackProgressSql(1));
   const authority = isSubmission ? resolutionStudentAuthoritySql : resolutionReviewerAuthoritySql;
   const guard = `${sourceGuard} AND ${authority} AND ${resolutionUploadGuardSql(staged.length)}`;
   const guardArgs = [studentId, entryId, revisionNumber, auth.user.id, studentId,

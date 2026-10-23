@@ -93,7 +93,7 @@ async function fixture() {
     get(query = "") { return route.GET(new Request(`http://localhost/api/problem-records${query}`)); } };
 }
 
-test("problem ledger deduplicates current resolutions and keeps unresolved history distinct from resolved", async () => {
+test("problem ledger deduplicates resolutions and retains old problems until explicitly resolved", async () => {
   const app = await fixture();
   try {
     const response = await app.get();
@@ -107,16 +107,17 @@ test("problem ledger deduplicates current resolutions and keeps unresolved histo
     assert.equal(records.get("progress:11:1:blocker").status,"changes_requested");
     assert.equal(records.get("progress:11:1:blocker").title,"原进展 11");
     assert.equal(records.get("progress:11:1:blocker").current,true);
-    assert.equal(records.get("progress:10:1:blocker").status,"historical");
+    assert.equal(records.get("progress:10:1:blocker").status,"pending");
     assert.equal(records.get("progress:10:1:blocker").originalStatus,"pending");
-    assert.equal(records.get("progress:10:1:blocker").current,false);
+    assert.equal(records.get("progress:10:1:blocker").current,true);
     assert.equal(records.get("progress:10:1:blocker").href,"/students/s1#progress-resolution-10-blocker-revision-1");
     assert.equal(records.get("progress:12:1:blocker").status,"resolved");
     assert.ok(records.has("progress:20:1:blocker"));
     assert.equal(records.get("guidance:2").status,"resolved");
     assert.equal(records.get("guidance:3").status,"pending");
     assert.equal(records.get("milestone:1").dueDate,"2026-10-25");
-    for (const excluded of ["progress:13:1:blocker","progress:14:1:blocker","progress:30:1:blocker",
+    assert.equal(records.get("progress:13:1:blocker").status,"open","closed papers do not silently resolve a recorded problem");
+    for (const excluded of ["progress:14:1:blocker","progress:30:1:blocker",
       "milestone:2","milestone:3","milestone:4","guidance:4","guidance:6"]) assert.ok(!records.has(excluded),excluded);
     assert.ok(!data.records.some((record) => record.content === "不要收录计划"));
     assert.ok(!data.records.some((record) => "attachments" in record || "history" in record));
@@ -146,7 +147,7 @@ test("problem ledger enforces assigned student scope, rejects student users and 
   } finally { app.db.close(); }
 });
 
-test("closed tracks retain stored historical resolution facts while new unreviewed progress does not invent open problems", async () => {
+test("closed tracks and revised sources retain independently recorded problems", async () => {
   const app = await fixture();
   try {
     app.db.exec(`UPDATE student_papers SET status='closed' WHERE id=1;
@@ -154,13 +155,32 @@ test("closed tracks retain stored historical resolution facts while new unreview
       UPDATE progress_revisions SET review_status='submitted' WHERE progress_entry_id=11;`);
     const {records} = await (await app.get()).json();
     const historical = records.find((record) => record.id === "progress:11:1:blocker");
-    assert.equal(historical.current,false);
-    assert.equal(historical.status,"historical");
+    assert.equal(historical.current,true);
+    assert.equal(historical.status,"changes_requested");
     assert.equal(historical.originalStatus,"changes_requested");
     const completed = records.find((record) => record.id === "progress:12:1:blocker");
-    assert.equal(completed.current,false);
+    assert.equal(completed.current,true);
     assert.equal(completed.status,"resolved");
-    assert.ok(!records.some((record) => record.source === "progress" && record.studentId === "s1" && record.current));
+    assert.ok(records.some((record) => record.source === "progress" && record.studentId === "s1" && record.current));
+  } finally { app.db.close(); }
+});
+
+test("problem ledger retains an unprocessed confirmed problem after another submission without creating duplicate guidance", async () => {
+  const app = await fixture();
+  try {
+    app.db.exec(`DELETE FROM progress_resolutions WHERE progress_entry_id=10;
+      UPDATE progress_entries SET review_status='submitted' WHERE id=11;
+      UPDATE progress_revisions SET review_status='submitted' WHERE progress_entry_id=11;`);
+    const before = app.db.prepare("SELECT COUNT(*) n FROM student_guidance_notes").get().n;
+    const { records } = await (await app.get()).json();
+    const problem = records.find(record => record.id === "progress:10:1:blocker");
+    assert.equal(problem.current, true);
+    assert.equal(problem.status, "open");
+    assert.equal(problem.content, "课题问题");
+    assert.equal(problem.title, "原进展 10");
+    assert.equal(app.db.prepare("SELECT COUNT(*) n FROM student_guidance_notes").get().n, before);
+    assert.equal(app.db.prepare("SELECT COUNT(*) n FROM progress_resolutions WHERE progress_entry_id=10").get().n, 0,
+      "reading a problem does not invent a completion or submission event");
   } finally { app.db.close(); }
 });
 

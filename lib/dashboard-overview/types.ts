@@ -1,13 +1,14 @@
 export const overviewStates = [
   "intervene",
   "mentor",
-  "follow_up",
   "student",
   "on_track",
   "insufficient",
 ] as const;
 
 export type OverviewState = (typeof overviewStates)[number];
+export type OverviewIssueState = OverviewState | "follow_up";
+export const overviewIssueStates = [...overviewStates, "follow_up"] as const;
 
 export type OverviewReasonCode =
   | "MILESTONE_BLOCKED"
@@ -46,7 +47,7 @@ export type OverviewSourceType = "progress" | "proposal" | "milestone" | "guidan
 
 export type OverviewIssue = {
   code: OverviewReasonCode;
-  state: OverviewState;
+  state: OverviewIssueState;
   label: string;
   owner: OverviewOwner;
   dueDate: string | null;
@@ -120,6 +121,8 @@ export type StudentOverviewInput = {
   mentorReviews: OverviewMentorReviewFact[];
   studentWaits: OverviewStudentWaitFact[];
   resolutions?: OverviewResolutionFact[];
+  /** Canonical open problems, independent of progress status; omitted by isolated derivation callers. */
+  problems?: OverviewIssue[];
 };
 
 export type DerivedStudentOverview = {
@@ -179,11 +182,11 @@ export type MentorOverviewResponse = {
   students: MentorOverviewStudent[];
 };
 
-export const overviewStateMeta: Record<OverviewState, { label: string; icon: string; order: number }> = {
+export const overviewStateMeta: Record<OverviewIssueState, { label: string; icon: string; order: number }> = {
   intervene: { label: "需立即介入", icon: "!", order: 0 },
   mentor: { label: "等我处理", icon: "✓", order: 1 },
-  follow_up: { label: "待跟进", icon: "◇", order: 2 },
-  student: { label: "等学生", icon: "↗", order: 3 },
-  on_track: { label: "正常推进", icon: "●", order: 4 },
-  insufficient: { label: "信息不足", icon: "?", order: 5 },
+  follow_up: { label: "待解决问题", icon: "◇", order: 5 },
+  student: { label: "等学生", icon: "↗", order: 2 },
+  on_track: { label: "正常推进", icon: "●", order: 3 },
+  insufficient: { label: "信息不足", icon: "?", order: 4 },
 };

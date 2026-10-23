@@ -211,10 +211,10 @@ export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, o
       const confirmation = history.find((event) => event.action === "confirm");
       const current = item.current !== false;
       const itemCanReview = canReview && item.canReview !== false;
-      return <article key={item.key} data-task-key={item.key} id={`progress-resolution-${item.progressEntryId}-${item.itemKind}${current ? "" : `-revision-${item.revisionNumber}`}`} tabIndex={-1} className={styles.item}>
+      return <article key={item.key} data-task-key={item.key} id={`progress-resolution-${item.progressEntryId}-${item.itemKind}${current && item.sourceCurrent !== false ? "" : `-revision-${item.revisionNumber}`}`} tabIndex={-1} className={styles.item}>
         <div className={styles.itemTop}><strong>{allStudents && item.studentName ? <span className={styles.studentName}>{item.studentName} · </span> : null}{item.itemKind === "blocker" ? "困难" : "下一步计划"}</strong><span className={`${styles.status} ${item.status === "resolved" ? styles.resolved : item.status === "pending" ? styles.pending : ""}`}>{statusLabel(item)}</span></div>
         <p className={styles.itemText}>{item.text}</p>
-        <p className={styles.meta}>{item.trackType === "paper" ? "论文" : "课题"} · {item.title}{item.dueDate ? <span>期限 {item.dueDate}</span> : null}</p>
+        <p className={styles.meta}>{item.trackType === "paper" ? "论文" : "课题"} · {item.title}{item.sourceCurrent === false && item.itemKind === "blocker" ? <span>来源 V{item.revisionNumber} · 问题独立跟进</span> : null}{item.dueDate ? <span>期限 {item.dueDate}</span> : null}</p>
         {item.submissionNote || submission ? <div className={styles.result}><strong>{item.status === "resolved" ? "完成说明" : "处理结果"}</strong><p>{item.submissionNote || submission?.note}</p><Attachments files={submission?.attachments ?? []} /><p className={styles.resultMeta}>提交：{submission?.actorName || "学生"}{item.submittedAt || submission?.createdAt ? ` · ${dateLabel(item.submittedAt || submission!.createdAt)}` : ""}</p></div> : null}
         {item.status === "resolved" && confirmation?.note ? <div className={styles.result}><strong>导师确认说明</strong><p>{confirmation.note}</p></div> : null}
         {item.status === "resolved" ? <p className={styles.confirmation}>确认：{confirmation?.actorName || "管理员"}{item.resolvedAt || confirmation?.createdAt ? ` · ${dateLabel(item.resolvedAt || confirmation!.createdAt)}` : ""}</p> : null}

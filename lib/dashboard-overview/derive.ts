@@ -4,6 +4,7 @@ import {
   type DerivedStudentOverview,
   type OverviewIssue,
   type OverviewReasonCode,
+  type OverviewState,
   type StudentOverviewInput,
 } from "./types.ts";
 import { daysSinceInShanghai, isOverdueInShanghai } from "./dates.ts";
@@ -46,9 +47,10 @@ export function sortOverviewIssues(issues: OverviewIssue[]) {
 }
 
 export function deriveStudentOverview(input: StudentOverviewInput, now: string | Date): DerivedStudentOverview {
-  const issues: OverviewIssue[] = [];
+  const issues: OverviewIssue[] = [...(input.problems ?? [])];
+  const hasProgressIssues = () => issues.some((issue) => issue.state !== "follow_up");
 
-  for (const blocker of input.blockers) {
+  for (const blocker of input.problems === undefined ? input.blockers : []) {
     if (!activeBlockerText(blocker.label)) continue;
     issues.push({
       code: "MILESTONE_BLOCKED",
@@ -66,7 +68,7 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
 
   for (const milestone of input.milestones) {
     if (milestone.status === "completed") continue;
-    if (milestone.status === "blocked") {
+    if (milestone.status === "blocked" && input.problems === undefined) {
       issues.push({
         code: "MILESTONE_BLOCKED",
         state: "follow_up",
@@ -167,10 +169,12 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
   }
 
   for (const resolution of input.resolutions ?? []) {
+    const isProblem = resolution.itemKind === "blocker";
+    if (isProblem && input.problems !== undefined) continue;
     const returned = resolution.status === "changes_requested";
     issues.push({
       code: returned ? "STUDENT_RESOLUTION_CHANGES_REQUESTED" : "MENTOR_RESOLUTION_REVIEW",
-      state: returned ? "student" : resolution.canReview ? "mentor" : "on_track",
+      state: isProblem ? "follow_up" : returned ? "student" : resolution.canReview ? "mentor" : "on_track",
       label: returned
         ? `等待补充处理结果：${resolution.title}`
         : resolution.canReview ? `确认处理结果：${resolution.title}` : `等待导师确认处理结果：${resolution.title}`,
@@ -185,7 +189,7 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
     });
   }
 
-  const hasMentorWork = issues.some((issue) => issue.state === "mentor" || issue.code === "MENTOR_RESOLUTION_REVIEW");
+  const hasMentorWork = issues.some((issue) => issue.state === "mentor" || (issue.state !== "follow_up" && issue.code === "MENTOR_RESOLUTION_REVIEW"));
   const cadenceBaseline = input.latestSubstantiveAt ?? input.trackingStartedAt;
   const daysSinceBaseline = daysSinceInShanghai(cadenceBaseline, now);
   if (!hasMentorWork && input.cadenceDays && input.cadenceDays > 0 && daysSinceBaseline !== null
@@ -202,7 +206,7 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
       action: "view_student",
       actionTargetId: input.studentId,
     });
-  } else if (!issues.length && input.latestSubstantiveAt && input.cadenceDays && daysSinceBaseline !== null
+  } else if (!hasProgressIssues() && input.latestSubstantiveAt && input.cadenceDays && daysSinceBaseline !== null
     && daysSinceBaseline <= input.cadenceDays) {
     issues.push({
       code: "ON_TRACK_RECENT_PROGRESS",
@@ -218,11 +222,11 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
     });
   }
 
-  if (!issues.length && input.hasConfirmedMainline) {
+  if (!hasProgressIssues() && input.hasConfirmedMainline) {
     issues.push({
       code: "ON_TRACK_NEXT_ACTION",
       state: "on_track",
-      label: "已有确认研究主线，当前无逾期或待处理事项",
+      label: "已有确认研究主线，当前进度无逾期或待审核事项",
       owner: "student",
       dueDate: null,
       occurredAt: input.latestSubstantiveAt ?? input.trackingStartedAt,
@@ -233,7 +237,7 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
     });
   }
 
-  if (!issues.length) {
+  if (!hasProgressIssues()) {
     const missingBaseline = !input.trackingStartedAt && !input.latestSubstantiveAt;
     issues.push({
       code: missingBaseline ? "INSUFFICIENT_NO_BASELINE" : "INSUFFICIENT_NO_ACTION",
@@ -252,25 +256,25 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
   const sorted = sortOverviewIssues(issues);
   const primary = sorted[0];
   return {
-    primaryState: primary.state,
+    primaryState: primary.state as OverviewState,
     primaryReasonCode: primary.code,
     primaryReasonLabel: primary.label,
     nextOwner: primary.owner,
     primaryAction: primary.action,
     primaryActionTargetId: primary.actionTargetId,
     issues: sorted,
-    additionalIssueCount: Math.max(0, sorted.length - 1),
+    additionalIssueCount: Math.max(0, sorted.filter((issue) => issue.state !== "follow_up").length - 1),
     counters: {
       actionableByMentor: sorted.filter((issue) => issue.state === "mentor").length,
       waitingForStudent: sorted.filter((issue) => issue.state === "student").length,
-      blocked: sorted.filter((issue) => issue.code === "MILESTONE_BLOCKED").length,
+      blocked: sorted.filter((issue) => issue.state === "follow_up").length,
       overdue: sorted.filter((issue) => issue.code === "MILESTONE_OVERDUE" || issue.code === "NEXT_ACTION_OVERDUE").length,
     },
   };
 }
 
-export function countOverviewStates<T extends { primaryState: keyof typeof overviewStateMeta }>(students: T[]) {
-  const counts = Object.fromEntries(overviewStates.map((state) => [state, 0])) as Record<keyof typeof overviewStateMeta, number>;
+export function countOverviewStates<T extends { primaryState: OverviewState }>(students: T[]) {
+  const counts = Object.fromEntries(overviewStates.map((state) => [state, 0])) as Record<OverviewState, number>;
   students.forEach((student) => { counts[student.primaryState] += 1; });
   const total = overviewStates.reduce((sum, state) => sum + counts[state], 0);
   if (total !== students.length) throw new Error("导师总览互斥计数不一致");

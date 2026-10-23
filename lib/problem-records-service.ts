@@ -1,4 +1,4 @@
-import { acceptedTrackProgressSql } from "./dashboard-overview/query-sql.ts";
+import { acceptedBlockerSourcesSql } from "./progress-blocker-sources.ts";
 import { instantTimestamp } from "./dashboard-overview/dates.ts";
 import { activeBlockerText } from "./progress-blocker.ts";
 import { problemRecordBatches, type ProblemRecord, type ProblemRecordStudent } from "./problem-records.ts";
@@ -6,7 +6,7 @@ import { problemRecordBatches, type ProblemRecord, type ProblemRecordStudent } f
 type Database = Pick<D1Database, "prepare">;
 type CurrentProblem = {
   id: number; student_id: string; current_revision: number; title: string; blocker: string;
-  track_type: "paper" | "project"; confirmed_at: string | null;
+  track_type: "paper" | "project"; confirmed_at: string | null; source_current: number;
 };
 type StoredProblem = {
   student_id: string; progress_entry_id: number; revision_number: number;
@@ -35,8 +35,8 @@ export async function loadProblemRecords(database: Database, students: readonly 
     const placeholders = batch.map(() => "?").join(",");
     const [current, stored, milestones, guidance] = await Promise.all([
       database.prepare(`SELECT source.id, source.student_id, source.current_revision, source.track_type,
-          source.blocker, source.confirmed_at, p.title
-        FROM (${acceptedTrackProgressSql(batch.length)}) source
+          source.blocker, source.confirmed_at, source.source_current, source.title
+        FROM (${acceptedBlockerSourcesSql(batch.length)}) source
         JOIN progress_entries p ON p.id = source.id AND p.student_id = source.student_id`)
         .bind(...batch).all<CurrentProblem>(),
       database.prepare(`SELECT pr.student_id, pr.progress_entry_id, pr.revision_number,
@@ -66,6 +66,7 @@ export async function loadProblemRecords(database: Database, students: readonly 
       records.set(id, {
         id, studentId: student.id, studentName: student.name, source: "progress",
         title: row.title, content, status: "open", current: true, updatedAt: row.confirmed_at, dueDate: null,
+        sourceCurrent: row.source_current !== 0,
         href: `/students/${encodeURIComponent(student.id)}#progress-resolution-${row.id}-blocker-revision-${row.current_revision}`,
         trackType: row.track_type,
       });
@@ -78,8 +79,9 @@ export async function loadProblemRecords(database: Database, students: readonly 
       records.set(id, {
         id, studentId: student.id, studentName: student.name, source: "progress",
         title: source?.title ?? row.source_title, content: source?.content ?? row.source_text,
-        status: row.status === "resolved" ? "resolved" : source ? row.status : "historical",
+        status: row.status,
         originalStatus: row.status, current: Boolean(source), updatedAt: row.updated_at,
+        sourceCurrent: source?.sourceCurrent ?? false,
         dueDate: row.source_due_date || null, trackType: source?.trackType ?? row.track_type,
         href: source?.href ?? `/students/${encodeURIComponent(student.id)}#progress-resolution-${row.progress_entry_id}-blocker-revision-${row.revision_number}`,
       });

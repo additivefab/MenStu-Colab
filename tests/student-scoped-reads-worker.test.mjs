@@ -165,6 +165,41 @@ test("student-filtered reads preserve nested data and enforce the existing accou
       }
     });
 
+    await t.test("older problem results stay in mentor inbox while scope, review rights and source deletion remain enforced", async () => {
+      for (const [index, studentId] of ["scope-a", "scope-b", "scope-c", "scope-inactive"].entries()) {
+        const entryId = (index + 1) * 10 + 1;
+        const newerId = 400 + index;
+        await db.batch([
+          db.prepare(`INSERT INTO progress_resolutions(student_id,progress_entry_id,revision_number,item_kind,
+            source_title,source_text,track_type,status,submitted_by_user_id,last_request_id)
+            VALUES(?,?,1,'blocker','早期问题','设备已经修复','project','pending',102,?)`)
+            .bind(studentId, entryId, `${studentId}-problem-result`),
+          db.prepare(`INSERT INTO progress_entries(id,student_id,kind,title,review_status,submitted_by_user_id)
+            VALUES(?,?,'项目','后续项目进展','submitted',102)`).bind(newerId, studentId),
+          db.prepare(`INSERT INTO project_progress_details(progress_entry_id,next_action,next_action_due_date)
+            VALUES(?,'后续计划','2099-12-31')`).bind(newerId),
+          db.prepare(`INSERT INTO progress_revisions(progress_entry_id,revision_number,snapshot_json,review_status,created_at)
+            VALUES(?,1,'{}','submitted','2098-01-01 00:00:00')`).bind(newerId),
+        ]);
+      }
+      const tasks = (payload) => payload.workflowTasks.filter(task => task.type === "resolution_verification");
+      const all = tasks(await read("/api/dashboard", "scope-owner"));
+      assert.deepEqual(all.map(task => task.studentId).sort(), ["scope-a", "scope-b"]);
+      assert.ok(all.every(task => task.itemKind === "blocker" && task.revisionNumber === 1));
+      const scoped = tasks(await read("/api/dashboard?studentId=scope-a", "scope-owner"));
+      assert.deepEqual(scoped, all.filter(task => task.studentId === "scope-a"));
+      assert.equal(tasks(await read("/api/dashboard?studentId=scope-inactive", "scope-owner")).length, 0);
+      assert.deepEqual(tasks(await read("/api/dashboard", "scope-mentor")).map(task => task.studentId), ["scope-a"]);
+      assert.equal(tasks(await read("/api/dashboard", "scope-observer")).length, 0);
+      assert.equal(tasks(await read("/api/dashboard", "scope-student", "student")).length, 0);
+      await db.prepare("UPDATE progress_resolutions SET submitted_by_user_id=101 WHERE student_id='scope-b' AND item_kind='blocker'").run();
+      assert.equal(tasks(await read("/api/dashboard?studentId=scope-b", "scope-owner")).length, 0, "the submitter cannot review their own result");
+      await db.prepare("UPDATE mentor_student_assignments SET can_review=0 WHERE mentor_user_id=103 AND student_id='scope-a'").run();
+      assert.equal(tasks(await read("/api/dashboard", "scope-mentor")).length, 0);
+      await db.prepare("INSERT INTO progress_deletions(progress_entry_id,deleted_by_user_id,operation_id) VALUES(11,101,'delete-old-problem-source')").run();
+      assert.equal(tasks(await read("/api/dashboard?studentId=scope-a", "scope-owner")).length, 0);
+    });
+
     await t.test("520 progress entries load all nested history within D1's 100-variable limit", async () => {
       await db.prepare(`WITH RECURSIVE numbers(n) AS (
         VALUES(1) UNION ALL SELECT n + 1 FROM numbers WHERE n < 26

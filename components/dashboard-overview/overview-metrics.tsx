@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-html-link-for-pages -- This Vinext build cannot resolve next/link navigation exports; use native anchors. */
 import { overviewStateMeta, overviewStates, type MentorOverviewResponse, type OverviewState } from "../../lib/dashboard-overview/types";
 
 export function OverviewMetrics({
@@ -9,7 +10,9 @@ export function OverviewMetrics({
   activeState: OverviewState | "all";
   onStateChange: (state: OverviewState | "all") => void;
 }) {
-  return <section className="group-overview-metrics" aria-label="全组互斥状态人数">
+  const unresolved = data.students.reduce((sum, student) => sum + student.counters.blocked, 0);
+  const affectedStudents = data.students.filter((student) => student.counters.blocked > 0).length;
+  return <section className="group-overview-metrics" aria-label="全组进度与问题统计">
     <div className="group-overview-metrics-grid">
       {overviewStates.map((state) => {
         const meta = overviewStateMeta[state];
@@ -31,6 +34,7 @@ export function OverviewMetrics({
       <span>本周确认进展</span>
       <strong>{data.weeklySubstantiveStudentCount}<small> / {data.total} 人</small></strong>
 
+      <a className="group-overview-problem-summary" href="/?mentorView=issues"><span>待解决问题</span><b>{unresolved} 项 · {affectedStudents} 人</b></a>
     </aside>
   </section>;
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { acceptedBlockerSourcesSql } from "../lib/progress-blocker-sources.ts";
 import { acceptedTrackProgressSql } from "../lib/dashboard-overview/query-sql.ts";
 import * as accessPolicy from "../lib/access-policy.ts";
 import * as resolution from "../lib/progress-resolution.ts";
@@ -70,6 +71,7 @@ async function fixture() {
     database: { getD1: () => ({ prepare: adapt }), ensureDatabase: async () => {} },
     "access-policy": accessPolicy,
     "query-sql": { acceptedTrackProgressSql },
+    "progress-blocker-sources": { acceptedBlockerSourcesSql },
     "progress-resolution": resolution,
     "progress-blocker": blocker,
     "feishu-auth": { async requireAppUser(_request, roles) {
@@ -108,7 +110,7 @@ test("completed list preserves confirmed history after new progress, including f
     assert.deepEqual(data.items.map((item) => item.progressEntryId), [22,21,20,18]);
     assert.equal(data.items.find((item) => item.progressEntryId === 20).current, true);
     const completed = data.items.find((item) => item.progressEntryId === 18);
-    assert.equal(completed.current, false);
+    assert.equal(completed.current, true);
     assert.equal(completed.status, "resolved");
     assert.equal(completed.studentName, "学生一");
     assert.equal(completed.submissionNote, "复测已完成，日志已补充");

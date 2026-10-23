@@ -69,3 +69,12 @@ test("legacy problem links prefer the current item then the newest available his
   assert.deepEqual(items, [previous, latest]);
   assert.equal(findProgressResolutionTarget(items, { ...target, progressEntryId: 19 }), undefined);
 });
+
+test("independent open problems keep revision-specific links while legacy links select the newest revision", () => {
+  const older = { ...task("18:1:blocker", "open"), progressEntryId: 18, revisionNumber: 1, itemKind: "blocker", sourceCurrent: false };
+  const newer = { ...older, key: "18:3:blocker", revisionNumber: 3, sourceCurrent: true };
+  const target = { progressEntryId: 18, itemKind: "blocker" };
+  assert.equal(findProgressResolutionTarget([older, newer], target), newer);
+  assert.equal(findProgressResolutionTarget([older, newer], { ...target, revisionNumber: 1 }), older);
+  assert.equal(progressTaskFilter(older), "open");
+});
