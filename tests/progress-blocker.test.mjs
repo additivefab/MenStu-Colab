@@ -34,10 +34,25 @@ test("the same rule covers a full cohort and both personas without altering the 
   const response = assembleMentorOverview(input, { id: 1, role: "superadmin" }, now);
   assert.doesNotThrow(() => assertMentorOverviewResponse(response));
   assert.equal(response.total, 26);
-  assert.equal(response.students.filter((row) => row.primaryAction === "resolve_blocker").length, 6);
-  assert.equal(response.students.filter((row) => row.primaryAction === "follow_up").length, 20);
+  assert.equal(response.students.filter((row) => row.primaryAction === "resolve_blocker").length, 0);
+  assert.equal(response.students.filter((row) => row.primaryAction === "follow_up").length, 26);
+  assert.equal(response.counts.intervene, 26);
   assert.equal(response.students.every((row) => row.counters.overdue === 1 && row.counters.actionableByMentor === 0), true);
   assert.deepEqual(input, before);
+
+  const onTimeInput = structuredClone(input);
+  onTimeInput.acceptedTracks.forEach((track) => { track.next_action_due_date = "2026-09-30"; });
+  const onTimeBefore = structuredClone(onTimeInput);
+  const onTime = assembleMentorOverview(onTimeInput, { id: 1, role: "superadmin" }, now);
+  assert.doesNotThrow(() => assertMentorOverviewResponse(onTime));
+  assert.equal(onTime.counts.follow_up, 6);
+  assert.equal(onTime.counts.intervene, 0);
+  assert.equal(onTime.students.filter((row) => row.primaryAction === "resolve_blocker").length, 6);
+  assert.equal(onTime.students.every((row) => row.counters.overdue === 0 && row.counters.actionableByMentor === 0), true);
+  for (const row of onTime.students.filter((item) => item.counters.blocked)) {
+    assert.equal(row.primaryReasonLabel, "当前阻塞：设备未到位，需导师协调");
+  }
+  assert.deepEqual(onTimeInput, onTimeBefore);
 });
 
 test("overdue checks reject invalid calendar dates and keep the Shanghai due date inclusive", () => {

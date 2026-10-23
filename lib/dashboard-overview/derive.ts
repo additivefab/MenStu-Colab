@@ -52,7 +52,7 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
     if (!activeBlockerText(blocker.label)) continue;
     issues.push({
       code: "MILESTONE_BLOCKED",
-      state: "intervene",
+      state: "follow_up",
       label: blocker.label ? `当前阻塞：${blocker.label}` : "当前研究工作存在阻塞",
       owner: "coordination",
       dueDate: blocker.dueDate,
@@ -69,7 +69,7 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
     if (milestone.status === "blocked") {
       issues.push({
         code: "MILESTONE_BLOCKED",
-        state: "intervene",
+        state: "follow_up",
         label: `培养节点受阻：${milestone.title}`,
         owner: "coordination",
         dueDate: milestone.targetDate,
@@ -79,7 +79,8 @@ export function deriveStudentOverview(input: StudentOverviewInput, now: string |
         action: "resolve_blocker",
         actionTargetId: milestone.id,
       });
-    } else if (isOverdueInShanghai(milestone.targetDate, now)) {
+    }
+    if (isOverdueInShanghai(milestone.targetDate, now)) {
       issues.push({
         code: "MILESTONE_OVERDUE",
         state: "intervene",

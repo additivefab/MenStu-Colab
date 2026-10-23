@@ -10,11 +10,11 @@ import { overviewStates } from "../lib/dashboard-overview/types.ts";
 
 const issueByState = {
   intervene: {
-    code: "MILESTONE_BLOCKED",
-    label: "培养节点受阻：完成跨材料验证",
+    code: "MILESTONE_OVERDUE",
+    label: "培养节点逾期：完成跨材料验证",
     owner: "coordination",
     sourceType: "milestone",
-    action: "resolve_blocker",
+    action: "follow_up",
   },
   mentor: {
     code: "MENTOR_PROGRESS_REVIEW",
@@ -22,6 +22,13 @@ const issueByState = {
     owner: "mentor",
     sourceType: "progress",
     action: "review_progress",
+  },
+  follow_up: {
+    code: "MILESTONE_BLOCKED",
+    label: "当前阻塞：等待设备",
+    owner: "coordination",
+    sourceType: "progress",
+    action: "resolve_blocker",
   },
   student: {
     code: "STUDENT_CHANGES_REQUESTED",
@@ -55,7 +62,7 @@ function studentAt(index) {
     state: primaryState,
     label: fact.label,
     owner: fact.owner,
-    dueDate: primaryState === "intervene" ? "2026-08-30" : null,
+    dueDate: primaryState === "intervene" ? "2026-08-20" : null,
     occurredAt: "2026-08-24T00:00:00.000Z",
     sourceType: fact.sourceType,
     sourceId: primaryState === "insufficient" ? studentId : index + 1,
@@ -82,7 +89,7 @@ function studentAt(index) {
       actionableByMentor: primaryState === "mentor" ? 1 : 0,
       waitingForStudent: primaryState === "student" ? 1 : 0,
       blocked: issue.code === "MILESTONE_BLOCKED" ? 1 : 0,
-      overdue: 0,
+      overdue: issue.code === "MILESTONE_OVERDUE" ? 1 : 0,
     },
     latestSubstantiveTitle: null,
     latestSubstantiveAt: null,

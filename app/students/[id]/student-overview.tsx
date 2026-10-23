@@ -8,6 +8,7 @@ import "./workspace.css";
 
 import { ProgressResolutionPanel } from "../../../components/progress-resolution-panel";
 import type { ProgressResolutionKind, ProgressResolutionStatus } from "../../../lib/progress-resolution";
+import { parseProgressResolutionHash, type ProgressResolutionTarget } from "../../../lib/progress-task-view";
 import { AiRecordActions, DeletedAiRecords } from "../../../components/ai-record-actions";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { paperDeadlineState, paperStageMeta, paperStages, type PaperStage } from "../../../lib/paper-progress";
@@ -316,7 +317,7 @@ function DetailBlock({ label, value }: { label: string; value: string }) {
 export default function StudentOverview({ studentId }: { studentId: string }) {
   const [tab, setTab] = useState<"progress" | "guidance" | "research" | "tasks">("progress");
   const [taskFilterRequest, setTaskFilterRequest] = useState<{ filter: "open" | "pending" | "completed"; key: number }>();
-  const [taskOpenRequest, setTaskOpenRequest] = useState<{ progressEntryId: number; itemKind: "blocker" | "next_action"; key: number }>();
+  const [taskOpenRequest, setTaskOpenRequest] = useState<ProgressResolutionTarget & { key: number }>();
   const [progressFilter, setProgressFilter] = useState<"pending" | "all" | "ai" | "returned" | "results">("pending");
   const [pendingResultEntryIds, setPendingResultEntryIds] = useState<number[]>([]);
   const [resultFilterRequest, setResultFilterRequest] = useState<{ filter: "pending"; key: number }>();
@@ -686,11 +687,11 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     function followHash() {
       const hash = window.location.hash.slice(1);
       if (!hash) return;
-      const resolutionMatch = /^progress-resolution-(\d+)-(blocker|next_action)$/.exec(hash);
-      if (resolutionMatch) {
+      const resolutionTarget = parseProgressResolutionHash(hash);
+      if (resolutionTarget) {
         setTab("tasks"); setTasksVisited(true);
         setTaskFilterRequest(undefined);
-        setTaskOpenRequest({ progressEntryId: Number(resolutionMatch[1]), itemKind: resolutionMatch[2] as "blocker" | "next_action", key: Date.now() });
+        setTaskOpenRequest({ ...resolutionTarget, key: Date.now() });
         setFocusTarget("");
         return;
       }

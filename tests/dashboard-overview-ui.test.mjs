@@ -29,6 +29,7 @@ test("overview URL state accepts only supported filters and remains recoverable"
     degree: "all",
     studentId: null,
   });
+  assert.equal(parseOverviewUrl("https://example.test/?state=follow_up").state, "follow_up");
 });
 
 test("overview sorting is stable by state, earliest deadline, oldest trusted progress, then identity", () => {
@@ -38,10 +39,11 @@ test("overview sorting is stable by state, earliest deadline, oldest trusted pro
     student({ studentId: "b", displayName: "乙", primaryState: "mentor", issues: issue("2026-08-27") }),
     student({ studentId: "a", displayName: "甲", primaryState: "intervene", issues: issue("2026-08-24") }),
     student({ studentId: "c", displayName: "丙", primaryState: "mentor", issues: issue("2026-08-26") }),
+    student({ studentId: "g", displayName: "庚", primaryState: "follow_up", issues: issue(null) }),
     student({ studentId: "f", displayName: "己", primaryState: "on_track", latestSubstantiveAt: "2026-08-21T00:00:00Z" }),
     student({ studentId: "e", displayName: "戊", primaryState: "on_track", latestSubstantiveAt: null }),
   ];
-  assert.deepEqual(rows.sort(sortOverviewStudents).map((row) => row.studentId), ["a", "c", "b", "d", "e", "f"]);
+  assert.deepEqual(rows.sort(sortOverviewStudents).map((row) => row.studentId), ["a", "c", "b", "g", "d", "e", "f"]);
 });
 
 test("earliest deadline is the minimum across all issues rather than the primary issue date", () => {
@@ -110,8 +112,8 @@ test("overview UI keeps old views, accessible drawer, responsive cards, and read
   assert.match(dashboard, /useState<MentorView>\("overview"\)/);
   assert.match(dashboard, /view === "settings" \? "overview" : view/);
   assert.match(overview, /fetch\("\/api\/dashboard\/overview", \{ cache: "no-store" \}\)/);
-  assert.match(dashboard, /mentorViewFromUrl\(\) === "overview"\) void loadOverviewShell\(\)/);
-  assert.match(dashboard, /onAuthenticated=\{async \(\) => \{[\s\S]*mentorViewFromUrl\(\) === "overview"[\s\S]*loadOverviewShell\(\)/);
+  assert.match(dashboard, /\["overview", "issues"\]\.includes\(mentorViewFromUrl\(\)\)\) void loadOverviewShell\(\)/);
+  assert.match(dashboard, /onAuthenticated=\{async \(\) => \{[\s\S]*\["overview", "issues"\]\.includes\(mentorViewFromUrl\(\)\)[\s\S]*loadOverviewShell\(\)/);
   assert.match(dashboard, /fetch\("\/api\/auth\/session", \{ cache: "no-store" \}\)/);
   assert.match(sessionRoute, /private, no-store/);
   assert.match(overview, /searchParams\.set\("q", normalized\)/);
@@ -138,11 +140,16 @@ test("overview UI keeps old views, accessible drawer, responsive cards, and read
 });
 
 
-test("mentor follow-up opens the precise blocker or plan and pending results retain their kind", () => {
+test("problem records share a student-filtered destination while plans and reported results retain their precise targets", () => {
   for (const kind of ["blocker", "next_action"]) {
     const expected = `/students/student-1#progress-resolution-12-${kind}`;
-    assert.equal(overviewActionHref(student({ primaryAction: kind === "blocker" ? "resolve_blocker" : "follow_up", primaryActionTargetId: 12, issues: [{ sourceType: "paper" }] })), expected);
+    assert.equal(overviewActionHref(student({ primaryAction: kind === "blocker" ? "resolve_blocker" : "follow_up", primaryActionTargetId: 12, issues: [{ sourceType: "paper" }] })), kind === "blocker" ? "/?mentorView=issues&issueStudent=student-1" : expected);
     assert.equal(overviewActionHref(student({ primaryAction: "review_resolution", primaryActionTargetId: 12, issues: [{ sourceType: "resolution", resolutionKind: kind }] })), expected);
+  }
+  for (const sourceType of ["paper", "progress", "milestone"]) {
+    const row = student({ studentId: "学生/甲&state=all", primaryAction: "resolve_blocker", primaryActionTargetId: 12, issues: [{ sourceType }] });
+    assert.equal(overviewActionLabel(row), "查看问题记录");
+    assert.equal(overviewActionHref(row), `/?mentorView=issues&issueStudent=${encodeURIComponent(row.studentId)}`);
   }
   assert.equal(overviewActionHref(student({ primaryAction: "follow_up", primaryActionTargetId: 12, issues: [{ sourceType: "guidance" }] })), "/students/student-1#guidance-12");
   assert.equal(overviewActionHref(student({ primaryAction: "follow_up", primaryActionTargetId: 12, issues: [{ sourceType: "milestone" }] })), "/students/student-1#milestone-12");

@@ -488,7 +488,7 @@ button.primary { border: 0; background: var(--blue); color: white; box-shadow: 0
 .milestone-item { min-height: 78px; display: grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid #edf0f4; }
 .milestone-item > i { width: 27px; height: 27px; display: grid; place-items: center; border: 2px solid #cad5e4; border-radius: 50%; color: #6b7b90; background: white; font-size: 11px; font-style: normal; font-weight: 800; }
 .milestone-item.completed > i { border-color: #5ab38a; color: white; background: #43a77a; }
-.milestone-item.blocked > i { border-color: #e28568; color: white; background: #d86d51; }
+.milestone-item.blocked > i { border-color: #9dabb8; color: #566d82; background: #edf2f6; }
 .milestone-item strong, .milestone-item small { display: block; }
 .milestone-item strong { font-size: 11px; }
 .milestone-item small { margin-top: 4px; color: #8794a6; font-size: 11px; }
@@ -1569,7 +1569,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .mentor-decision-facts > div:last-child { border-right: 0; }
 .mentor-decision-facts span, .mentor-decision-fact span { display: block; color: #849087; font-size: 11px; font-weight: 800; }
 .mentor-decision-facts strong, .mentor-decision-fact strong { display: block; margin-top: 7px; font-size: 11px; line-height: 1.5; }
-.mentor-decision-facts .blocker { color: #a05242; background: #fff6f2; }
+.mentor-decision-facts .blocker { color: #566d82; background: #edf2f6; }
 .mentor-evidence-strip { margin: 12px 0; display: flex; flex-wrap: wrap; gap: 7px; }
 .mentor-evidence-strip > span, .mentor-evidence-strip > a { min-height: 45px; padding: 9px 11px; display: grid; gap: 3px; border: 1px solid #e1e5e3; border-radius: 9px; color: inherit; background: #fff; font-size: 11px; text-decoration: none; }
 .mentor-evidence-strip b { font-size: 11px; }
@@ -1693,10 +1693,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .group-overview-intro > aside p { margin-top: 2px; font-size: 11px; }
 
 .group-overview-metrics { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 10px; }
-.group-overview-metrics-grid { min-width: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.group-overview-metrics-grid { min-width: 0; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
 .group-overview-metrics-grid button { --state-color: #6f7c83; --state-bg: #f1f3f3; min-width: 0; min-height: 88px; padding: 12px 13px; border: 1px solid #dde2e2; border-radius: 12px; display: grid; grid-template-columns: 29px auto; grid-template-rows: auto auto; align-items: center; column-gap: 10px; background: #fff; text-align: left; box-shadow: 0 2px 10px #20232107; }
 .group-overview-metrics-grid button.intervene, .group-overview-table-row.intervene, .group-overview-mobile-list article.intervene, .group-overview-drawer-primary.intervene, .group-overview-issue-list article.intervene { --state-color: #b64350; --state-bg: #fff0f2; }
 .group-overview-metrics-grid button.mentor, .group-overview-table-row.mentor, .group-overview-mobile-list article.mentor, .group-overview-drawer-primary.mentor, .group-overview-issue-list article.mentor { --state-color: #216da8; --state-bg: #edf6fd; }
+.group-overview-metrics-grid button.follow_up, .group-overview-table-row.follow_up, .group-overview-mobile-list article.follow_up, .group-overview-drawer-primary.follow_up, .group-overview-issue-list article.follow_up { --state-color: #566d82; --state-bg: #edf2f6; }
 .group-overview-metrics-grid button.student, .group-overview-table-row.student, .group-overview-mobile-list article.student, .group-overview-drawer-primary.student, .group-overview-issue-list article.student { --state-color: #925f14; --state-bg: #fff6df; }
 .group-overview-metrics-grid button.on_track, .group-overview-table-row.on_track, .group-overview-mobile-list article.on_track, .group-overview-drawer-primary.on_track, .group-overview-issue-list article.on_track { --state-color: #28795b; --state-bg: #eaf7f1; }
 .group-overview-metrics-grid button.insufficient, .group-overview-table-row.insufficient, .group-overview-mobile-list article.insufficient, .group-overview-drawer-primary.insufficient, .group-overview-issue-list article.insufficient { --state-color: #656d71; --state-bg: #f0f2f2; }
@@ -1753,7 +1754,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .group-overview-owner i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .group-overview-owner.mentor { color: #1f6ca4; background: #eaf4fb; }
 .group-overview-owner.student { color: #925f14; background: #fff4d8; }
-.group-overview-owner.coordination { color: #af4651; background: #ffedf0; }
+.group-overview-owner.coordination { color: #566d82; background: #edf2f6; }
 .group-overview-primary-action { align-self: center; min-height: 38px; padding: 0 9px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid color-mix(in srgb, var(--state-color) 35%, #dfe3e3); border-radius: 8px; color: var(--state-color); background: var(--state-bg); font-size: 13px; font-weight: 850; text-align: center; text-decoration: none; }
 .group-overview-primary-action:hover { box-shadow: inset 0 0 0 1px var(--state-color); }
 .group-overview-action-cell { display: grid; align-items: center; }
@@ -2284,7 +2285,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .group-overview-intro > aside strong { margin: 0; }
   .group-overview-intro > aside p { margin-left: auto; }
   .group-overview-metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .group-overview-metrics-grid button:last-child { grid-column: 1 / -1; }
+  .group-overview-metrics-grid button:last-child { grid-column: auto; }
   .group-overview-filters { grid-template-columns: 1fr 1fr auto; }
   .group-overview-search { grid-column: 1 / -1; }
   .group-overview-search input, .group-overview-filters select { font-size: 16px; }
@@ -2550,7 +2551,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .filter-bar > label { max-width: none; }
   .filter-groups { flex-wrap: wrap; }
   .group-overview-metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .group-overview-metrics-grid button:last-child { grid-column: 1 / -1; }
+  .group-overview-metrics-grid button:last-child { grid-column: auto; }
   .group-overview-filters { grid-template-columns: 1fr 1fr auto; }
   .group-overview-search { grid-column: 1 / -1; }
   .mentor-inbox-workspace { grid-template-columns: 1fr; }
@@ -2623,7 +2624,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .workspace-tools > .primary { min-height: 44px; white-space: nowrap; }
 .mentor-group-overview { gap: 16px; }
 .group-overview-metrics { grid-template-columns: minmax(0, 1fr) 156px; gap: 0; padding: 8px; border: 1px solid #e0e5eb; border-radius: 12px; background: #fff; }
-.group-overview-metrics-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
+.group-overview-metrics-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
 .group-overview-metrics-grid button { min-height: 76px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 10px; padding: 12px; border: 1px solid transparent; border-radius: 8px; box-shadow: none; }
 .group-overview-metrics-grid button:last-child { grid-column: auto; }
 .group-overview-metrics-grid button small { font-size: 14px; font-weight: 500; white-space: normal; }
@@ -2710,7 +2711,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .workspace-tools { justify-content: flex-start; }
   .workspace-tools .global-search { max-width: none; flex: 1; }
   .global-search input, .group-overview-filters select { font-size: 16px; }
-  .group-overview-metrics-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; }
+  .group-overview-metrics-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; }
   .group-overview-metrics-grid button { padding: 8px 4px; min-height: 86px; gap: 10px; align-items: center; text-align: center; }
   .group-overview-metrics-grid button small { font-size: 12px; line-height: 1.6; }
   .group-overview-metrics-grid button strong { font-size: 22px; }

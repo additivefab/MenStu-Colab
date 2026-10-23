@@ -4,7 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 
 import { createPortal } from "react-dom";
 import { validateProgressFiles } from "../lib/progress-attachments";
 import { instantTimestamp } from "../lib/dashboard-overview/dates";
-import { groupProgressTasks, progressTaskFilter, type ProgressTaskFilter } from "../lib/progress-task-view";
+import { findProgressResolutionTarget, groupProgressTasks, progressTaskFilter, type ProgressResolutionTarget, type ProgressTaskFilter } from "../lib/progress-task-view";
 import type { ProgressResolutionAttachment as ResolutionAttachment, ProgressResolutionHistory as ResolutionEvent, ProgressResolutionItem as ResolutionItem } from "../lib/progress-resolution";
 import styles from "./progress-resolution-panel.module.css";
 
@@ -24,7 +24,7 @@ export type ProgressResolutionPanelProps = {
   onConfirmed?: () => void | Promise<void>;
   compact?: boolean;
   refreshKey?: string | number;
-  openRequest?: { progressEntryId: number; itemKind: "blocker" | "next_action"; key: number };
+  openRequest?: ProgressResolutionTarget & { key: number };
   initialFilter?: ProgressTaskFilter;
   filterRequest?: { filter: ProgressTaskFilter; key: number };
 };
@@ -195,12 +195,14 @@ export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, o
     const requestKey = `${studentId}:${openRequest.key}`;
     if (handledOpenRequest.current === requestKey) return;
     handledOpenRequest.current = requestKey;
-    const item = payload.items?.find((candidate) => candidate.progressEntryId === openRequest.progressEntryId && candidate.itemKind === openRequest.itemKind && candidate.current);
+    const item = findProgressResolutionTarget(payload.items ?? [], openRequest);
+    setEditor(null);
     if (!item) { setNotice("事项已更新，请查看最新进展。"); return; }
+    setNotice("");
     const itemFilter = progressTaskFilter(item);
     if (itemFilter !== "historical") setFilter(itemFilter);
     setFocusRequest({ itemKey: item.key, key: openRequest.key });
-    if (studentId && mode === "student" && payload.canSubmit && (item.status === "open" || item.status === "changes_requested")) setEditor({ item, action: "submit" });
+    if (item.current && studentId && mode === "student" && payload.canSubmit && (item.status === "open" || item.status === "changes_requested")) setEditor({ item, action: "submit" });
   }, [openRequest, payload, loading, studentId, mode]);
 
   function renderItem(item: ResolutionItem) {

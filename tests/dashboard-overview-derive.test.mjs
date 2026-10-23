@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { countOverviewStates, deriveStudentOverview } from "../lib/dashboard-overview/derive.ts";
+import { overviewStates } from "../lib/dashboard-overview/types.ts";
 import {
   calendarDayDiff,
   isInCurrentShanghaiWeek,
@@ -29,17 +30,66 @@ function input(overrides = {}) {
   };
 }
 
-test("blocked milestone outranks mentor review and preserves the additional issue", () => {
+test("mentor review outranks a routine blocked milestone while keeping its follow-up record", () => {
   const result = deriveStudentOverview(input({
     milestones: [{ id: 9, title: "完成跨材料验证", targetDate: "2026-08-28", status: "blocked", updatedAt: "2026-08-22T00:00:00Z" }],
     mentorReviews: [{ id: 31, title: "补充消融实验", occurredAt: "2026-08-23T00:00:00Z", kind: "progress" }],
   }), now);
 
-  assert.equal(result.primaryState, "intervene");
-  assert.equal(result.primaryReasonCode, "MILESTONE_BLOCKED");
+  assert.equal(result.primaryState, "mentor");
+  assert.equal(result.primaryReasonCode, "MENTOR_PROGRESS_REVIEW");
   assert.equal(result.additionalIssueCount, 1);
-  assert.ok(result.issues.some((issue) => issue.code === "MENTOR_PROGRESS_REVIEW"));
+  assert.equal(result.issues.find((issue) => issue.code === "MILESTONE_BLOCKED")?.state, "follow_up");
   assert.equal(result.counters.actionableByMentor, 1);
+});
+
+test("routine progress difficulties and blocked milestones remain neutral follow-ups", () => {
+  const result = deriveStudentOverview(input({
+    blockers: [{ id: 21, label: "设备尚未到位", dueDate: null, occurredAt: "2026-08-22T00:00:00Z", sourceType: "progress" }],
+    milestones: [{ id: 9, title: "设备验证", targetDate: "2026-08-28", status: "blocked", updatedAt: "2026-08-22T00:00:00Z" }],
+  }), now);
+
+  assert.equal(result.primaryState, "follow_up");
+  assert.equal(result.primaryAction, "resolve_blocker");
+  assert.equal(result.issues.every((issue) => issue.state === "follow_up"), true);
+  assert.deepEqual(result.counters, { actionableByMentor: 0, waitingForStudent: 0, blocked: 2, overdue: 0 });
+});
+
+test("an overdue blocked milestone keeps both its risk and its separate problem record", () => {
+  const result = deriveStudentOverview(input({
+    milestones: [{ id: 9, title: "设备验证", targetDate: "2026-08-20", status: "blocked", updatedAt: "2026-08-22T00:00:00Z" }],
+  }), now);
+
+  assert.equal(result.primaryState, "intervene");
+  assert.equal(result.primaryReasonCode, "MILESTONE_OVERDUE");
+  assert.equal(result.primaryAction, "follow_up");
+  assert.equal(result.issues.find((issue) => issue.code === "MILESTONE_BLOCKED")?.state, "follow_up");
+  assert.deepEqual(result.counters, { actionableByMentor: 0, waitingForStudent: 0, blocked: 1, overdue: 1 });
+});
+
+test("an overdue plan outranks a routine difficulty without attributing its deadline to the difficulty", () => {
+  const result = deriveStudentOverview(input({
+    blockers: [{ id: 21, label: "等待设备", dueDate: null, occurredAt: "2026-08-22T00:00:00Z", sourceType: "paper" }],
+    nextActions: [{ id: 21, label: "完成实验", dueDate: "2026-08-20", occurredAt: "2026-08-22T00:00:00Z", sourceType: "paper" }],
+  }), now);
+
+  assert.equal(result.primaryReasonCode, "NEXT_ACTION_OVERDUE");
+  assert.equal(result.primaryState, "intervene");
+  assert.equal(result.issues.find((issue) => issue.code === "MILESTONE_BLOCKED")?.dueDate, null);
+  assert.equal(result.counters.blocked, 1);
+  assert.equal(result.counters.overdue, 1);
+});
+
+test("routine follow-up does not suppress a stale student update or manufacture mentor review work", () => {
+  const result = deriveStudentOverview(input({
+    cadenceDays: 7,
+    latestSubstantiveAt: "2026-08-01T00:00:00Z",
+    blockers: [{ id: 21, label: "等待设备", dueDate: null, occurredAt: "2026-08-22T00:00:00Z", sourceType: "progress" }],
+  }), now);
+
+  assert.equal(result.primaryState, "follow_up");
+  assert.equal(result.issues.some((issue) => issue.code === "STUDENT_CADENCE_OVERDUE"), true);
+  assert.deepEqual(result.counters, { actionableByMentor: 0, waitingForStudent: 1, blocked: 1, overdue: 0 });
 });
 
 test("overdue milestone outranks an open student guidance action", () => {
@@ -170,7 +220,7 @@ test("the current Shanghai week starts on Monday and counts each instant consist
 test("0, 1, 26, and 100 students always produce mutually exclusive counts", () => {
   for (const size of [0, 1, 26, 100]) {
     const students = Array.from({ length: size }, (_, index) => ({
-      primaryState: ["intervene", "mentor", "student", "on_track", "insufficient"][index % 5],
+      primaryState: overviewStates[index % overviewStates.length],
     }));
     const counts = countOverviewStates(students);
     assert.equal(Object.values(counts).reduce((sum, count) => sum + count, 0), size);

@@ -9,7 +9,7 @@ export const overviewOwnerLabels: Record<OverviewOwner, string> = {
 
 export function overviewActionLabel(student: MentorOverviewStudent) {
   switch (student.primaryAction) {
-    case "resolve_blocker": return "处理阻塞";
+    case "resolve_blocker": return "查看问题记录";
     case "follow_up": return student.issues[0]?.sourceType === "milestone" ? "跟进节点"
       : student.issues[0]?.sourceType === "guidance" ? "跟进指导" : "跟进下一步";
     case "review_progress": return "立即审核";
@@ -47,13 +47,13 @@ export function overviewActionHref(student: MentorOverviewStudent) {
       ? `${studentPath}#progress-resolution-${targetId}-${primaryIssue.resolutionKind}`
       : `${studentPath}#${student.primaryReasonCode === "STUDENT_RESOLUTION_CHANGES_REQUESTED" ? "tasks" : "tasks-pending"}`;
     case "view_progress": return targetId ? `${studentPath}#progress-${targetId}` : `${studentPath}#evidence`;
-    case "follow_up":
-    case "resolve_blocker": {
+    case "resolve_blocker": return `/?mentorView=issues&issueStudent=${encodeURIComponent(student.studentId)}`;
+    case "follow_up": {
       if (!targetId) return `${studentPath}#outlook`;
       if (primaryIssue?.sourceType === "milestone") return `${studentPath}#milestone-${targetId}`;
       if (primaryIssue?.sourceType === "guidance") return `${studentPath}#guidance-${targetId}`;
       if (primaryIssue?.sourceType === "paper" || primaryIssue?.sourceType === "progress") {
-        return `${studentPath}#progress-resolution-${targetId}-${student.primaryAction === "resolve_blocker" ? "blocker" : "next_action"}`;
+        return `${studentPath}#progress-resolution-${targetId}-next_action`;
       }
       return `${studentPath}#progress-${targetId}`;
     }

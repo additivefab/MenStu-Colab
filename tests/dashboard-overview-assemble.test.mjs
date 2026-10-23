@@ -4,6 +4,7 @@ import test from "node:test";
 import { assembleMentorOverview } from "../lib/dashboard-overview/assemble.ts";
 import { assertMentorOverviewResponse, mentorOverviewResponseJsonBytes } from "../lib/dashboard-overview/contract.ts";
 import { overviewActionHref, overviewActionLabel } from "../components/dashboard-overview/overview-actions.ts";
+import { overviewStates } from "../lib/dashboard-overview/types.ts";
 
 const NOW = "2026-08-24T08:00:00.000Z";
 
@@ -84,8 +85,10 @@ test("approval keeps the confirmed progress and follows up an overdue plan witho
 
   input.acceptedTracks[0].blocker = "缺少实验设备";
   const blocked = assembleMentorOverview(input, admin, now).students[0];
-  assert.equal(blocked.primaryAction, "resolve_blocker");
-  assert.equal(overviewActionLabel(blocked), "处理阻塞");
+  assert.equal(blocked.primaryReasonCode, "NEXT_ACTION_OVERDUE");
+  assert.equal(blocked.primaryAction, "follow_up");
+  assert.equal(overviewActionLabel(blocked), "跟进下一步");
+  assert.equal(blocked.issues.find((issue) => issue.code === "MILESTONE_BLOCKED")?.state, "follow_up");
   assert.equal(blocked.counters.blocked, 1);
   assert.equal(blocked.counters.overdue, 1);
 });
@@ -111,7 +114,7 @@ test("empty admin scope assembles a non-leaking zero response", () => {
   const response = assembleMentorOverview(inputOf(0), admin, NOW);
   assert.deepEqual(response.students, []);
   assert.equal(response.total, 0);
-  assert.deepEqual(Object.values(response.counts), [0, 0, 0, 0, 0]);
+  assert.deepEqual(response.counts, Object.fromEntries(overviewStates.map((state) => [state, 0])));
   assert.doesNotThrow(() => assertMentorOverviewResponse(response));
 });
 
@@ -210,7 +213,9 @@ test("a blocker never borrows the separate next-action deadline", () => {
   }];
   const response = assembleMentorOverview(input, admin, NOW);
   const row = response.students[0];
-  assert.equal(row.primaryState, "intervene");
+  assert.equal(row.primaryState, "follow_up");
+  assert.equal(overviewActionLabel(row), "查看问题记录");
+  assert.equal(overviewActionHref(row), "/?mentorView=issues&issueStudent=student-1");
   assert.equal(row.issues[0].dueDate, null);
   assert.equal(row.issues.find((issue) => issue.code === "ON_TRACK_NEXT_ACTION")?.dueDate, "2026-09-02");
   assert.equal(row.nextActionDueDate, "2026-09-02");
@@ -297,6 +302,7 @@ test("returned outcomes wait for student supplementation and reopening restores 
 
   input.resolutions[0].status = "open";
   const reopened = assembleMentorOverview(input, admin, NOW).students[0];
+  assert.equal(reopened.primaryState, "follow_up");
   assert.equal(reopened.primaryAction, "resolve_blocker");
   assert.equal(reopened.counters.blocked, 1);
 });

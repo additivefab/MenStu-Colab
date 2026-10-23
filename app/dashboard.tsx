@@ -15,6 +15,8 @@ import { ProgressResolutionPanel } from "../components/progress-resolution-panel
 import type { ProgressResolutionKind, ProgressResolutionStatus } from "../lib/progress-resolution";
 import { AiRecordActions } from "../components/ai-record-actions";
 import { MentorGroupOverview } from "../components/dashboard-overview/mentor-group-overview";
+import { ProblemRecords } from "../components/problem-records";
+import type { ProblemRecordStudent } from "../lib/problem-records";
 import { clearMutationKey, mutationKeyForForm } from "../lib/client-idempotency";
 
 declare global {
@@ -427,6 +429,7 @@ type AuthGate = {
 const navItems = [
   { id: "overview", label: "全组进度", icon: "◫" },
   { id: "inbox", label: "待我处理", icon: "✓" },
+  { id: "issues", label: "问题记录", icon: "≡" },
   { id: "students", label: "学生", icon: "◎" },
   { id: "research", label: "论文与课题", icon: "◇" },
   { id: "meetings", label: "组会", icon: "▣" },
@@ -524,6 +527,8 @@ export default function Dashboard() {
   const [meetingLoadError, setMeetingLoadError] = useState("");
   const [toast, setToast] = useState("");
   const [overviewRefreshRequest, setOverviewRefreshRequest] = useState(0);
+  const [issuesRefreshRequest, setIssuesRefreshRequest] = useState(0);
+  const [issueForm, setIssueForm] = useState<{ students: ProblemRecordStudent[]; selectedStudentId: string } | null>(null);
   const [authGate, setAuthGate] = useState<AuthGate | null>(null);
   const [personaBusy, setPersonaBusy] = useState(false);
   const globalSearchRef = useRef<HTMLInputElement>(null);
@@ -531,7 +536,7 @@ export default function Dashboard() {
 
   const navigateMentor = useCallback((next: MentorView, replace = false) => {
     setView(next);
-    if (next === "overview") setError("");
+    if (next === "overview" || next === "issues") setError("");
     const url = new URL(window.location.href);
     const sameDestination = mentorViewFromUrl() === next;
     url.searchParams.set("mentorView", next);
@@ -673,14 +678,14 @@ export default function Dashboard() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      if (mentorViewFromUrl() === "overview") void loadOverviewShell();
+      if (["overview", "issues"].includes(mentorViewFromUrl())) void loadOverviewShell();
       else void loadDashboard();
     }, 0);
     return () => { window.clearTimeout(timer); dashboardRequest.current += 1; };
   }, [loadDashboard, loadOverviewShell]);
 
   useEffect(() => {
-    if (view === "overview" || data || !viewer || viewer.role === "student" || loading || error) return;
+    if (view === "overview" || view === "issues" || data || !viewer || viewer.role === "student" || loading || error) return;
     const timer = window.setTimeout(() => void loadDashboard(), 0);
     return () => window.clearTimeout(timer);
   }, [data, error, loadDashboard, loading, view, viewer]);
@@ -790,7 +795,7 @@ export default function Dashboard() {
 
   if (!loading && authGate) {
     return <AccessGate key={authGate.kind} gate={authGate} onAuthenticated={async () => {
-      if (mentorViewFromUrl() === "overview") await loadOverviewShell();
+      if (["overview", "issues"].includes(mentorViewFromUrl())) await loadOverviewShell();
       else await loadDashboard();
     }} />;
   }
@@ -803,7 +808,7 @@ export default function Dashboard() {
 
   if (!currentViewer && error) {
     return <main className="student-portal-shell"><div className="error-state"><strong>系统暂时无法加载</strong><span>{error}</span><button onClick={() => {
-      if (mentorViewFromUrl() === "overview") void loadOverviewShell();
+      if (["overview", "issues"].includes(mentorViewFromUrl())) void loadOverviewShell();
       else void loadDashboard();
     }}>重试</button></div></main>;
   }
@@ -875,7 +880,13 @@ export default function Dashboard() {
                 value={query}
                 onChange={(event) => {
                   setQuery(event.target.value);
-                  if (event.target.value && activeView !== "students" && activeView !== "overview") navigateMentor("students");
+                  if (activeView === "issues") {
+                    const url = new URL(window.location.href);
+                    if (event.target.value.trim()) url.searchParams.set("q", event.target.value);
+                    else url.searchParams.delete("q");
+                    window.history.replaceState({}, "", url);
+                  }
+                  if (event.target.value && activeView !== "students" && activeView !== "overview" && activeView !== "issues") navigateMentor("students");
                 }}
                 placeholder="搜索学生或研究内容"
               />
@@ -883,10 +894,11 @@ export default function Dashboard() {
             </label>
             <button className="command-sync" type="button" onClick={() => {
               if (activeView === "overview") setOverviewRefreshRequest((current) => current + 1);
+              else if (activeView === "issues") setIssuesRefreshRequest((current) => current + 1);
               else void loadDashboard();
             }} aria-label="同步最新数据" title="同步最新数据">↻</button>
             <button className="management-mobile-account" type="button" onClick={() => setFeishuOpen(true)}>账号</button>
-            {data ? <button className="primary" onClick={() => setGuidanceOpen(true)}>＋ 记录指导</button> : null}
+            {data && activeView !== "issues" ? <button className="primary" onClick={() => setGuidanceOpen(true)}>＋ 记录指导</button> : null}
           </div>
         </header>
 
@@ -896,6 +908,9 @@ export default function Dashboard() {
 
         <div hidden={activeView !== "overview"}>
           <MentorGroupOverview active={activeView === "overview" && !loading && !error} query={query} onQueryChange={setQuery} refreshRequest={overviewRefreshRequest} />
+        </div>
+        <div hidden={activeView !== "issues"}>
+          <ProblemRecords active={activeView === "issues" && !loading && !error} query={query} refreshRequest={issuesRefreshRequest} onRecord={(students, selectedStudentId) => setIssueForm({ students, selectedStudentId })} />
         </div>
 
         {data && activeView === "inbox" ? (
@@ -930,6 +945,7 @@ export default function Dashboard() {
       </section>
 
       {guidanceOpen && data ? <GuidanceQuickModal students={data.students} onClose={() => setGuidanceOpen(false)} onSaved={async () => { setGuidanceOpen(false); setToast("指导已保存，并进入学生下一步行动"); await loadDashboard(); }} /> : null}
+      {issueForm ? <GuidanceQuickModal students={issueForm.students} problemMode initialStudentId={issueForm.selectedStudentId} onClose={() => setIssueForm(null)} onSaved={async () => { setIssueForm(null); setData(null); setToast("问题已记录，可在问题列表和学生档案中继续跟进"); setIssuesRefreshRequest((value) => value + 1); setOverviewRefreshRequest((value) => value + 1); }} /> : null}
       {feishuOpen ? <FeishuModal viewer={currentViewer} onClose={() => setFeishuOpen(false)} onSwitchPersona={switchPersona} personaBusy={personaBusy} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.reload(); }} /> : null}
       {toast ? <div className="toast" role="status">{toast}</div> : null}
     </main>
@@ -1170,8 +1186,8 @@ function MentorProgressDecision({ entry, busy, note, onNote, onReview, onChanged
       {previousRevision && previousSummary !== entry.summary ? <details><summary>查看与 V{previousRevision.revision_number} 的结论差异</summary><p>{previousSummary || "上一版未填写结论"}</p></details> : null}
       {previousRevision && previousEvidence !== entry.evidence ? <details><summary>查看上一版证据</summary><p>{previousEvidence || "上一版未填写证据"}</p></details> : null}
     </section>
-    {entry.paper ? <div className="mentor-decision-facts"><div><span>论文阶段</span><strong>{paperStageMeta[entry.paper.stage].label}</strong></div><div><span>下一行动</span><strong>{entry.paper.next_action}</strong></div><div><span>期限</span><strong>{entry.paper.next_action_due_date}</strong></div>{activeBlockerText(entry.paper.blocker) ? <div className="blocker"><span>阻塞</span><strong>{entry.paper.blocker}</strong></div> : null}</div> : null}
-    {entry.project ? <div className="mentor-decision-facts"><div><span>培养节点</span><strong>{entry.project.milestone_title || "未关联节点"}</strong></div><div><span>下一行动</span><strong>{entry.project.next_action}</strong></div><div><span>期限</span><strong>{entry.project.next_action_due_date}</strong></div>{activeBlockerText(entry.project.blocker) ? <div className="blocker"><span>阻塞</span><strong>{entry.project.blocker}</strong></div> : null}</div> : null}
+    {entry.paper ? <div className="mentor-decision-facts"><div><span>论文阶段</span><strong>{paperStageMeta[entry.paper.stage].label}</strong></div><div><span>下一行动</span><strong>{entry.paper.next_action}</strong></div><div><span>期限</span><strong>{entry.paper.next_action_due_date}</strong></div>{activeBlockerText(entry.paper.blocker) ? <div className="blocker"><span>问题说明</span><strong>{entry.paper.blocker}</strong></div> : null}</div> : null}
+    {entry.project ? <div className="mentor-decision-facts"><div><span>培养节点</span><strong>{entry.project.milestone_title || "未关联节点"}</strong></div><div><span>下一行动</span><strong>{entry.project.next_action}</strong></div><div><span>期限</span><strong>{entry.project.next_action_due_date}</strong></div>{activeBlockerText(entry.project.blocker) ? <div className="blocker"><span>问题说明</span><strong>{entry.project.blocker}</strong></div> : null}</div> : null}
     <div className="mentor-evidence-strip">{entry.evidence_sources.map((source) => <span key={source.id}><b>{source.label}</b>{source.source_ref ? <a href={source.source_ref} target="_blank" rel="noreferrer">打开证据</a> : null}{source.content_sha256 ? <small>指纹 {source.content_sha256}</small> : null}</span>)}{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)}</small></a>)}</div>
     {entry.can_decide ? <section className="mentor-binary-review" aria-label="快速判断">
       <div className="mentor-binary-review-head"><div><span>只做一个判断</span><strong>这可以作为学生的正式进展吗？</strong></div><small>确认后自动进入下一项</small></div>
@@ -1237,10 +1253,10 @@ function MentorResearchLedger({ data, onToast }: { data: DashboardData; onToast:
   </div>;
 }
 
-function GuidanceQuickModal({ students, onClose, onSaved }: { students: Student[]; onClose: () => void; onSaved: () => Promise<void> }) {
+function GuidanceQuickModal({ students, onClose, onSaved, problemMode = false, initialStudentId = "" }: { students: Array<Pick<Student, "id" | "name" | "stage">>; onClose: () => void; onSaved: () => Promise<void>; problemMode?: boolean; initialStudentId?: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [verificationMode, setVerificationMode] = useState<"self_report" | "mentor_verify">("mentor_verify");
+  const [verificationMode, setVerificationMode] = useState<"self_report" | "mentor_verify">(problemMode ? "self_report" : "mentor_verify");
   const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -1270,22 +1286,22 @@ function GuidanceQuickModal({ students, onClose, onSaved }: { students: Student[
         body: JSON.stringify(body),
       });
       const payload = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(payload.error || "指导保存失败");
+      if (!response.ok) throw new Error(payload.error || (problemMode ? "问题保存失败" : "指导保存失败"));
       await onSaved();
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "指导保存失败");
+      setError(submitError instanceof Error ? submitError.message : (problemMode ? "问题保存失败" : "指导保存失败"));
       setBusy(false);
     }
   }
 
-  return <div className="modal-layer" role="presentation"><div className="modal guidance-quick-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="guidance-quick-title"><button className="close" aria-label="关闭记录指导对话框" onClick={onClose}>×</button><div className="modal-title"><span>导师指导</span><h2 id="guidance-quick-title">把讨论变成一条可验收的下一步行动</h2><p>学生确认收到并提交完成说明；需要时由导师做最终验收。</p></div><form onSubmit={submit}>
-    <div className="form-row"><label>学生<select name="studentId" required defaultValue=""><option value="" disabled>请选择学生</option>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label><label>指导类型<select name="guidanceType" defaultValue="general"><option value="general">一般指导</option><option value="meeting_followup">组会跟进</option><option value="paper">论文指导</option><option value="milestone">培养节点</option><option value="blocker">阻塞处理</option></select></label></div>
-    <label>指导主题<input name="title" required placeholder="例如：补齐实验对照并形成可审阅图表" /></label>
-    <label>指导内容<textarea name="content" rows={4} required placeholder="记录结论、关键取舍和学生需要理解的原因" /></label>
-    <label>下一步行动<textarea name="nextAction" rows={2} required placeholder="例如：补做对照实验，更新结果图" /></label>
-    <div className="form-row"><label>完成期限<input name="dueDate" type="date" required /></label><label>验收方式<select name="verificationMode" value={verificationMode} onChange={(event) => setVerificationMode(event.target.value as "self_report" | "mentor_verify")}><option value="mentor_verify">学生提交，导师验收</option><option value="self_report">学生自行完成</option></select></label></div>
+  return <div className="modal-layer" role="presentation"><div className="modal guidance-quick-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="guidance-quick-title"><button className="close" aria-label={problemMode ? "关闭记录问题对话框" : "关闭记录指导对话框"} onClick={onClose}>×</button><div className="modal-title"><span>{problemMode ? "问题记录" : "导师指导"}</span><h2 id="guidance-quick-title">{problemMode ? "记录一个需要跟进的问题" : "把讨论变成一条可验收的下一步行动"}</h2><p>{problemMode ? "先记下问题，跟进安排和日期可以选填；记录会同步保留在学生档案。" : "学生确认收到并提交完成说明；需要时由导师做最终验收。"}</p></div><form onSubmit={submit}>
+    <div className="form-row"><label>学生<select name="studentId" required defaultValue={students.some((student) => student.id === initialStudentId) ? initialStudentId : ""}><option value="" disabled>请选择学生</option>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label>{problemMode ? <input type="hidden" name="guidanceType" value="blocker" /> : <label>指导类型<select name="guidanceType" defaultValue="general"><option value="general">一般指导</option><option value="meeting_followup">组会跟进</option><option value="paper">论文指导</option><option value="milestone">培养节点</option><option value="blocker">问题记录</option></select></label>}</div>
+    <label>{problemMode ? "问题标题" : "指导主题"}<input name="title" maxLength={200} required placeholder={problemMode ? "例如：实验设备预约冲突" : "例如：补齐实验对照并形成可审阅图表"} /></label>
+    <label>{problemMode ? "情况说明" : "指导内容"}<textarea name="content" maxLength={3000} rows={4} required placeholder={problemMode ? "记录遇到的困难、影响和需要的支持" : "记录结论、关键取舍和学生需要理解的原因"} /></label>
+    <label>{problemMode ? "跟进安排（可选）" : "下一步行动"}<textarea name="nextAction" maxLength={800} rows={2} required={!problemMode} placeholder={problemMode ? "例如：协调设备使用时间，确认替代方案" : "例如：补做对照实验，更新结果图"} /></label>
+    <div className="form-row"><label>{problemMode ? "跟进日期（可选）" : "完成期限"}<input name="dueDate" type="date" required={!problemMode} /></label><label>验收方式<select name="verificationMode" value={verificationMode} onChange={(event) => setVerificationMode(event.target.value as "self_report" | "mentor_verify")}><option value="mentor_verify">学生提交，导师验收</option><option value="self_report">{problemMode ? "处理后直接确认完成" : "学生自行完成"}</option></select></label></div>
     <label>验收标准<textarea name="acceptanceCriteria" rows={3} required={verificationMode === "mentor_verify"} placeholder={verificationMode === "mentor_verify" ? "例如：上传含三组对照的图表，误差条与参数说明完整" : "可选：写清学生自检条件"} /></label>
-    {error ? <p className="form-error">{error}</p> : null}<div className="modal-actions"><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={busy}>{busy ? "保存中…" : "保存并交给学生"}</button></div>
+    {error ? <p className="form-error">{error}</p> : null}<div className="modal-actions"><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={busy}>{busy ? "保存中…" : problemMode ? "保存问题记录" : "保存并交给学生"}</button></div>
   </form></div></div>;
 }
 
