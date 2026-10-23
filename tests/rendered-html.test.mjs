@@ -112,6 +112,8 @@ test("keeps the database and Feishu boundaries explicit in source", async () => 
   assert.match(dashboard, /href=\{`\/students\/\$\{encodeURIComponent\(entry\.student_id\)\}#evidence`\}/);
   assert.match(dashboard, /打开 \$\{student\.name\} 的档案与进展/);
   assert.match(dashboard, /查看学生档案/);
+  // The current Vinext production bundle drops Link's dynamic navigation exports.
+  // Keep archive links as native anchors until client navigation is verified again.
   assert.doesNotMatch(dashboard, /import Link from "next\/link"/);
   assert.match(dashboard, /name="attachments" type="file" multiple/);
   assert.match(dashboard, /找导师聊聊/);

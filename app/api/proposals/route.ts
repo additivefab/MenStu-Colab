@@ -1,5 +1,5 @@
 import { ensureDatabase, getD1 } from "../../../lib/database";
-import { canReviewStudent, canViewStudent, getStudentScope, scopeSql } from "../../../lib/authorization";
+import { canReviewStudent, canViewStudent, getStudentScope, isOwnStudentRecord, scopeSql, type StudentScope } from "../../../lib/authorization";
 import { assertSameOrigin, isReviewerRole, requireAppUser } from "../../../lib/feishu-auth";
 import type { AppUser } from "../../../lib/feishu-auth";
 
@@ -130,9 +130,8 @@ function validateSubmission(fields: ReturnType<typeof proposalInput>, milestones
   if (incomplete >= 0) throw new InputError(`请完整填写第 ${incomplete + 1} 个培养节点的名称、日期和验收证据`);
 }
 
-async function readProposals(user: AppUser) {
+async function readProposals(user: AppUser, scope: StudentScope) {
   const d1 = getD1();
-  const scope = await getStudentScope(user);
   const proposalScope = scopeSql(scope, "rp.student_id");
   const statement = d1.prepare(`SELECT rp.*, s.display_name AS student_name, s.degree, s.grade_year,
     (SELECT v.submitted_by_user_id FROM research_proposal_versions v
@@ -149,7 +148,7 @@ async function readProposals(user: AppUser) {
   if (!proposalIds.length) return [];
 
   const placeholders = proposalIds.map(() => "?").join(",");
-  const [milestoneResult, versionResult, auditResult] = await Promise.all([
+  const [milestoneResult, versionResult, auditResult, reviewableResult] = await Promise.all([
     d1.prepare(`SELECT id, proposal_id, title, target_date, evidence_target, status, sort_order, updated_at
       FROM research_milestones WHERE proposal_id IN (${placeholders}) AND archived_at IS NULL
       ORDER BY proposal_id, sort_order, target_date`).bind(...proposalIds).all<MilestoneRow>(),
@@ -163,17 +162,24 @@ async function readProposals(user: AppUser) {
       FROM proposal_audit_events a JOIN app_users u ON u.id = a.actor_user_id
       WHERE a.proposal_id IN (${placeholders}) ORDER BY a.proposal_id, a.created_at DESC`)
       .bind(...proposalIds).all<AuditRow>(),
+    user.role === "admin"
+      ? d1.prepare(`SELECT student_id FROM mentor_student_assignments
+          WHERE mentor_user_id = ? AND active = 1 AND can_review = 1`)
+        .bind(user.id).all<{ student_id: string }>()
+      : Promise.resolve({ results: [] as Array<{ student_id: string }> }),
   ]);
+  const reviewableStudentIds = new Set(reviewableResult.results.map((row) => row.student_id));
 
-  return Promise.all(result.results.map(async (proposal) => ({
+  return result.results.map((proposal) => ({
     ...proposal,
     can_review: isReviewerRole(user.role)
       && proposal.latest_submitted_by_user_id !== user.id
-      && await canReviewStudent(user, proposal.student_id),
+      && !isOwnStudentRecord(user, proposal.student_id)
+      && (user.role === "superadmin" || reviewableStudentIds.has(proposal.student_id)),
     milestones: milestoneResult.results.filter((item) => item.proposal_id === proposal.id),
     versions: versionResult.results.filter((item) => item.proposal_id === proposal.id),
     audit: auditResult.results.filter((item) => item.proposal_id === proposal.id).slice(0, 20),
-  })));
+  }));
 }
 
 export async function GET(request: Request) {
@@ -184,7 +190,17 @@ export async function GET(request: Request) {
       return Response.json({ error: "飞书账号尚未绑定学生记录" }, { status: 403 });
     }
     await ensureDatabase();
-    const proposals = await readProposals(auth.user);
+    const scope = await getStudentScope(auth.user);
+    const requestedStudentId = new URL(request.url).searchParams.get("studentId")?.trim() ?? null;
+    if (requestedStudentId !== null && (!requestedStudentId || requestedStudentId.length > 80)) {
+      return Response.json({ error: "学生参数无效" }, { status: 400 });
+    }
+    if (requestedStudentId !== null && !scope.all && !scope.studentIds.includes(requestedStudentId)) {
+      return Response.json({ error: "当前账号无权查看该学生" }, { status: 403 });
+    }
+    const proposals = await readProposals(auth.user, requestedStudentId === null
+      ? scope
+      : { all: false, studentIds: [requestedStudentId] });
     return Response.json({ proposals });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "研究方案读取失败" }, { status: 500 });

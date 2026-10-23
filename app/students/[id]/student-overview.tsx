@@ -1,11 +1,11 @@
 "use client";
+/* eslint-disable @next/next/no-html-link-for-pages -- Vinext's production Link bundle has missing dynamic navigation exports; native anchors keep archive navigation reliable. */
 
 import { activeBlockerText } from "../../../lib/progress-blocker";
 import { isCurrentResearchTrack } from "../../../lib/progress-track";
 
 import "./workspace.css";
 
-import Link from "next/link";
 import { ProgressResolutionPanel } from "../../../components/progress-resolution-panel";
 import type { ProgressResolutionKind, ProgressResolutionStatus } from "../../../lib/progress-resolution";
 import { AiRecordActions, DeletedAiRecords } from "../../../components/ai-record-actions";
@@ -325,6 +325,10 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   const [composeOpen, setComposeOpen] = useState(false);
   const [aiRefreshKey, setAiRefreshKey] = useState(0);
   const initialized = useRef(false);
+  const loadController = useRef<AbortController | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(true);
+  const [detailsError, setDetailsError] = useState("");
+  const [tasksVisited, setTasksVisited] = useState(false);
   const [student, setStudent] = useState<Student | null>(null);
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [outputs, setOutputs] = useState<ResearchOutput[]>([]);
@@ -351,14 +355,32 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   const [guidanceStatusBusy, setGuidanceStatusBusy] = useState<number | null>(null);
 
   const load = useCallback(async () => {
+    loadController.current?.abort();
+    const controller = new AbortController();
+    loadController.current = controller;
+    const options = { cache: "no-store" as const, signal: controller.signal };
+    const studentQuery = `studentId=${encodeURIComponent(studentId)}`;
     setLoading(true);
+    setDetailsLoading(true);
     setError("");
+    setDetailsError("");
+    // Read ancillary sections concurrently, but do not hold the archive behind them.
+    const details = Promise.allSettled([
+      fetch(`/api/research-outputs?${studentQuery}`, options).then(async (response) => {
+        const payload = await response.json() as { outputs?: ResearchOutput[]; error?: string };
+        if (!response.ok) throw new Error(payload.error || "科研成果读取失败");
+        return payload;
+      }),
+      fetch(`/api/student-guidance?${studentQuery}`, options).then(async (response) => {
+        const payload = await response.json() as { notes?: GuidanceNote[]; meetingSummaries?: MeetingSummary[]; canManageAiRecords?: boolean; error?: string };
+        if (!response.ok) throw new Error(payload.error || "导师指导与飞书总结读取失败");
+        return payload;
+      }),
+    ]);
     try {
-      const [dashboardResponse, proposalResponse, outputResponse, guidanceResponse] = await Promise.all([
-        fetch("/api/dashboard", { cache: "no-store" }),
-        fetch("/api/proposals", { cache: "no-store" }),
-        fetch(`/api/research-outputs?studentId=${encodeURIComponent(studentId)}`, { cache: "no-store" }),
-        fetch(`/api/student-guidance?studentId=${encodeURIComponent(studentId)}`, { cache: "no-store" }),
+      const [dashboardResponse, proposalResponse] = await Promise.all([
+        fetch(`/api/dashboard?${studentQuery}`, options),
+        fetch(`/api/proposals?${studentQuery}`, options),
       ]);
       const dashboard = (await dashboardResponse.json()) as {
         viewer?: { role: ViewerRole };
@@ -378,14 +400,9 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         window.location.replace("/");
         return;
       }
-      const [proposals, outputPayload, guidancePayload] = await Promise.all([
-        proposalResponse.json() as Promise<{ proposals?: Proposal[]; error?: string }>,
-        outputResponse.json() as Promise<{ outputs?: ResearchOutput[]; error?: string }>,
-        guidanceResponse.json() as Promise<{ notes?: GuidanceNote[]; meetingSummaries?: MeetingSummary[]; canManageAiRecords?: boolean; error?: string }>,
-      ]);
+      const proposals = await proposalResponse.json() as { proposals?: Proposal[]; error?: string };
       if (!proposalResponse.ok) throw new Error(proposals.error || "研究方案读取失败");
-      if (!outputResponse.ok) throw new Error(outputPayload.error || "科研成果读取失败");
-      if (!guidanceResponse.ok) throw new Error(guidancePayload.error || "导师指导与飞书总结读取失败");
+      if (controller.signal.aborted) return;
       const matched = dashboard.students?.find((item) => item.id === studentId) ?? null;
       if (!matched) throw new Error("学生不存在，或当前账号无权查看该学生");
       const reviewability = new Map((dashboard.pending ?? []).map((entry) => [entry.id, {
@@ -414,22 +431,32 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       });
       setViewerRole(dashboard.viewer?.role ?? null);
       setProposal(proposals.proposals?.find((item) => item.student_id === studentId) ?? null);
-      setOutputs(outputPayload.outputs ?? []);
       setPapers((dashboard.papers ?? []).filter((paper) => paper.student_id === studentId));
-      setGuidanceNotes(guidancePayload.notes ?? []);
-      setMeetingSummaries(guidancePayload.meetingSummaries ?? []);
-      setCanManageAiRecords(guidancePayload.canManageAiRecords === true);
       setAiRefreshKey((current) => current + 1);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "学生信息读取失败");
-    } finally {
       setLoading(false);
+      const [outputResult, guidanceResult] = await details;
+      if (controller.signal.aborted) return;
+      if (outputResult.status === "fulfilled") setOutputs(outputResult.value.outputs ?? []);
+      if (guidanceResult.status === "fulfilled") {
+        setGuidanceNotes(guidanceResult.value.notes ?? []);
+        setMeetingSummaries(guidanceResult.value.meetingSummaries ?? []);
+        setCanManageAiRecords(guidanceResult.value.canManageAiRecords === true);
+      }
+      setDetailsError([outputResult, guidanceResult].flatMap((result) => result.status === "rejected"
+        ? [result.reason instanceof Error ? result.reason.message : "部分资料读取失败"] : []).join("；"));
+    } catch (loadError) {
+      if (!controller.signal.aborted) setError(loadError instanceof Error ? loadError.message : "学生信息读取失败");
+    } finally {
+      if (!controller.signal.aborted) {
+        setLoading(false);
+        setDetailsLoading(false);
+      }
     }
   }, [studentId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(timer);
+    return () => { window.clearTimeout(timer); loadController.current?.abort(); };
   }, [load]);
 
   async function createOutput(event: FormEvent<HTMLFormElement>) {
@@ -651,7 +678,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   const ready = Boolean(student);
 
   useEffect(() => {
-    setResultFilterRequest(progressFilter === "results" && entry ? { filter: "pending", key: Date.now() } : undefined);
+    setResultFilterRequest(progressFilter === "results" && entry?.id !== undefined ? { filter: "pending", key: Date.now() } : undefined);
   }, [progressFilter, entry?.id]);
 
   useEffect(() => {
@@ -661,7 +688,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       if (!hash) return;
       const resolutionMatch = /^progress-resolution-(\d+)-(blocker|next_action)$/.exec(hash);
       if (resolutionMatch) {
-        setTab("tasks");
+        setTab("tasks"); setTasksVisited(true);
         setTaskFilterRequest(undefined);
         setTaskOpenRequest({ progressEntryId: Number(resolutionMatch[1]), itemKind: resolutionMatch[2] as "blocker" | "next_action", key: Date.now() });
         setFocusTarget("");
@@ -672,7 +699,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       if (match) {
         setTab("progress"); setProgressFilter("all"); setSelectedId(Number(match[1]));
       } else if (hash === "tasks" || hash === "tasks-completed" || hash === "tasks-pending") {
-        setTab("tasks");
+        setTab("tasks"); setTasksVisited(true);
         setTaskFilterRequest({ filter: hash === "tasks-completed" ? "completed" : hash === "tasks-pending" ? "pending" : "open", key: Date.now() });
       } else if (hash.startsWith("guidance")) {
         setTab("guidance");
@@ -689,7 +716,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   }, [ready]);
 
   useEffect(() => {
-    if (!focusTarget || loading) return;
+    if (!focusTarget || loading || detailsLoading) return;
     const timer = window.setTimeout(() => {
       const target = document.getElementById(focusTarget.replace("review-progress-", "progress-")) ?? document.getElementById(`sw-${tab}`);
       if (!target) return;
@@ -703,17 +730,18 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       setFocusTarget("");
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [focusTarget, loading, tab, entry?.id]);
+  }, [focusTarget, loading, detailsLoading, tab, entry?.id]);
 
   function switchTab(next: typeof tab) {
     setTab(next); setFocusTarget("");
+    if (next === "tasks") setTasksVisited(true);
     setTaskOpenRequest(undefined);
     setTaskFilterRequest(next === "tasks" ? { filter: "open", key: Date.now() } : undefined);
     window.history.replaceState(null, "", `#${next === "progress" ? "evidence" : next === "guidance" ? "guidance" : next === "tasks" ? "tasks" : "papers"}`);
   }
 
   function viewCompletedTasks() {
-    setTab("tasks");
+    setTab("tasks"); setTasksVisited(true);
     setTaskOpenRequest(undefined);
     setTaskFilterRequest({ filter: "completed", key: Date.now() });
     setFocusTarget("sw-tasks");
@@ -724,14 +752,14 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     switchTab("guidance"); setComposeOpen(true); setFocusTarget("guidance-compose");
   }
 
-  if (loading && !student) return <main className="student-workspace"><Link href="/">← 返回首页</Link><h1>学生档案</h1><p role="status">正在加载学生档案…</p></main>;
-  if (!student) return <main className="student-workspace"><Link href="/">← 返回首页</Link><h1>学生档案</h1><p role="alert">{error || "学生不存在"}</p><button onClick={() => void load()}>重新加载</button></main>;
+  if (loading && !student) return <main className="student-workspace"><a href="/">← 返回首页</a><h1>学生档案</h1><p role="status">正在加载学生档案…</p></main>;
+  if (!student) return <main className="student-workspace"><a href="/">← 返回首页</a><h1>学生档案</h1><p role="alert">{error || "学生不存在"}</p><button onClick={() => void load()}>重新加载</button></main>;
   const draft = entry ? guidanceDraft(entry) : null;
   const imported = meetingSummaries.find((item) => item.progress_entry_id === entry?.id);
   const followUpNotice = entry ? progressFollowUpNotice(entry, new Date()) : null;
 
   return <main className="student-workspace">
-    <nav className="sw-breadcrumb"><Link href="/?mentorView=students">← 返回学生列表</Link><span>探研 / 学生档案</span></nav>
+    <nav className="sw-breadcrumb"><a href="/?mentorView=students">← 返回学生列表</a><span>探研 / 学生档案</span></nav>
     <header className="sw-profile">
       <div className="sw-identity"><span className="sw-avatar" aria-hidden="true">{student.name.slice(-2)}</span><div><div className="sw-name"><h1>{student.name}</h1><span>{student.gradeYear} 级{student.degree}</span>{student.stage && student.stage !== "待确认" ? <span>{student.stage}</span> : null}</div><p>{student.currentFocus && !["待补充", "尚未填写"].includes(student.currentFocus) ? student.currentFocus : "研究方向尚未填写"}</p></div></div>
       <div className="sw-profile-actions"><span>最近确认进展<strong>{student.lastSubstantiveAt ? dateText(student.lastSubstantiveAt) : "暂无"}</strong></span><button onClick={viewCompletedTasks}>已完成任务</button><button className="primary" onClick={writeGuidance}>写指导</button></div>
@@ -743,6 +771,8 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       <button aria-current={tab === "research" ? "page" : undefined} onClick={() => switchTab("research")}>研究资料</button>
     </nav>
     {error ? <p className="sw-message" role="alert">{error} <button onClick={() => void load()}>重试</button></p> : null}
+    {detailsLoading ? <p className="sw-muted" role="status">正在读取指导记录和科研成果…</p> : null}
+    {detailsError ? <p className="sw-message" role="alert">{detailsError} <button onClick={() => void load()}>重试</button></p> : null}
     {guidanceMessage ? <p className="sw-message" role="status">{guidanceMessage}</p> : null}
 
     <section id="sw-progress" tabIndex={-1} hidden={tab !== "progress"} aria-label="进展与审核">
@@ -776,7 +806,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     </section>
 
     <section id="sw-tasks" tabIndex={-1} hidden={tab !== "tasks"} aria-label="任务与结果">
-      {tab === "tasks" ? <ProgressResolutionPanel studentId={studentId} mode="staff" openRequest={taskOpenRequest} filterRequest={taskFilterRequest} refreshKey={aiRefreshKey} onChanged={load} /> : null}
+      {tasksVisited ? <ProgressResolutionPanel studentId={studentId} mode="staff" openRequest={taskOpenRequest} filterRequest={taskFilterRequest} refreshKey={aiRefreshKey} onChanged={load} /> : null}
     </section>
 
     <section id="sw-guidance" tabIndex={-1} hidden={tab !== "guidance"} className="sw-panel" aria-label="指导">
@@ -787,7 +817,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         <details><summary>主题、关联纪要与验收设置</summary><div className="sw-form-grid"><label>指导主题（可选）<input name="title" maxLength={200} /></label><label>关联 AI 纪要<select name="sourceProgressEntryId" defaultValue=""><option value="">不关联</option>{meetingSummaries.map((item) => <option key={item.progress_entry_id} value={item.progress_entry_id}>{dateText(item.message_created_at)} · {item.title}</option>)}</select></label><label>完成确认方式<select name="verificationMode" defaultValue="self_report"><option value="self_report">学生自行确认完成</option><option value="mentor_verify">学生提交，导师验收</option></select></label><label>验收标准<textarea name="acceptanceCriteria" rows={2} maxLength={1200} placeholder="需要导师验收时，请写清完成标准" /></label></div></details>
         <div className="sw-actions"><button className="primary" disabled={guidanceSaveBusy}>{guidanceSaveBusy ? "保存中…" : "保存指导"}</button><button type="button" onClick={() => setComposeOpen(false)}>收起</button></div>
       </form>
-      <div className="sw-guidance-list">{activeGuidance.map((note) => <details key={note.id} id={`guidance-${note.id}`} tabIndex={-1}><summary><span className={`sw-guidance-status ${note.status}`}>{note.status === "completed" ? "已完成" : note.student_reported_at ? "待验收" : "进行中"}</span><div><strong>{note.title || note.next_action || note.content.split("\n")[0]}</strong><small>{note.mentor_name} · {dateText(note.created_at)}{note.due_date && note.status === "open" ? ` · 期限 ${note.due_date}` : ""}</small></div></summary><div className="sw-detail-body"><p>{note.content}</p>{note.next_action ? <DetailBlock label="下一步" value={note.next_action} /> : null}{note.due_date ? <DetailBlock label="完成期限" value={note.due_date} /> : null}{note.acceptance_criteria ? <DetailBlock label="验收标准" value={note.acceptance_criteria} /> : null}<p className="sw-muted">{note.status === "open" ? note.student_reported_at ? "学生已提交完成说明，等待验收" : note.acknowledged_at ? `学生已于 ${dateText(note.acknowledged_at)} 确认收到` : "等待学生确认收到" : `${note.completed_by_name || "学生"}已完成 · ${dateText(note.completed_at)}`}</p>{note.completion_note ? <DetailBlock label="完成说明" value={note.completion_note} /> : null}<footer className="sw-guidance-footer"><span>{note.source_title ? <a href={`#progress-${note.source_progress_entry_id}`}>关联纪要：{note.source_title}</a> : note.verification_mode === "mentor_verify" ? "需导师验收" : "学生自行确认"}</span><button disabled={guidanceStatusBusy === note.id || (note.status === "open" && note.verification_mode === "mentor_verify" && !note.student_reported_at)} onClick={() => void updateGuidanceStatus(note, note.status === "open" ? "complete" : "reopen")}>{note.status === "completed" ? "重新打开" : note.student_reported_at ? "确认验收" : "标记完成"}</button></footer></div></details>)}{!guidanceNotes.length ? <p className="sw-empty">暂无指导记录。点击“写指导”即可添加。</p> : null}</div>
+      <div className="sw-guidance-list">{activeGuidance.map((note) => <details key={note.id} id={`guidance-${note.id}`} tabIndex={-1}><summary><span className={`sw-guidance-status ${note.status}`}>{note.status === "completed" ? "已完成" : note.student_reported_at ? "待验收" : "进行中"}</span><div><strong>{note.title || note.next_action || note.content.split("\n")[0]}</strong><small>{note.mentor_name} · {dateText(note.created_at)}{note.due_date && note.status === "open" ? ` · 期限 ${note.due_date}` : ""}</small></div></summary><div className="sw-detail-body"><p>{note.content}</p>{note.next_action ? <DetailBlock label="下一步" value={note.next_action} /> : null}{note.due_date ? <DetailBlock label="完成期限" value={note.due_date} /> : null}{note.acceptance_criteria ? <DetailBlock label="验收标准" value={note.acceptance_criteria} /> : null}<p className="sw-muted">{note.status === "open" ? note.student_reported_at ? "学生已提交完成说明，等待验收" : note.acknowledged_at ? `学生已于 ${dateText(note.acknowledged_at)} 确认收到` : "等待学生确认收到" : `${note.completed_by_name || "学生"}已完成 · ${dateText(note.completed_at)}`}</p>{note.completion_note ? <DetailBlock label="完成说明" value={note.completion_note} /> : null}<footer className="sw-guidance-footer"><span>{note.source_title ? <a href={`#progress-${note.source_progress_entry_id}`}>关联纪要：{note.source_title}</a> : note.verification_mode === "mentor_verify" ? "需导师验收" : "学生自行确认"}</span><button disabled={guidanceStatusBusy === note.id || (note.status === "open" && note.verification_mode === "mentor_verify" && !note.student_reported_at)} onClick={() => void updateGuidanceStatus(note, note.status === "open" ? "complete" : "reopen")}>{note.status === "completed" ? "重新打开" : note.student_reported_at ? "确认验收" : "标记完成"}</button></footer></div></details>)}{!detailsLoading && !detailsError && !guidanceNotes.length ? <p className="sw-empty">暂无指导记录。点击“写指导”即可添加。</p> : null}</div>
     </section>
 
     <section id="sw-research" tabIndex={-1} hidden={tab !== "research"} className="sw-research" aria-label="研究资料">
@@ -797,7 +827,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         const latest = progress.find((item) => item.paper?.id === paper.id);
         return <details key={paper.id} className="sw-paper"><summary><div><strong>{paper.title}</strong><small>{paperStageMeta[paper.current_stage].label} · {paperStatusLabels[paper.status]}{paper.target_venue ? ` · ${paper.target_venue}` : ""}</small></div><span className={deadline?.overdue ? "sw-blocker" : "sw-muted"}>{deadline?.label || paperStatusLabels[paper.status]}</span></summary><div className="sw-detail-body"><DetailBlock label="下一步" value={latest?.paper?.next_action || "尚未填写"} />{latest?.paper?.next_action_due_date ? <DetailBlock label="行动期限" value={latest.paper.next_action_due_date} /> : null}{latest?.paper && activeBlockerText(latest.paper.blocker) ? <DetailBlock label="本次记录的困难" value={latest.paper.blocker} /> : null}<DetailBlock label="本阶段要求" value={paperStageMeta[paper.current_stage].gate} />{paper.submission_identifier ? <DetailBlock label="稿件编号 / DOI" value={paper.submission_identifier} /> : null}<p className="sw-muted">{paper.paper_type} · 最近更新 {dateText(paper.latest_progress_at)} · {paper.pending_count} 条待审</p>{latest ? <a href={`#progress-${latest.id}`}>查看最近进展 →</a> : null}</div></details>;
       })}{!papers.length ? <p className="sw-empty">暂无已确认论文。待审论文可在“进展与审核”查看。</p> : null}</section>
-      <section className="sw-panel" id="proposal" tabIndex={-1}><header className="sw-section-head"><div><h2>课题与节点</h2><p>{proposal ? proposalLabels[proposal.status] : "尚未建立研究方案"}</p></div><Link href={proposal ? `/?mentorView=research&researchTab=proposals&proposal=${proposal.id}` : "/?mentorView=research&researchTab=proposals"}>{proposal?.can_review && proposal.status === "submitted" ? "审核方案 →" : "管理方案 →"}</Link></header>{proposal ? <><h3>{proposal.title}</h3><details className="sw-proposal-details"><summary>查看研究方案</summary><div className="sw-detail-body"><DetailBlock label="科学问题" value={proposal.scientific_question} /><DetailBlock label="研究假设" value={proposal.hypothesis} /><DetailBlock label="研究目标" value={proposal.objectives} /><DetailBlock label="创新点" value={proposal.innovation} /><DetailBlock label="文献基础" value={proposal.literature_basis} /><DetailBlock label="技术路线" value={proposal.methodology} /><DetailBlock label="数据与伦理边界" value={proposal.data_ethics} /><DetailBlock label="风险与备选方案" value={proposal.risks} /><DetailBlock label="资源需求" value={proposal.resources} /><DetailBlock label="参考文献" value={proposal.references_text} />{proposal.reviewer_note ? <DetailBlock label="导师意见" value={proposal.reviewer_note} /> : null}</div></details></> : null}
+      <section className="sw-panel" id="proposal" tabIndex={-1}><header className="sw-section-head"><div><h2>课题与节点</h2><p>{proposal ? proposalLabels[proposal.status] : "尚未建立研究方案"}</p></div><a href={proposal ? `/?mentorView=research&researchTab=proposals&proposal=${proposal.id}` : "/?mentorView=research&researchTab=proposals"}>{proposal?.can_review && proposal.status === "submitted" ? "审核方案 →" : "管理方案 →"}</a></header>{proposal ? <><h3>{proposal.title}</h3><details className="sw-proposal-details"><summary>查看研究方案</summary><div className="sw-detail-body"><DetailBlock label="科学问题" value={proposal.scientific_question} /><DetailBlock label="研究假设" value={proposal.hypothesis} /><DetailBlock label="研究目标" value={proposal.objectives} /><DetailBlock label="创新点" value={proposal.innovation} /><DetailBlock label="文献基础" value={proposal.literature_basis} /><DetailBlock label="技术路线" value={proposal.methodology} /><DetailBlock label="数据与伦理边界" value={proposal.data_ethics} /><DetailBlock label="风险与备选方案" value={proposal.risks} /><DetailBlock label="资源需求" value={proposal.resources} /><DetailBlock label="参考文献" value={proposal.references_text} />{proposal.reviewer_note ? <DetailBlock label="导师意见" value={proposal.reviewer_note} /> : null}</div></details></> : null}
         <div id="milestones" className="sw-milestones">{proposal?.milestones.map((milestone) => <article key={milestone.id} id={`milestone-${milestone.id}`} tabIndex={-1}><div><h3>{milestone.title}</h3><p>{milestone.evidence_target || "尚未填写完成标准"}</p><small>{milestone.target_date || "期限待定"} · {targetText(milestone.target_date, milestone.status)}</small></div>{proposal.status === "approved" && viewerRole !== "student" ? <select aria-label={`${milestone.title}状态`} value={milestone.status} disabled={milestoneBusy === milestone.id} onChange={(event) => void updateMilestone(milestone.id, event.target.value as MilestoneStatus)}>{Object.entries(milestoneLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : <span>{milestoneLabels[milestone.status]}</span>}</article>)}{proposal && !proposal.milestones.length ? <p className="sw-empty">暂无培养节点。</p> : null}</div>
         {milestoneMessage ? <p role="status">{milestoneMessage}</p> : null}
         {proposal ? <details className="sw-record-history" id="audit" tabIndex={-1}><summary>方案版本与操作记录</summary><div className="sw-detail-body">{proposal.versions.map((version) => <p key={version.id}>第 {version.version_number} 版 · {version.submitted_by_name} · {dateText(version.created_at)}</p>)}{proposal.audit.map((event) => <div className="sw-audit-row" key={event.id}><strong>{auditLabels[event.action] || event.action}</strong><small>{event.actor_name} · {dateText(event.created_at)}</small><p>{event.detail}</p></div>)}{!proposal.versions.length && !proposal.audit.length ? <p>暂无版本或操作记录。</p> : null}</div></details> : null}
@@ -823,7 +853,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         <dl>{output.venue ? <div><dt>发布位置</dt><dd>{output.venue}</dd></div> : null}{output.identifier ? <div><dt>标识符</dt><dd>{output.identifier}</dd></div> : null}{output.milestone_title ? <div><dt>关联节点</dt><dd>{output.milestone_title}</dd></div> : null}</dl>
         {output.events.length ? <details className="student-output-events"><summary>变更记录（{output.events.length}）</summary>{output.events.map((event) => <div key={event.id}><strong>{event.detail}</strong><small>{event.actor_name} · {dateText(event.created_at)}</small></div>)}</details> : null}
         <footer><span>{output.created_by_name} · {dateText(output.updated_at)}</span>{output.url ? <a href={output.url} target="_blank" rel="noreferrer">打开成果 ↗</a> : null}</footer>
-      </article>)}{!outputs.length ? <div className="student-empty">暂无成果记录。</div> : null}</div>
+      </article>)}{!detailsLoading && !detailsError && !outputs.length ? <div className="student-empty">暂无成果记录。</div> : null}</div>
     </section>
 
     </section>

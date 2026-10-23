@@ -11,5 +11,5 @@ export const metadata: Metadata = {
 
 export default async function StudentPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  return <StudentOverview studentId={id} />;
+  return <StudentOverview key={id} studentId={id} />;
 }

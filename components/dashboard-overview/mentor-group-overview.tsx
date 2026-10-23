@@ -14,7 +14,7 @@ function readOverviewUrl() {
   return parseOverviewUrl(window.location.href);
 }
 
-export function MentorGroupOverview({ query, onQueryChange, refreshRequest }: { query: string; onQueryChange: (value: string) => void; refreshRequest: number }) {
+export function MentorGroupOverview({ query, onQueryChange, refreshRequest, active = true }: { query: string; onQueryChange: (value: string) => void; refreshRequest: number; active?: boolean }) {
   const initial = readOverviewUrl();
   const [data, setData] = useState<MentorOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -23,58 +23,68 @@ export function MentorGroupOverview({ query, onQueryChange, refreshRequest }: { 
   const [stateFilter, setStateFilter] = useState<OverviewState | "all">(initial.state);
   const [degreeFilter, setDegreeFilter] = useState<OverviewDegreeFilter>(initial.degree);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(initial.studentId);
-  const lastRefreshRequest = useRef(refreshRequest);
+  const hasData = useRef(false);
+  const requestSequence = useRef(0);
 
   const updateUrl = useCallback((updates: Record<string, string | null>, replace = false) => {
+    if (!active) return;
     const url = new URL(window.location.href);
     Object.entries(updates).forEach(([key, value]) => {
       if (!value || value === "all") url.searchParams.delete(key);
       else url.searchParams.set(key, value);
     });
     window.history[replace ? "replaceState" : "pushState"]({}, "", url);
-  }, []);
+  }, [active]);
 
   const load = useCallback(async (refresh = false) => {
+    const sequence = ++requestSequence.current;
     if (refresh) setRefreshing(true); else setLoading(true);
     setError("");
     try {
       const response = await fetch("/api/dashboard/overview", { cache: "no-store" });
       const payload = await response.json() as MentorOverviewResponse & { error?: string };
       if (!response.ok) throw new Error(payload.error || "全组进度读取失败");
+      if (sequence !== requestSequence.current) return;
+      hasData.current = true;
       setData(payload);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "全组进度读取失败");
+      if (sequence === requestSequence.current) setError(loadError instanceof Error ? loadError.message : "全组进度读取失败");
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (sequence === requestSequence.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    const refresh = refreshRequest !== lastRefreshRequest.current;
-    lastRefreshRequest.current = refreshRequest;
-    const timer = window.setTimeout(() => void load(refresh), 0);
+    if (!active) return;
+    // Keep this instance's last result visible while refreshing after a tab switch.
+    const timer = window.setTimeout(() => void load(hasData.current), 0);
     return () => window.clearTimeout(timer);
-  }, [load, refreshRequest]);
+  }, [active, load, refreshRequest]);
 
   useEffect(() => {
+    if (!active) return;
     const onPopState = () => {
       const next = readOverviewUrl();
       setStateFilter(next.state);
       setDegreeFilter(next.degree);
       setSelectedStudentId(next.studentId);
     };
+    onPopState();
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  }, [active]);
 
   useEffect(() => {
+    if (!active) return;
     const url = new URL(window.location.href);
     const normalized = query.trim();
     if ((url.searchParams.get("q") ?? "") === normalized) return;
     if (normalized) url.searchParams.set("q", normalized); else url.searchParams.delete("q");
     window.history.replaceState({}, "", url);
-  }, [query]);
+  }, [active, query]);
 
   const filtered = useMemo(() => {
     if (!data) return [];
@@ -145,6 +155,6 @@ export function MentorGroupOverview({ query, onQueryChange, refreshRequest }: { 
           <OverviewMobileList students={filtered} onOpen={openStudent} />
         </>}
     <details className="quiet-details group-overview-help"><summary>状态说明</summary><p>每人只显示当前最需处理的状态。进展统计仅包含导师确认的实质性进展，日期按北京时间计算。</p></details>
-    {selected ? <StudentOverviewDrawer student={selected} onClose={closeDrawer} /> : null}
+    {active && selected ? <StudentOverviewDrawer student={selected} onClose={closeDrawer} /> : null}
   </section>;
 }

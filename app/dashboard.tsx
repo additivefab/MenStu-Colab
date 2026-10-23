@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { LocalLogin } from "../components/local-login";
 import { ChangePassword } from "../components/change-password";
 import { LocalAccountActions } from "../components/local-account-actions";
@@ -506,6 +507,7 @@ function daysSinceSubstantiveProgress(student: Student) {
 }
 
 export default function Dashboard() {
+  const routeQuery = useSearchParams().toString();
   const [data, setData] = useState<DashboardData | null>(null);
   const [viewer, setViewer] = useState<DashboardData["viewer"] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -525,6 +527,7 @@ export default function Dashboard() {
   const [authGate, setAuthGate] = useState<AuthGate | null>(null);
   const [personaBusy, setPersonaBusy] = useState(false);
   const globalSearchRef = useRef<HTMLInputElement>(null);
+  const dashboardRequest = useRef(0);
 
   const navigateMentor = useCallback((next: MentorView, replace = false) => {
     setView(next);
@@ -557,14 +560,15 @@ export default function Dashboard() {
   }, []);
 
   const loadDashboard = useCallback(async () => {
+    const requestId = ++dashboardRequest.current;
     setLoading(true);
     try {
       setError("");
-      const [response, meetingResponse] = await Promise.all([
-        fetch("/api/dashboard", { cache: "no-store" }),
-        fetch("/api/meeting-requests", { cache: "no-store" }).catch(() => null),
-      ]);
+      // Appointments must not delay the student, paper or task data.
+      const meetingRequest = fetch("/api/meeting-requests", { cache: "no-store" }).catch(() => null);
+      const response = await fetch("/api/dashboard", { cache: "no-store" });
       const payload = (await response.json()) as DashboardData & { code?: string; error?: string };
+      if (requestId !== dashboardRequest.current) return;
       if (payload.code === "PASSWORD_CHANGE_REQUIRED") {
         setAuthGate({ kind: "password", message: "首次登录请先修改初始密码" });
         return;
@@ -585,23 +589,27 @@ export default function Dashboard() {
       setAuthGate(null);
       setData(payload);
       setViewer(payload.viewer);
+      setLoading(false);
       if (payload.viewer.role !== "student") {
-        if (!meetingResponse) {
-          setMeetingLoadError("预约服务暂时不可用");
-        } else {
+        setMeetingLoadError("预约正在同步，其他事项可以先处理");
+        await meetingRequest.then(async (meetingResponse) => {
+          if (!meetingResponse) throw new Error("预约服务暂时不可用");
           const meetingPayload = await meetingResponse.json().catch(() => ({ error: "预约服务返回了无法识别的响应" })) as { requests?: MeetingRequest[]; error?: string };
+          if (requestId !== dashboardRequest.current) return;
           if (meetingResponse.ok && !meetingPayload.error) {
             setMeetingRequests(meetingPayload.requests ?? []);
             setMeetingLoadError("");
           } else {
             setMeetingLoadError(meetingPayload.error || "预约读取失败");
           }
-        }
+        }).catch((failure) => {
+          if (requestId === dashboardRequest.current) setMeetingLoadError(failure instanceof Error ? failure.message : "预约读取失败");
+        });
       }
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "加载失败");
+      if (requestId === dashboardRequest.current) setError(loadError instanceof Error ? loadError.message : "加载失败");
     } finally {
-      setLoading(false);
+      if (requestId === dashboardRequest.current) setLoading(false);
     }
   }, []);
 
@@ -668,14 +676,14 @@ export default function Dashboard() {
       if (mentorViewFromUrl() === "overview") void loadOverviewShell();
       else void loadDashboard();
     }, 0);
-    return () => window.clearTimeout(timer);
+    return () => { window.clearTimeout(timer); dashboardRequest.current += 1; };
   }, [loadDashboard, loadOverviewShell]);
 
   useEffect(() => {
-    if (view === "overview" || data || !viewer || viewer.role === "student" || loading) return;
+    if (view === "overview" || data || !viewer || viewer.role === "student" || loading || error) return;
     const timer = window.setTimeout(() => void loadDashboard(), 0);
     return () => window.clearTimeout(timer);
-  }, [data, loadDashboard, loading, view, viewer]);
+  }, [data, error, loadDashboard, loading, view, viewer]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { setView(mentorViewFromUrl()); setQuery(dashboardQueryFromUrl()); }, 0);
@@ -687,7 +695,7 @@ export default function Dashboard() {
     const onPopState = () => { setView(mentorViewFromUrl()); setQuery(dashboardQueryFromUrl()); };
     window.addEventListener("popstate", onPopState);
     return () => { window.clearTimeout(timer); window.removeEventListener("popstate", onPopState); };
-  }, []);
+  }, [routeQuery]);
 
   useEffect(() => {
     if (viewer?.role !== "superadmin" && view === "settings") {
@@ -882,14 +890,15 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {loading ? <LoadingState /> : null}
+        {loading && !data ? <LoadingState /> : null}
+        {loading && data ? <p role="status">正在同步最新数据…</p> : null}
         {error ? <div className="error-state"><strong>数据暂时未加载</strong><span>{error}</span><button onClick={() => void loadDashboard()}>重试</button></div> : null}
 
-        {!loading && !error && activeView === "overview" ? (
-          <MentorGroupOverview query={query} onQueryChange={setQuery} refreshRequest={overviewRefreshRequest} />
-        ) : null}
+        <div hidden={activeView !== "overview"}>
+          <MentorGroupOverview active={activeView === "overview" && !loading && !error} query={query} onQueryChange={setQuery} refreshRequest={overviewRefreshRequest} />
+        </div>
 
-        {!loading && !error && data && activeView === "inbox" ? (
+        {data && activeView === "inbox" ? (
           <MentorDecisionInbox
             data={data}
             reviewBusy={reviewBusy}
@@ -903,7 +912,7 @@ export default function Dashboard() {
           />
         ) : null}
 
-        {!loading && !error && data && activeView === "students" ? (
+        {data && activeView === "students" ? (
           <section className="panel roster-panel">
             <PanelHeader title="全部学生" subtitle="博士与硕士均已纳入首批试用" count={filteredStudents.length} />
             <StudentFilters query={query} setQuery={setQuery} riskFilter={riskFilter} setRiskFilter={setRiskFilter} degreeFilter={degreeFilter} setDegreeFilter={setDegreeFilter} />
@@ -911,13 +920,13 @@ export default function Dashboard() {
           </section>
         ) : null}
 
-        {!loading && !error && data && activeView === "research" ? (
+        {data && activeView === "research" ? (
           <MentorResearchLedger data={data} onToast={setToast} />
         ) : null}
 
-        {!loading && !error && data && activeView === "meetings" ? <MeetingView viewer={data.viewer} students={data.students} meetingRequests={meetingRequests} meetingLoadError={meetingLoadError} onRemind={sendReminder} onToast={setToast} onMeetingChange={loadDashboard} /> : null}
-        {!loading && !error && data && activeView === "cohort" ? <div className="cohort-workspace"><OverviewMetrics data={data} /><section className="panel roster-panel"><PanelHeader title="课题组培养节奏" subtitle="按距离上次实质性进展的时间排序" count={filteredStudents.length} /><StudentFilters query={query} setQuery={setQuery} riskFilter={riskFilter} setRiskFilter={setRiskFilter} degreeFilter={degreeFilter} setDegreeFilter={setDegreeFilter} /><StudentTable students={filteredStudents} /></section></div> : null}
-        {!loading && !error && activeView === "settings" && data?.viewer.role === "superadmin" ? <SettingsView viewer={data.viewer} onFeishu={() => setFeishuOpen(true)} students={data.students} onRosterImported={async () => { setToast("真实学生名册已导入"); await loadDashboard(); }} /> : null}
+        {data && activeView === "meetings" ? <MeetingView viewer={data.viewer} students={data.students} meetingRequests={meetingRequests} meetingLoadError={meetingLoadError} onRemind={sendReminder} onToast={setToast} onMeetingChange={loadDashboard} /> : null}
+        {data && activeView === "cohort" ? <div className="cohort-workspace"><OverviewMetrics data={data} /><section className="panel roster-panel"><PanelHeader title="课题组培养节奏" subtitle="按距离上次实质性进展的时间排序" count={filteredStudents.length} /><StudentFilters query={query} setQuery={setQuery} riskFilter={riskFilter} setRiskFilter={setRiskFilter} degreeFilter={degreeFilter} setDegreeFilter={setDegreeFilter} /><StudentTable students={filteredStudents} /></section></div> : null}
+        {activeView === "settings" && data?.viewer.role === "superadmin" ? <SettingsView viewer={data.viewer} onFeishu={() => setFeishuOpen(true)} students={data.students} onRosterImported={async () => { setToast("真实学生名册已导入"); await loadDashboard(); }} /> : null}
       </section>
 
       {guidanceOpen && data ? <GuidanceQuickModal students={data.students} onClose={() => setGuidanceOpen(false)} onSaved={async () => { setGuidanceOpen(false); setToast("指导已保存，并进入学生下一步行动"); await loadDashboard(); }} /> : null}
@@ -1204,13 +1213,15 @@ function mentorResearchTabFromUrl(): MentorResearchTab {
 }
 
 function MentorResearchLedger({ data, onToast }: { data: DashboardData; onToast: (message: string) => void }) {
+  const routeQuery = useSearchParams().toString();
   const [tab, setTab] = useState<MentorResearchTab>(mentorResearchTabFromUrl);
   const initialProposalId = typeof window === "undefined" ? undefined : Number(new URL(window.location.href).searchParams.get("proposal")) || undefined;
   useEffect(() => {
     const restoreTab = () => setTab(mentorResearchTabFromUrl());
+    const timer = window.setTimeout(restoreTab, 0);
     window.addEventListener("popstate", restoreTab);
-    return () => window.removeEventListener("popstate", restoreTab);
-  }, []);
+    return () => { window.clearTimeout(timer); window.removeEventListener("popstate", restoreTab); };
+  }, [routeQuery]);
   function selectTab(next: MentorResearchTab) {
     setTab(next);
     const url = new URL(window.location.href);
@@ -1400,7 +1411,6 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
   const [pendingNavigation, setPendingNavigation] = useState<StudentNavigationIntent | null>(null);
   const student = data.students.find((item) => item.id === data.viewer.studentId);
   const papers = student ? data.papers.filter((paper) => paper.student_id === student.id) : [];
-  const paperEntries = student?.progress.filter((entry) => entry.kind === "论文") ?? [];
   const projectEntries = student?.progress.filter((entry) => entry.kind === "项目") ?? [];
   const currentEntries = student ? student.progress.filter((entry) => currentStudentEntry(entry, student, papers)) : [];
   const paperReturned = currentEntries.filter((entry) => entry.kind === "论文" && entry.review_status === "changes_requested").length;
@@ -2542,13 +2552,13 @@ function ProposalWorkspace({ viewer, students, onToast, initialSelectedId }: {
       setProposals(items);
       setSelectedId((current) => items.some((item) => item.id === current)
         ? current
-        : items.find((item) => item.id === initialSelectedId)?.id ?? items.find((item) => item.status === "submitted")?.id ?? items[0]?.id ?? null);
+        : items.find((item) => item.status === "submitted")?.id ?? items[0]?.id ?? null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "研究方案加载失败");
     } finally {
       setLoading(false);
     }
-  }, [initialSelectedId]);
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
@@ -2564,9 +2574,10 @@ function ProposalWorkspace({ viewer, students, onToast, initialSelectedId }: {
         ?? null;
       setSelectedId(restoredId);
     }
+    const timer = window.setTimeout(restoreProposal, 0);
     window.addEventListener("popstate", restoreProposal);
-    return () => window.removeEventListener("popstate", restoreProposal);
-  }, [proposals]);
+    return () => { window.clearTimeout(timer); window.removeEventListener("popstate", restoreProposal); };
+  }, [initialSelectedId, proposals]);
 
   function selectProposal(id: number) {
     setSelectedId(id);

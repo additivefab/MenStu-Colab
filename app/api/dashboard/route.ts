@@ -205,6 +205,17 @@ function reviewClaimIsStale(value: string | null) {
   return !Number.isFinite(timestamp) || Date.now() - timestamp >= 30 * 60 * 1000;
 }
 
+function groupRows<Key, Row>(rows: Row[], key: (row: Row) => Key) {
+  const groups = new Map<Key, Row[]>();
+  for (const row of rows) {
+    const rowKey = key(row);
+    const group = groups.get(rowKey);
+    if (group) group.push(row);
+    else groups.set(rowKey, [row]);
+  }
+  return groups;
+}
+
 export async function GET(request: Request) {
   try {
     const auth = await requireAppUser(request, ["superadmin", "admin", "student"]);
@@ -219,7 +230,16 @@ export async function GET(request: Request) {
     await ensureDatabase();
     const d1 = getD1();
     const scope = await getStudentScope(viewer);
-    const studentScope = scopeSql(scope, "s.id");
+    const requestedStudentId = new URL(request.url).searchParams.get("studentId")?.trim() ?? null;
+    if (requestedStudentId !== null && (!requestedStudentId || requestedStudentId.length > 80)) {
+      return Response.json({ error: "学生参数无效" }, { status: 400 });
+    }
+    if (requestedStudentId !== null && !scope.all && !scope.studentIds.includes(requestedStudentId)) {
+      return Response.json({ error: "当前账号无权查看该学生" }, { status: 403 });
+    }
+    const studentScope = scopeSql(requestedStudentId === null
+      ? scope
+      : { all: false, studentIds: [requestedStudentId] }, "s.id");
     const studentStatement = d1.prepare(`SELECT
       s.id, s.display_name, s.degree, s.grade_year, s.stage, s.cadence_days,
       s.current_focus, s.last_substantive_at, s.tracking_started_at,
@@ -325,54 +345,69 @@ export async function GET(request: Request) {
 
       const progressIds = progressRows.map((entry) => entry.id);
       if (progressIds.length) {
-        const progressPlaceholders = progressIds.map(() => "?").join(",");
+        // D1 allows at most 100 bound parameters per statement. Keep all history
+        // for the selected entries, while batching the reads into four round trips.
+        const progressChunks: Array<{ ids: number[]; placeholders: string }> = [];
+        for (let offset = 0; offset < progressIds.length; offset += 90) {
+          const ids = progressIds.slice(offset, offset + 90);
+          progressChunks.push({ ids, placeholders: ids.map(() => "?").join(",") });
+        }
         const [evidence, attachments, audit, revisions] = await Promise.all([
-          d1.prepare(`SELECT id, progress_entry_id, source_type, label,
+          d1.batch<EvidenceSourceRow>(progressChunks.map(({ ids, placeholders }) => d1.prepare(`SELECT id, progress_entry_id, source_type, label,
             source_ref, content_sha256, revision_number, occurred_at, created_at
-            FROM progress_evidence_sources WHERE progress_entry_id IN (${progressPlaceholders})
-            ORDER BY progress_entry_id, created_at, id`).bind(...progressIds).all<EvidenceSourceRow>(),
-          d1.prepare(`SELECT id, progress_entry_id, file_name, content_type,
+            FROM progress_evidence_sources WHERE progress_entry_id IN (${placeholders})
+            ORDER BY progress_entry_id, created_at, id`).bind(...ids))),
+          d1.batch<AttachmentRow>(progressChunks.map(({ ids, placeholders }) => d1.prepare(`SELECT id, progress_entry_id, file_name, content_type,
             size_bytes, content_sha256, revision_number, created_at
-            FROM progress_attachments WHERE progress_entry_id IN (${progressPlaceholders})
-            ORDER BY progress_entry_id, created_at, id`).bind(...progressIds).all<AttachmentRow>(),
-          d1.prepare(`SELECT a.id, a.progress_entry_id, a.action, a.from_status, a.to_status,
+            FROM progress_attachments WHERE progress_entry_id IN (${placeholders})
+            ORDER BY progress_entry_id, created_at, id`).bind(...ids))),
+          d1.batch<ProgressAuditRow>(progressChunks.map(({ ids, placeholders }) => d1.prepare(`SELECT a.id, a.progress_entry_id, a.action, a.from_status, a.to_status,
             a.assessment, a.note, a.created_at, a.actor_type, u.display_name AS actor_name
             FROM progress_audit_events a LEFT JOIN app_users u ON u.id = a.actor_user_id
-            WHERE a.progress_entry_id IN (${progressPlaceholders})
+            WHERE a.progress_entry_id IN (${placeholders})
             ORDER BY a.progress_entry_id, a.created_at DESC, a.id DESC`)
-            .bind(...progressIds).all<ProgressAuditRow>(),
-          d1.prepare(`SELECT r.id, r.progress_entry_id, r.revision_number, r.snapshot_json,
+            .bind(...ids))),
+          d1.batch<ProgressRevisionRow>(progressChunks.map(({ ids, placeholders }) => d1.prepare(`SELECT r.id, r.progress_entry_id, r.revision_number, r.snapshot_json,
             r.review_status, r.assessment, r.reviewer_note,
             reviewer.display_name AS reviewer_name, r.reviewed_at, r.created_at
             FROM progress_revisions r
             LEFT JOIN app_users reviewer ON reviewer.id = r.reviewed_by_user_id
-            WHERE r.progress_entry_id IN (${progressPlaceholders})
+            WHERE r.progress_entry_id IN (${placeholders})
             ORDER BY r.progress_entry_id, r.revision_number DESC`)
-            .bind(...progressIds).all<ProgressRevisionRow>(),
+            .bind(...ids))),
         ]);
-        evidenceRows = evidence.results;
-        attachmentRows = attachments.results;
-        auditRows = audit.results;
-        revisionRows = revisions.results;
+        // Each entry belongs to exactly one chunk, so its SQL-defined ordering
+        // is preserved when the following groupRows calls assemble its history.
+        evidenceRows = evidence.flatMap((chunk) => chunk.results);
+        attachmentRows = attachments.flatMap((chunk) => chunk.results);
+        auditRows = audit.flatMap((chunk) => chunk.results);
+        revisionRows = revisions.flatMap((chunk) => chunk.results);
       }
     }
 
+    const revisionsByProgress = groupRows(revisionRows, (row) => row.progress_entry_id);
+    const evidenceByProgress = groupRows(evidenceRows, (row) => row.progress_entry_id);
+    const attachmentsByProgress = groupRows(attachmentRows, (row) => row.progress_entry_id);
+    const auditByProgress = groupRows(auditRows, (row) => row.progress_entry_id);
+    const resolutionsByProgress = groupRows(resolutionRows, (row) => row.progress_entry_id);
+    const papersByStudent = groupRows(paperRows, (row) => row.student_id);
+    const milestonesByStudent = groupRows(milestoneRows, (row) => row.student_id);
+    const studentById = new Map(studentResult.results.map((row) => [row.id, row]));
     const mappedProgress = progressRows.map((entry) => {
-      const currentRevision = revisionRows.find((revision) => (
-        revision.progress_entry_id === entry.id && revision.revision_number === entry.current_revision
-      ));
+      const revisions = revisionsByProgress.get(entry.id) ?? [];
+      const evidence = evidenceByProgress.get(entry.id) ?? [];
+      const currentRevision = revisions.find((revision) => revision.revision_number === entry.current_revision);
       const currentSnapshot = revisionSnapshot(
         currentRevision?.snapshot_json ?? "{}",
       );
-      const aiSummaryOrigin = entry.kind === "组会" && evidenceRows.some((source) => (
-          source.progress_entry_id === entry.id
-          && (source.source_type.startsWith("feishu_") || /智能纪要|飞书妙记/u.test(source.label))
+      const aiSummaryOrigin = entry.kind === "组会" && evidence.some((source) => (
+          source.source_type.startsWith("feishu_") || /智能纪要|飞书妙记/u.test(source.label)
         ));
       return {
         ...entry,
         current_revision_created_at: currentRevision?.created_at ?? entry.submitted_at,
-        follow_up_states: Object.fromEntries(resolutionRows
-          .filter((item) => item.progress_entry_id === entry.id && item.revision_number === entry.current_revision)
+        follow_up_states: Object.fromEntries((resolutionsByProgress.get(entry.id) ?? [])
+          .filter((item) => item.revision_number === entry.current_revision)
           .map((item) => [item.item_kind, item.status])),
         paper: entry.paper_id || entry.paper_candidate_id ? {
           id: entry.paper_id ?? 0,
@@ -401,22 +436,20 @@ export async function GET(request: Request) {
         can_delete_ai: aiSummaryOrigin && (viewer.role === "superadmin" || viewer.role === "admin")
           && reviewableStudentIds.has(entry.student_id),
         ai_summary_origin: aiSummaryOrigin,
-        evidence_sources: evidenceRows
-          .filter((source) => source.progress_entry_id === entry.id)
+        evidence_sources: evidence
           .map((source) => ({
             ...source,
             source_ref: evidenceDisplayRef(source.source_type, source.source_ref),
             content_sha256: source.content_sha256 ? source.content_sha256.slice(0, 12) : "",
           })),
-        attachments: attachmentRows
-          .filter((attachment) => attachment.progress_entry_id === entry.id)
+        attachments: (attachmentsByProgress.get(entry.id) ?? [])
           .map((attachment) => ({
             ...attachment,
             content_sha256: attachment.content_sha256.slice(0, 12),
             download_url: `/api/progress/files?id=${attachment.id}`,
           })),
-        audit: auditRows.filter((event) => event.progress_entry_id === entry.id).slice(0, 12),
-        revisions: revisionRows.filter((revision) => revision.progress_entry_id === entry.id).map((revision) => ({
+        audit: (auditByProgress.get(entry.id) ?? []).slice(0, 12),
+        revisions: revisions.map((revision) => ({
           id: revision.id,
           revision_number: revision.revision_number,
           snapshot: revisionSnapshot(revision.snapshot_json),
@@ -431,21 +464,23 @@ export async function GET(request: Request) {
     });
 
     const nameById = new Map(studentResult.results.map((row) => [row.id, row.display_name]));
+    const progressByPaper = groupRows(mappedProgress, (entry) => entry.paper_id);
+    const progressByStudent = groupRows(mappedProgress, (entry) => entry.student_id);
     const papers = paperRows.map((paper) => ({
       ...paper,
-      update_count: mappedProgress.filter((entry) => entry.paper_id === paper.id).length,
-      pending_count: mappedProgress.filter((entry) => entry.paper_id === paper.id && (
+      update_count: (progressByPaper.get(paper.id) ?? []).length,
+      pending_count: (progressByPaper.get(paper.id) ?? []).filter((entry) => (
         entry.review_status === "submitted" || entry.review_status === "in_review"
       )).length,
     }));
     const pending = mappedProgress
       .filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review")
       .filter((entry) => {
-        const student = studentResult.results.find((row) => row.id === entry.student_id);
+        const student = studentById.get(entry.student_id);
         return isCurrentResearchTrack({ paperId: entry.paper?.id, milestoneId: entry.project?.milestone_id, proposalVersion: entry.project?.proposal_version }, {
           proposal: student?.proposal_version != null ? { status: student.proposal_status ?? "draft", version: student.proposal_version } : null,
-          papers: paperRows.filter((paper) => paper.student_id === entry.student_id),
-          milestones: milestoneRows.filter((milestone) => milestone.student_id === entry.student_id),
+          papers: papersByStudent.get(entry.student_id) ?? [],
+          milestones: milestonesByStudent.get(entry.student_id) ?? [],
         });
       })
       .map((entry) => {
@@ -487,8 +522,8 @@ export async function GET(request: Request) {
       nextMilestoneDate: row.next_milestone_date,
       outputCount: Number(row.output_count ?? 0),
       risk: riskFromDate(row.last_substantive_at ?? row.tracking_started_at),
-      progress: mappedProgress.filter((entry) => entry.student_id === row.id),
-      milestones: milestoneRows.filter((milestone) => milestone.student_id === row.id),
+      progress: progressByStudent.get(row.id) ?? [],
+      milestones: milestonesByStudent.get(row.id) ?? [],
     }));
 
     if (viewer.role === "student") {
