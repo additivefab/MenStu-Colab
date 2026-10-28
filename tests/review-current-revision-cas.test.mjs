@@ -107,9 +107,10 @@ test("revision repair still restores a partial write while the expected revision
 });
 
 test("review route binds the captured revision as both target and parent CAS", () => {
+  assert.match(reviewsRoute, /const reviewRevision = expectedRevision \?\? entry\.current_revision/u);
   assert.match(synchronizeSql, /revision_number = \?[\s\S]*current_parent\.current_revision = \?/u);
   assert.match(
     reviewsRoute,
-    /\.bind\(id, id, id, id, id, id, entry\.current_revision, id, entry\.current_revision\)\.run\(\)/u,
+    /\.bind\(id, id, id, id, id, id, reviewRevision, id, reviewRevision\)\.run\(\)/u,
   );
 });

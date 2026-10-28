@@ -16,6 +16,8 @@ import type { ProgressResolutionKind, ProgressResolutionStatus } from "../lib/pr
 import { AiRecordActions } from "../components/ai-record-actions";
 import { MentorGroupOverview } from "../components/dashboard-overview/mentor-group-overview";
 import { ProblemRecords } from "../components/problem-records";
+import { MonthlyDeliveryProgress } from "../components/monthly-delivery-progress";
+import type { MonthlyDeliverySummary } from "../lib/monthly-delivery";
 import type { ProblemRecordStudent } from "../lib/problem-records";
 import { clearMutationKey, mutationKeyForForm } from "../lib/client-idempotency";
 
@@ -142,6 +144,7 @@ type StudentPaper = {
 };
 
 type Student = {
+  monthlyDelivery?: MonthlyDeliverySummary;
   id: string;
   name: string;
   degree: "博士" | "硕士";
@@ -441,6 +444,16 @@ const navItems = [
 
 type MentorView = (typeof navItems)[number]["id"];
 
+type ReviewReceipt = {
+  entryId: number;
+  studentId: string;
+  studentName: string;
+  title: string;
+  revision: number;
+  result: string;
+  accepted: boolean;
+};
+
 function mentorViewFromUrl(): MentorView {
   if (typeof window === "undefined") return "overview";
   const params = new URL(window.location.href).searchParams;
@@ -524,6 +537,8 @@ export default function Dashboard() {
   const [guidanceOpen, setGuidanceOpen] = useState(false);
   const [feishuOpen, setFeishuOpen] = useState(false);
   const [reviewBusy, setReviewBusy] = useState<number | null>(null);
+  const [reviewReceipt, setReviewReceipt] = useState<ReviewReceipt | null>(null);
+  const [followUpSource, setFollowUpSource] = useState<ReviewReceipt | null>(null);
   const [reviewNotes, setReviewNotes] = useState<Record<number, string>>({});
   const [meetingRequests, setMeetingRequests] = useState<MeetingRequest[]>([]);
   const [meetingLoadError, setMeetingLoadError] = useState("");
@@ -759,10 +774,12 @@ export default function Dashboard() {
       const response = await fetch("/api/reviews", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: entry.id, action, note: reviewNotes[entry.id] || "", guidance }),
+        body: JSON.stringify({ id: entry.id, action, expectedRevision: entry.current_revision, note: reviewNotes[entry.id] || "", guidance }),
       });
       const result = (await response.json()) as { error?: string; message?: string };
       if (!response.ok) throw new Error(result.error || "审核失败");
+      const outcome = ({ substantive: "已确认本次进展", supporting: "已记录支持性工作", supplement: "已退回补充", rejected: "已记录为非进展" } as Record<string, string>)[action];
+      if (outcome) setReviewReceipt({ entryId: entry.id, studentId: entry.student_id, studentName: entry.display_name, title: entry.title, revision: entry.current_revision, result: outcome, accepted: action === "substantive" || action === "supporting" });
       setToast(guidance ? (result.message || "已退回并发送指导") : action === "start_review" ? (entry.claim_stale ? "已重新领取超时审核" : "已接手审核") : action === "release_review" ? "已释放审核" : action === "substantive" ? "已确认为实质性进展" : "审核结果已保存");
       await loadDashboard();
     } catch (reviewError) {
@@ -919,6 +936,9 @@ export default function Dashboard() {
           <MentorDecisionInbox
             data={data}
             reviewBusy={reviewBusy}
+            receipt={reviewReceipt}
+            onDismissReceipt={() => setReviewReceipt(null)}
+            onPlanFollowUp={setFollowUpSource}
             reviewNotes={reviewNotes}
             setReviewNotes={setReviewNotes}
             onReview={review}
@@ -947,6 +967,7 @@ export default function Dashboard() {
       </section>
 
       {guidanceOpen && data ? <GuidanceQuickModal students={data.students} onClose={() => setGuidanceOpen(false)} onSaved={async () => { setGuidanceOpen(false); setToast("指导已保存，并进入学生下一步行动"); await loadDashboard(); }} /> : null}
+      {followUpSource && data ? <GuidanceQuickModal students={data.students} followUp={followUpSource} initialStudentId={followUpSource.studentId} onClose={() => setFollowUpSource(null)} onSaved={async () => { setFollowUpSource(null); setToast("后续工作已按你选择的期限保存，本次进展的确认结果保持有效"); await loadDashboard(); }} /> : null}
       {issueForm ? <GuidanceQuickModal students={issueForm.students} problemMode initialStudentId={issueForm.selectedStudentId} onClose={() => setIssueForm(null)} onSaved={async () => { setIssueForm(null); setData(null); setToast("问题已记录，可在问题列表和学生档案中继续跟进"); setIssuesRefreshRequest((value) => value + 1); setOverviewRefreshRequest((value) => value + 1); }} /> : null}
       {feishuOpen ? <FeishuModal viewer={currentViewer} onClose={() => setFeishuOpen(false)} onSwitchPersona={switchPersona} personaBusy={personaBusy} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.reload(); }} /> : null}
       {toast ? <div className="toast" role="status">{toast}</div> : null}
@@ -967,9 +988,12 @@ const mentorTaskLabels: Record<MentorTaskCategory, string> = {
   waiting: "等待中",
 };
 
-function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, onReview, onToast, onRefresh, meetingRequests, meetingLoadError }: {
+function MentorDecisionInbox({ data, reviewBusy, receipt, onDismissReceipt, onPlanFollowUp, reviewNotes, setReviewNotes, onReview, onToast, onRefresh, meetingRequests, meetingLoadError }: {
   data: DashboardData;
   reviewBusy: number | null;
+  receipt: ReviewReceipt | null;
+  onDismissReceipt: () => void;
+  onPlanFollowUp: (receipt: ReviewReceipt) => void;
   reviewNotes: Record<number, string>;
   setReviewNotes: Dispatch<SetStateAction<Record<number, string>>>;
   onReview: (entry: PendingEntry, action: string, guidance?: ReviewGuidance) => Promise<void>;
@@ -1079,14 +1103,22 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
     return result;
   }, { decision: 0, coordination: 0, followup: 0, waiting: 0 });
 
+  const receiptMonthlyDelivery = receipt ? data.students.find((student) => student.id === receipt.studentId)?.monthlyDelivery : undefined;
+
   return <section className="mentor-inbox">
+    {receipt ? <section className={`mentor-review-receipt${receipt.accepted ? " accepted" : ""}`} aria-label="最近审核结果" role="status">
+      <div><strong>{receipt.studentName} · {receipt.result}</strong><p>{receipt.title} · V{receipt.revision}</p>
+        <small>{data.pending.some((entry) => entry.id === receipt.entryId && entry.current_revision === receipt.revision) ? "审核结果已保存，正在更新待办列表；若刷新失败，可点击同步最新数据。" : "该条已移出待审队列。下方为其他待办；后续问题和工作独立跟进。"}</small>
+        {receiptMonthlyDelivery ? <MonthlyDeliveryProgress summary={receiptMonthlyDelivery} compact /> : null}
+      </div><div className="mentor-receipt-actions"><a href={`/students/${encodeURIComponent(receipt.studentId)}#progress-${receipt.entryId}`}>查看已处理记录</a>{receipt.accepted ? <button type="button" onClick={() => onPlanFollowUp(receipt)}>安排后续工作</button> : null}<button type="button" aria-label="收起最近审核结果" onClick={onDismissReceipt}>收起</button></div>
+    </section> : null}
     <nav className="mentor-task-views" aria-label="任务记录">
       <button type="button" aria-pressed={taskView === "pending"} onClick={() => selectTaskView("pending")}>待办任务</button>
       <button type="button" aria-pressed={taskView === "completed"} onClick={() => selectTaskView("completed")}>已完成任务</button>
     </nav>
     {taskView === "completed" ? <ProgressResolutionPanel mode="staff" initialFilter="completed" /> : <>
     <div className="mentor-inbox-summary">
-      <div><h2>{tasks.filter((task) => task.category !== "waiting").length} 项待处理</h2></div>
+      <div><h2>{tasks.filter((task) => task.category !== "waiting").length} 项待处理</h2><p>审核本次提交；后续工作按你指定的时间另行安排。</p></div>
       <div className="mentor-inbox-filters" role="group" aria-label="待办类型">
         <button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>全部 <b>{tasks.length}</b></button>
         {(Object.keys(mentorTaskLabels) as MentorTaskCategory[]).map((category) => <button className={filter === category ? "active" : ""} key={category} onClick={() => setFilter(category)}>{mentorTaskLabels[category]} <b>{counts[category]}</b></button>)}
@@ -1116,6 +1148,7 @@ function MentorDecisionInbox({ data, reviewBusy, reviewNotes, setReviewNotes, on
         {selected?.kind === "progress" ? <MentorProgressDecision
           key={selected.entry.id}
           entry={selected.entry}
+          monthlyDelivery={data.students.find((student) => student.id === selected.entry.student_id)?.monthlyDelivery}
           busy={reviewBusy === selected.entry.id}
           note={reviewNotes[selected.entry.id] || ""}
           onNote={(value) => setReviewNotes((current) => ({ ...current, [selected.entry.id]: value }))}
@@ -1156,8 +1189,9 @@ function isAiSummaryCandidate(entry: PendingEntry) {
   return entry.ai_summary_origin;
 }
 
-function MentorProgressDecision({ entry, busy, note, onNote, onReview, onChanged }: {
+function MentorProgressDecision({ entry, monthlyDelivery, busy, note, onNote, onReview, onChanged }: {
   entry: PendingEntry;
+  monthlyDelivery?: MonthlyDeliverySummary;
   busy: boolean;
   note: string;
   onNote: (value: string) => void;
@@ -1179,6 +1213,7 @@ function MentorProgressDecision({ entry, busy, note, onNote, onReview, onChanged
   }
   return <article className="mentor-progress-decision">
     <header><div><span>{aiCandidate ? "AI 纪要候选" : entry.kind} · 当前 V{entry.current_revision}</span><h2>{entry.paper?.title || entry.title}</h2><p>{entry.display_name} · {shortDate(entry.submitted_at)}提交</p></div><a href={`/students/${encodeURIComponent(entry.student_id)}#evidence`}>完整档案 ↗</a></header>
+    {monthlyDelivery ? <MonthlyDeliveryProgress summary={monthlyDelivery} /> : null}
     {aiCandidate && entry.can_delete_ai ? <AiRecordActions record={entry} onChanged={onChanged} /> : null}
     {aiCandidate ? <div className="mentor-ai-candidate-note"><b>AI 已从组会纪要提取候选进展</b><span>以下内容尚未生效；只有您的勾选或退回指导会形成正式记录。</span></div> : null}
     <div className="mentor-decision-status"><span className={`status-pill ${entry.review_status === "in_review" ? "reviewing" : "pending"}`}>{entry.claim_stale ? "接手已超时" : entry.review_status === "in_review" ? `${entry.reviewer_name || "导师"}审核中` : "等待判断"}</span><small>正式判断将写入版本与审计记录</small></div>
@@ -1192,10 +1227,10 @@ function MentorProgressDecision({ entry, busy, note, onNote, onReview, onChanged
     {entry.project ? <div className="mentor-decision-facts"><div><span>培养节点</span><strong>{entry.project.milestone_title || "未关联节点"}</strong></div><div><span>下一行动</span><strong>{entry.project.next_action}</strong></div><div><span>期限</span><strong>{entry.project.next_action_due_date}</strong></div>{activeBlockerText(entry.project.blocker) ? <div className="blocker"><span>问题说明</span><strong>{entry.project.blocker}</strong></div> : null}</div> : null}
     <div className="mentor-evidence-strip">{entry.evidence_sources.map((source) => <span key={source.id}><b>{source.label}</b>{source.source_ref ? <a href={source.source_ref} target="_blank" rel="noreferrer">打开证据</a> : null}{source.content_sha256 ? <small>指纹 {source.content_sha256}</small> : null}</span>)}{entry.attachments.map((attachment) => <a key={attachment.id} href={attachment.download_url}><b>{attachment.file_name}</b><small>{fileSizeText(attachment.size_bytes)}</small></a>)}</div>
     {entry.can_decide ? <section className="mentor-binary-review" aria-label="快速判断">
-      <div className="mentor-binary-review-head"><div><span>只做一个判断</span><strong>这可以作为学生的正式进展吗？</strong></div><small>确认后自动进入下一项</small></div>
-      <div className="mentor-binary-actions" role="group" aria-label="确认或指导">
-        <button type="button" className="confirm" disabled={busy} onClick={() => void onReview("substantive")}><span aria-hidden="true">✓</span><b>{busy ? "处理中…" : "确认进展"}</b><small>计入实质进展</small></button>
-        <button type="button" className="guide" disabled={busy} aria-expanded={guidanceOpen} onClick={() => setGuidanceOpen((open) => !open)}><span aria-hidden="true">×</span><b>需要指导</b><small>退回并明确下一步</small></button>
+      <div className="mentor-binary-review-head"><div><span>本次提交验收</span><strong>确认已交付的工作</strong></div><small>确认后可另行安排后续工作和期限</small></div>
+      <div className="mentor-binary-actions" role="group" aria-label="本次提交验收">
+        <button type="button" className="confirm" disabled={busy} onClick={() => void onReview("substantive")}><span aria-hidden="true">✓</span><b>{busy ? "处理中…" : "确认本次进展"}</b><small>确认本次已提交的成果</small></button>
+        <button type="button" className="guide" disabled={busy} aria-expanded={guidanceOpen} onClick={() => setGuidanceOpen((open) => !open)}>本次材料不完整，退回补充</button>
       </div>
       {guidanceOpen ? <form className="mentor-inline-guidance" onSubmit={(event) => void submitGuidance(event)}>
         <header><div><span>退回指导</span><strong>一次写清问题、下一步和完成标准</strong></div><button type="button" onClick={() => setGuidanceOpen(false)} aria-label="收起指导表单">收起</button></header>
@@ -1255,7 +1290,7 @@ function MentorResearchLedger({ data, onToast }: { data: DashboardData; onToast:
   </div>;
 }
 
-function GuidanceQuickModal({ students, onClose, onSaved, problemMode = false, initialStudentId = "" }: { students: Array<Pick<Student, "id" | "name" | "stage">>; onClose: () => void; onSaved: () => Promise<void>; problemMode?: boolean; initialStudentId?: string }) {
+function GuidanceQuickModal({ students, onClose, onSaved, problemMode = false, initialStudentId = "", followUp }: { students: Array<Pick<Student, "id" | "name" | "stage">>; onClose: () => void; onSaved: () => Promise<void>; problemMode?: boolean; initialStudentId?: string; followUp?: ReviewReceipt }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [verificationMode, setVerificationMode] = useState<"self_report" | "mentor_verify">(problemMode ? "self_report" : "mentor_verify");
@@ -1296,14 +1331,15 @@ function GuidanceQuickModal({ students, onClose, onSaved, problemMode = false, i
     }
   }
 
-  return <div className="modal-layer" role="presentation"><div className="modal guidance-quick-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="guidance-quick-title"><button className="close" aria-label={problemMode ? "关闭记录问题对话框" : "关闭记录指导对话框"} onClick={onClose}>×</button><div className="modal-title"><span>{problemMode ? "问题记录" : "导师指导"}</span><h2 id="guidance-quick-title">{problemMode ? "记录一个需要跟进的问题" : "把讨论变成一条可验收的下一步行动"}</h2><p>{problemMode ? "先记下问题，跟进安排和日期可以选填；记录会同步保留在学生档案。" : "学生确认收到并提交完成说明；需要时由导师做最终验收。"}</p></div><form onSubmit={submit}>
-    <div className="form-row"><label>学生<select name="studentId" required defaultValue={students.some((student) => student.id === initialStudentId) ? initialStudentId : ""}><option value="" disabled>请选择学生</option>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label>{problemMode ? <input type="hidden" name="guidanceType" value="blocker" /> : <label>指导类型<select name="guidanceType" defaultValue="general"><option value="general">一般指导</option><option value="meeting_followup">组会跟进</option><option value="paper">论文指导</option><option value="milestone">培养节点</option><option value="blocker">问题记录</option></select></label>}</div>
-    <label>{problemMode ? "问题标题" : "指导主题"}<input name="title" maxLength={200} required placeholder={problemMode ? "例如：实验设备预约冲突" : "例如：补齐实验对照并形成可审阅图表"} /></label>
+  return <div className="modal-layer" role="presentation"><div className="modal guidance-quick-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="guidance-quick-title"><button className="close" aria-label={problemMode ? "关闭记录问题对话框" : followUp ? "关闭后续工作安排" : "关闭记录指导对话框"} onClick={onClose}>×</button><div className="modal-title"><span>{problemMode ? "问题记录" : followUp ? "后续工作" : "导师指导"}</span><h2 id="guidance-quick-title">{problemMode ? "记录一个需要跟进的问题" : followUp ? "安排后续工作" : "把讨论变成一条可验收的下一步行动"}</h2><p>{problemMode ? "先记下问题，跟进安排和日期可以选填；记录会同步保留在学生档案。" : followUp ? "本次进展已确认。下一步和完成期限由你指定，独立于本月提交进度。" : "学生确认收到并提交完成说明；需要时由导师做最终验收。"}</p></div><form onSubmit={submit}>
+    {followUp ? <><input type="hidden" name="studentId" value={followUp.studentId} /><input type="hidden" name="sourceProgressEntryId" value={followUp.entryId} /><p className="guidance-source-note">关联已确认进展：{followUp.title} · V{followUp.revision}</p></> : null}
+    <div className="form-row"><label>学生<select name="studentId" disabled={Boolean(followUp)} required defaultValue={students.some((student) => student.id === initialStudentId) ? initialStudentId : ""}><option value="" disabled>请选择学生</option>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label>{problemMode ? <input type="hidden" name="guidanceType" value="blocker" /> : <label>指导类型<select name="guidanceType" defaultValue="general"><option value="general">一般指导</option><option value="meeting_followup">组会跟进</option><option value="paper">论文指导</option><option value="milestone">培养节点</option><option value="blocker">问题记录</option></select></label>}</div>
+    <label>{problemMode ? "问题标题" : "指导主题"}<input name="title" maxLength={200} defaultValue={followUp ? `后续工作：${followUp.title}`.slice(0, 200) : ""} required placeholder={problemMode ? "例如：实验设备预约冲突" : "例如：补齐实验对照并形成可审阅图表"} /></label>
     <label>{problemMode ? "情况说明" : "指导内容"}<textarea name="content" maxLength={3000} rows={4} required placeholder={problemMode ? "记录遇到的困难、影响和需要的支持" : "记录结论、关键取舍和学生需要理解的原因"} /></label>
     <label>{problemMode ? "跟进安排（可选）" : "下一步行动"}<textarea name="nextAction" maxLength={800} rows={2} required={!problemMode} placeholder={problemMode ? "例如：协调设备使用时间，确认替代方案" : "例如：补做对照实验，更新结果图"} /></label>
-    <div className="form-row"><label>{problemMode ? "跟进日期（可选）" : "完成期限"}<input name="dueDate" type="date" required={!problemMode} /></label><label>验收方式<select name="verificationMode" value={verificationMode} onChange={(event) => setVerificationMode(event.target.value as "self_report" | "mentor_verify")}><option value="mentor_verify">学生提交，导师验收</option><option value="self_report">{problemMode ? "处理后直接确认完成" : "学生自行完成"}</option></select></label></div>
+    <div className="form-row"><label>{problemMode ? "跟进日期（可选）" : followUp ? "完成期限（由你指定）" : "完成期限"}<input name="dueDate" type="date" required={!problemMode} /></label><label>验收方式<select name="verificationMode" value={verificationMode} onChange={(event) => setVerificationMode(event.target.value as "self_report" | "mentor_verify")}><option value="mentor_verify">学生提交，导师验收</option><option value="self_report">{problemMode ? "处理后直接确认完成" : "学生自行完成"}</option></select></label></div>
     <label>验收标准<textarea name="acceptanceCriteria" rows={3} required={verificationMode === "mentor_verify"} placeholder={verificationMode === "mentor_verify" ? "例如：上传含三组对照的图表，误差条与参数说明完整" : "可选：写清学生自检条件"} /></label>
-    {error ? <p className="form-error">{error}</p> : null}<div className="modal-actions"><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={busy}>{busy ? "保存中…" : problemMode ? "保存问题记录" : "保存并交给学生"}</button></div>
+    {error ? <p className="form-error">{error}</p> : null}<div className="modal-actions"><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={busy}>{busy ? "保存中…" : problemMode ? "保存问题记录" : followUp ? "保存后续工作" : "保存并交给学生"}</button></div>
   </form></div></div>;
 }
 
@@ -1563,6 +1599,8 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
         <div className="student-workbench-context"><strong>{student.currentFocus || "我的科研进展"}</strong></div>
         <div className="student-account"><button type="button" onClick={() => navigateStudent({ view: "today", taskFilter: "completed" })}>已完成任务</button>{data.viewer.canSwitchPersona ? <button className="student-persona-switch" type="button" disabled={personaBusy} onClick={onSwitchToManagement}>{personaBusy ? "正在切换…" : "返回管理端"}</button> : null}<button className="student-header-account" type="button" onClick={onFeishu}>账号</button></div>
       </header>
+
+      {(view === "today" || view === "progress") && student.monthlyDelivery ? <MonthlyDeliveryProgress summary={student.monthlyDelivery} /> : null}
 
       {view === "today" ? <><StudentNextAction action={data.studentNextAction} student={student} papers={papers} onPaper={(paperId) => openComposer("论文", paperId)} onProject={(milestoneId) => openComposer("项目", milestoneId)} onMeeting={openMeetingDesk} onGuidance={openGuidanceDesk} onProgress={(entryId) => navigateStudent({ view: "progress", entryId })} onSupplement={openSupplement} onResolution={(progressEntryId, itemKind) => setResolutionRequest({ progressEntryId, itemKind, key: Date.now() })} /><ProgressResolutionPanel studentId={student.id} mode="student" onChanged={onRefresh} openRequest={resolutionRequest} filterRequest={taskFilterRequest} compact /></> : null}
 

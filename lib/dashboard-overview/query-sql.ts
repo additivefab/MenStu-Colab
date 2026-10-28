@@ -9,6 +9,40 @@ export const reviewableStudentSql = `SELECT student_id FROM mentor_student_assig
   WHERE mentor_user_id = ? AND active = 1 AND can_review = 1
   ORDER BY student_id`;
 
+/** All entries in the submission month, reduced to the last revision of each entry. */
+export function monthlyDeliverySummarySql(studentCount: number) {
+  if (studentCount > 90) throw new Error("月度提交统计每批最多 90 名学生");
+  const ids = placeholders(studentCount);
+  return `WITH monthly_revisions AS (
+    SELECT p.student_id, r.review_status,
+      CASE WHEN p.kind = '组会' AND r.submitted_by_user_id IS NULL AND EXISTS (
+        SELECT 1 FROM progress_evidence_sources source
+        WHERE source.progress_entry_id = p.id AND source.revision_number <= r.revision_number
+          AND (source.source_type LIKE 'feishu_%' OR source.label LIKE '%智能纪要%' OR source.label LIKE '%飞书妙记%')
+      ) THEN 1 ELSE 0 END AS ai_candidate,
+      ROW_NUMBER() OVER (PARTITION BY p.id ORDER BY r.revision_number DESC) AS entry_rank
+    FROM progress_entries p
+    JOIN students s ON s.id = p.student_id AND s.active = 1
+    JOIN progress_revisions r ON r.progress_entry_id = p.id AND r.revision_number <= p.current_revision
+    WHERE p.student_id IN (${ids})
+      AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)
+      AND julianday(r.created_at) >= julianday(?) AND julianday(r.created_at) < julianday(?)
+      AND julianday(r.created_at) <= julianday(?)
+  ), monthly_entries AS (
+    SELECT student_id, review_status,
+      CASE WHEN ai_candidate = 1 AND review_status != 'accepted' THEN 1 ELSE 0 END AS candidate
+    FROM monthly_revisions WHERE entry_rank = 1
+      AND review_status IN ('submitted', 'in_review', 'accepted', 'changes_requested', 'rejected')
+  )
+  SELECT student_id,
+    SUM(CASE WHEN candidate = 0 THEN 1 ELSE 0 END) AS total,
+    SUM(CASE WHEN candidate = 0 AND review_status = 'accepted' THEN 1 ELSE 0 END) AS confirmed,
+    SUM(CASE WHEN candidate = 0 AND review_status IN ('submitted', 'in_review') THEN 1 ELSE 0 END) AS pending,
+    SUM(CASE WHEN candidate = 0 AND review_status IN ('changes_requested', 'rejected') THEN 1 ELSE 0 END) AS needs_changes,
+    SUM(candidate) AS candidates
+  FROM monthly_entries GROUP BY student_id ORDER BY student_id`;
+}
+
 export function substantiveProgressSql(studentCount: number) {
   const ids = placeholders(studentCount);
   return `WITH authoritative_progress AS (

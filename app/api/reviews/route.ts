@@ -89,6 +89,7 @@ export async function POST(request: Request) {
     await ensureDatabase();
     const body = (await request.json()) as Record<string, unknown>;
     const id = Number(body.id);
+    const expectedRevision = body.expectedRevision;
     const action = String(body.action ?? "");
     const note = String(body.note ?? "").trim();
     const guidanceValue = body.guidance;
@@ -103,6 +104,11 @@ export async function POST(request: Request) {
     } : null;
     if (!Number.isInteger(id) || (!["start_review", "release_review"].includes(action) && !finalActions.has(action))) {
       return Response.json({ error: "审核参数无效" }, { status: 400 });
+    }
+    if (expectedRevision !== undefined && (
+      typeof expectedRevision !== "number" || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1
+    )) {
+      return Response.json({ error: "审核修订版本无效，请刷新后重试" }, { status: 400 });
     }
     if (note.length > 3000) return Response.json({ error: "审核意见不能超过 3000 个字符" }, { status: 400 });
     if ((action === "supplement" || action === "rejected") && !note) {
@@ -154,10 +160,6 @@ export async function POST(request: Request) {
       LEFT JOIN research_proposals rp ON rp.id = m.proposal_id
       WHERE p.id = ? AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)`).bind(id).first<EntryRow>();
     if (!entry) return Response.json({ error: "记录不存在" }, { status: 404 });
-    const synchronizeCurrentRevision = async () => {
-      await d1.prepare(SYNCHRONIZE_CURRENT_REVISION_SQL)
-        .bind(id, id, id, id, id, id, entry.current_revision, id, entry.current_revision).run();
-    };
     if (!entry.revision_review_status) {
       return Response.json({ error: "当前修订记录缺失，请先修复数据后再审核" }, { status: 409 });
     }
@@ -167,6 +169,16 @@ export async function POST(request: Request) {
     if (entry.submitted_by_user_id === auth.user.id) {
       return Response.json({ error: "不能审核由自己提交或代录的进展" }, { status: 403 });
     }
+    if (expectedRevision !== undefined && expectedRevision !== entry.current_revision) {
+      return Response.json({ error: "进展修订版本已变化，请刷新后查看最新内容再审核" }, { status: 409 });
+    }
+    // Keep legacy callers compatible, while binding every atomic write to the
+    // revision the caller reviewed (or the snapshot just read for legacy calls).
+    const reviewRevision = expectedRevision ?? entry.current_revision;
+    const synchronizeCurrentRevision = async () => {
+      await d1.prepare(SYNCHRONIZE_CURRENT_REVISION_SQL)
+        .bind(id, id, id, id, id, id, reviewRevision, id, reviewRevision).run();
+    };
 
     if (action === "release_review") {
       if (
@@ -180,14 +192,16 @@ export async function POST(request: Request) {
       const [revisionResult, parentResult] = await d1.batch([
         d1.prepare(`UPDATE progress_revisions SET review_status = 'submitted', reviewed_by_user_id = NULL
           WHERE progress_entry_id = ? AND revision_number = ?
-            AND review_status = 'in_review' AND reviewed_by_user_id = ?`)
-          .bind(id, entry.current_revision, auth.user.id),
+            AND review_status = 'in_review' AND reviewed_by_user_id = ?
+            AND EXISTS (SELECT 1 FROM progress_entries
+              WHERE id = ? AND current_revision = ? AND review_status = 'in_review' AND reviewed_by_user_id = ?)`)
+          .bind(id, reviewRevision, auth.user.id, id, reviewRevision, auth.user.id),
         d1.prepare(`UPDATE progress_entries SET review_status = 'submitted', reviewed_by_user_id = NULL,
           review_claimed_at = NULL, updated_at = CURRENT_TIMESTAMP
           WHERE id = ? AND current_revision = ? AND review_status = 'in_review'
             AND reviewed_by_user_id = ? AND EXISTS (SELECT 1 FROM progress_revisions
               WHERE progress_entry_id = ? AND revision_number = ? AND review_status = 'submitted')`)
-          .bind(id, entry.current_revision, auth.user.id, id, entry.current_revision),
+          .bind(id, reviewRevision, auth.user.id, id, reviewRevision),
         d1.prepare(`INSERT INTO progress_audit_events
           (progress_entry_id, actor_user_id, actor_type, action, from_status, to_status, note)
           SELECT ?, ?, 'user', 'release_review', 'in_review', 'submitted', ? WHERE changes() > 0`)
@@ -221,14 +235,16 @@ export async function POST(request: Request) {
         const [revisionResult, parentResult] = await d1.batch([
           d1.prepare(`UPDATE progress_revisions SET reviewed_by_user_id = ?
             WHERE progress_entry_id = ? AND revision_number = ? AND review_status = 'in_review'
-              AND reviewed_by_user_id = ?`)
-            .bind(auth.user.id, id, entry.current_revision, previousReviewerId),
+              AND reviewed_by_user_id = ?
+              AND EXISTS (SELECT 1 FROM progress_entries
+                WHERE id = ? AND current_revision = ? AND review_status = 'in_review' AND reviewed_by_user_id = ?)`)
+            .bind(auth.user.id, id, reviewRevision, previousReviewerId, id, reviewRevision, previousReviewerId),
           d1.prepare(`UPDATE progress_entries SET reviewed_by_user_id = ?,
             review_claimed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
             WHERE id = ? AND current_revision = ? AND review_status = 'in_review'
               AND reviewed_by_user_id = ?
               AND (review_claimed_at IS NULL OR datetime(review_claimed_at) <= datetime('now', '-${REVIEW_LEASE_MINUTES} minutes'))`)
-            .bind(auth.user.id, id, entry.current_revision, previousReviewerId),
+            .bind(auth.user.id, id, reviewRevision, previousReviewerId),
           d1.prepare(`INSERT INTO progress_audit_events
             (progress_entry_id, actor_user_id, actor_type, action, from_status, to_status, note)
             SELECT ?, ?, 'user', 'reclaim_review', 'in_review', 'in_review', ? WHERE changes() > 0`)
@@ -249,7 +265,7 @@ export async function POST(request: Request) {
           WHERE progress_entry_id = ? AND revision_number = ? AND review_status = 'submitted'
             AND EXISTS (SELECT 1 FROM progress_entries
               WHERE id = ? AND review_status = 'submitted' AND current_revision = ?)`)
-          .bind(auth.user.id, id, entry.current_revision, id, entry.current_revision),
+          .bind(auth.user.id, id, reviewRevision, id, reviewRevision),
         d1.prepare(`UPDATE progress_entries SET
           review_status = 'in_review', reviewed_by_user_id = ?, review_claimed_at = CURRENT_TIMESTAMP,
           updated_at = CURRENT_TIMESTAMP
@@ -257,7 +273,7 @@ export async function POST(request: Request) {
             AND EXISTS (SELECT 1 FROM progress_revisions
               WHERE progress_entry_id = ? AND revision_number = ?
                 AND review_status = 'in_review' AND reviewed_by_user_id = ?)`)
-          .bind(auth.user.id, id, entry.current_revision, id, entry.current_revision, auth.user.id),
+          .bind(auth.user.id, id, reviewRevision, id, reviewRevision, auth.user.id),
         d1.prepare(`INSERT INTO progress_audit_events
           (progress_entry_id, actor_user_id, actor_type, action, from_status, to_status, note)
           SELECT ?, ?, 'user', 'start_review', 'submitted', 'in_review', ? WHERE changes() > 0`)
@@ -353,11 +369,11 @@ export async function POST(request: Request) {
           note,
           auth.user.id,
           id,
-          entry.current_revision,
+          reviewRevision,
           entry.revision_review_status,
           auth.user.id,
           id,
-          entry.current_revision,
+          reviewRevision,
           entry.review_status,
           auth.user.id,
           ...completionBindings,
@@ -378,11 +394,11 @@ export async function POST(request: Request) {
           note,
           auth.user.id,
           id,
-          entry.current_revision,
+          reviewRevision,
           entry.review_status,
           auth.user.id,
           id,
-          entry.current_revision,
+          reviewRevision,
           reviewStatus,
           auth.user.id,
           ...completionBindings,
@@ -424,7 +440,7 @@ export async function POST(request: Request) {
           guidance.acceptanceCriteria,
           id,
           entry.student_id,
-          entry.current_revision,
+          reviewRevision,
           auth.user.id,
           note,
         ));
@@ -444,7 +460,7 @@ export async function POST(request: Request) {
       ) WHERE id = ? AND EXISTS (SELECT 1 FROM progress_entries
         WHERE id = ? AND current_revision = ? AND review_status = 'accepted'
           AND assessment = 'substantive' AND reviewed_by_user_id = ?)`)
-        .bind(entry.student_id, entry.student_id, id, entry.current_revision, auth.user.id));
+        .bind(entry.student_id, entry.student_id, id, reviewRevision, auth.user.id));
     }
     if (assessment && entry.kind === "论文" && entry.paper_id && paperStatus) {
       statements.push(d1.prepare(`UPDATE student_papers SET current_stage = ?, status = ?,
@@ -466,7 +482,7 @@ export async function POST(request: Request) {
           entry.paper_id,
           entry.student_id,
           id,
-          entry.current_revision,
+          reviewRevision,
           auth.user.id,
         ));
     }
@@ -486,7 +502,7 @@ export async function POST(request: Request) {
           WHERE candidate.progress_entry_id = ? AND candidate.promoted_paper_id IS NULL
             AND p.current_revision = ? AND p.review_status = 'accepted'
             AND p.reviewed_by_user_id = ?`)
-          .bind(paperStatus, id, entry.current_revision, auth.user.id),
+          .bind(paperStatus, id, reviewRevision, auth.user.id),
         d1.prepare(`UPDATE paper_submission_candidates SET
           promoted_paper_id = last_insert_rowid(), updated_at = CURRENT_TIMESTAMP
           WHERE progress_entry_id = ? AND promoted_paper_id IS NULL AND changes() > 0`)
@@ -519,7 +535,7 @@ export async function POST(request: Request) {
             entry.student_id,
             entry.project_proposal_version,
             id,
-            entry.current_revision,
+            reviewRevision,
             auth.user.id,
           ),
         d1.prepare(`INSERT INTO proposal_audit_events
@@ -528,7 +544,7 @@ export async function POST(request: Request) {
           .bind(
             entry.proposal_id,
             auth.user.id,
-            `进展 #${id}（修订 V${entry.current_revision}）通过实质进展审核，完成节点“${entry.milestone_title ?? entry.project_milestone_id}”`,
+            `进展 #${id}（修订 V${reviewRevision}）通过实质进展审核，完成节点“${entry.milestone_title ?? entry.project_milestone_id}”`,
           ),
       );
     }

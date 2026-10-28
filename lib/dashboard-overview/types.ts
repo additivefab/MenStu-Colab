@@ -1,3 +1,5 @@
+import type { MonthlyDeliverySummary } from "../monthly-delivery.ts";
+
 export const overviewStates = [
   "intervene",
   "mentor",
@@ -164,6 +166,7 @@ export type MentorOverviewStudent = DerivedStudentOverview & {
   currentFocus: string;
   cadenceDays: number | null;
   latestSubstantiveTitle: string | null;
+  monthlyDelivery?: MonthlyDeliverySummary;
   latestSubstantiveAt: string | null;
   latestSubmittedAt: string | null;
   nextAction: string | null;

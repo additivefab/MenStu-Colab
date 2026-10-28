@@ -6,6 +6,7 @@ import { deriveStudentNextAction } from "../../../lib/student-next-action";
 import { isCurrentResearchTrack } from "../../../lib/progress-track";
 import { loadProgressResolutions } from "../../../lib/progress-resolution-service";
 import { acceptedTrackProgressSql } from "../../../lib/dashboard-overview/query-sql";
+import { readMonthlyDeliveries } from "../../../lib/monthly-delivery-service";
 
 type StudentRow = {
   id: string;
@@ -506,9 +507,11 @@ export async function GET(request: Request) {
         };
       });
 
+    const monthlyDeliveries = await readMonthlyDeliveries(d1, studentIds);
     const students = studentResult.results.map((row) => ({
       id: row.id,
       name: row.display_name,
+      monthlyDelivery: monthlyDeliveries.get(row.id),
       degree: row.degree,
       gradeYear: row.grade_year,
       stage: row.stage,
@@ -626,6 +629,7 @@ export async function GET(request: Request) {
         students: students.map((student) => ({
           id: student.id,
           name: student.name,
+          monthlyDelivery: student.monthlyDelivery,
           degree: student.degree,
           gradeYear: student.gradeYear,
           stage: student.stage,

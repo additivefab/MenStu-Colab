@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import { overviewStateMeta, type MentorOverviewStudent } from "../../lib/dashboard-overview/types";
 import { overviewActionHref, overviewActionLabel, overviewDate, overviewOwnerLabels } from "./overview-actions";
 import { earliestOverviewDueDate } from "./overview-view-model";
+import { MonthlyDeliveryProgress } from "../monthly-delivery-progress";
+import deliveryStyles from "../monthly-delivery-progress.module.css";
 
 export function StudentOverviewDrawer({ student, onClose }: { student: MentorOverviewStudent; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -61,6 +63,7 @@ export function StudentOverviewDrawer({ student, onClose }: { student: MentorOve
         <div><h2 id="group-overview-drawer-title">{student.displayName}</h2><p>{student.grade}级{student.degreeLevel} · {student.stage} · {student.currentFocus || "研究方向待补齐"}</p></div>
         <button type="button" ref={closeRef} onClick={onClose} aria-label="关闭学生进度摘要">×</button>
       </header>
+      {student.monthlyDelivery ? <div className={deliveryStyles.drawerProgress}><MonthlyDeliveryProgress summary={student.monthlyDelivery} /></div> : null}
       <section className={`group-overview-drawer-primary ${student.primaryState}`}>
         <div><i aria-hidden="true">{meta.icon}</i><span><small>当前进度状态</small><strong>{meta.label}</strong></span></div>
         <p>{student.primaryReasonLabel}</p>

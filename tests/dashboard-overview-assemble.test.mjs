@@ -36,6 +36,18 @@ function inputOf(count = 1) {
   };
 }
 
+test("assembly carries complete monthly counts independently of latest progress and open problems", () => {
+  const input = inputOf(2);
+  const monthly = { month: "2026-08", phase: "submitted", total: 5, confirmed: 4, pending: 1, needsChanges: 0, candidates: 2 };
+  input.monthlyDeliveries = new Map([["student-1", monthly]]);
+  const response = assembleMentorOverview(input, { id: 1, role: "superadmin", studentId: null }, NOW);
+  assert.deepEqual(response.students.find((student) => student.studentId === "student-1").monthlyDelivery, monthly);
+  assert.deepEqual(response.students.find((student) => student.studentId === "student-2").monthlyDelivery, {
+    month: "2026-08", phase: "preparing", total: 0, confirmed: 0, pending: 0, needsChanges: 0, candidates: 0,
+  });
+  assert.doesNotThrow(() => assertMentorOverviewResponse(response));
+});
+
 function pending(overrides = {}) {
   return {
     id: 51,

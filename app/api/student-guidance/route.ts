@@ -117,7 +117,8 @@ export async function POST(request: Request) {
     const dueDate = clean(body.dueDate, "完成期限", 10);
     const acceptanceCriteria = clean(body.acceptanceCriteria, "验收标准", 1200);
     const verificationMode = clean(body.verificationMode, "验收方式", 30) || "self_report";
-    const sourceProgressEntryId = body.sourceProgressEntryId ? Number(body.sourceProgressEntryId) : null;
+    const sourceProgressEntryId = body.sourceProgressEntryId === undefined || body.sourceProgressEntryId === null || body.sourceProgressEntryId === ""
+      ? null : Number(body.sourceProgressEntryId);
     if (!studentId || !guidanceTypes.has(guidanceType) || !content) {
       throw new InputError("请完整填写学生、指导类型和指导内容");
     }
@@ -126,8 +127,8 @@ export async function POST(request: Request) {
       throw new InputError("需要导师验收时，请填写可判断的验收标准");
     }
     if (dueDate && !isIsoDate(dueDate)) throw new InputError("完成期限不是有效日期");
-    if (sourceProgressEntryId !== null && !Number.isInteger(sourceProgressEntryId)) {
-      throw new InputError("关联的飞书总结无效");
+    if (sourceProgressEntryId !== null && (!Number.isSafeInteger(sourceProgressEntryId) || sourceProgressEntryId < 1)) {
+      throw new InputError("关联的进展记录无效");
     }
     // 日常指导与正式审核分权：被分配到该学生的导师可指导，正式进展判断仍走 can_review。
     if (!(await canViewStudent(auth.user, studentId))) {
@@ -142,10 +143,14 @@ export async function POST(request: Request) {
     if (!student) return Response.json({ error: "学生不存在或已停用" }, { status: 404 });
     if (sourceProgressEntryId !== null) {
       const source = await d1.prepare(`SELECT p.id FROM progress_entries p
-        JOIN feishu_meeting_summary_links l ON l.progress_entry_id = p.id
-        WHERE p.id = ? AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id) AND p.student_id = ? AND l.student_id = ?`)
-        .bind(sourceProgressEntryId, studentId, studentId).first();
-      if (!source) throw new InputError("关联的飞书总结不属于该学生");
+        WHERE p.id = ? AND p.student_id = ?
+          AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)
+          AND (p.review_status = 'accepted' OR EXISTS (
+            SELECT 1 FROM feishu_meeting_summary_links l
+            WHERE l.progress_entry_id = p.id AND l.student_id = p.student_id
+          ))`)
+        .bind(sourceProgressEntryId, studentId).first();
+      if (!source) throw new InputError("关联的进展记录不属于该学生、已删除或尚未通过审核");
     }
     let createdId: number | null = null;
     try {

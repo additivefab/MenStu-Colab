@@ -1,0 +1,62 @@
+.progress {
+  --delivery-color: #286f9d;
+  --delivery-soft: #edf5fa;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid #dce5e8;
+  border-radius: 12px;
+  background: #fff;
+  color: #354b58;
+  text-align: left;
+}
+
+.progress[data-phase="preparing"] { --delivery-color: #617581; --delivery-soft: #f0f4f5; }
+.progress[data-phase="confirmed"] { --delivery-color: #28795b; --delivery-soft: #edf7f1; }
+.progress[data-phase="needs_changes"] { --delivery-color: #8a6a28; --delivery-soft: #fff7e6; }
+.heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.heading > strong { color: #354b58; font-size: 14px; line-height: 1.5; font-weight: 750; }
+.phase { padding: 4px 7px; border-radius: 6px; color: var(--delivery-color); background: var(--delivery-soft); font-size: 12px; line-height: 1.5; font-weight: 700; }
+.stages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 16px 0 12px; padding: 0; list-style: none; }
+.stages > li { position: relative; display: flex; flex-direction: column; align-items: center; gap: 7px; min-width: 0; color: #7a858b; font-size: 12px; line-height: 1.5; text-align: center; }
+.stages > li::before { content: ""; position: absolute; top: 11px; left: calc(-50% - 4px); right: calc(50% + 12px); height: 2px; background: #e3e9ec; }
+.stages > li:first-child::before { display: none; }
+.stages > li > i { position: relative; z-index: 1; display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid #d6e0e4; border-radius: 50%; background: #fff; font-size: 11px; font-style: normal; font-weight: 750; }
+.stages > li > span { display: block; min-width: 0; }
+.stages > .done { color: #45755f; }
+.stages > .done > i { border-color: #b9d6c6; color: #357557; background: #edf7f1; }
+.stages > .current { color: var(--delivery-color); font-weight: 750; }
+.stages > .current > i { border-color: var(--delivery-color); color: #fff; background: var(--delivery-color); }
+.stages > .done::before, .stages > .current::before { background: #bbd0c5; }
+.counts { display: flex; flex-wrap: wrap; gap: 3px 12px; color: #64747d; font-size: 12px; line-height: 1.7; }
+.counts b { font-weight: 700; }
+.needsChanges { color: #8a6a28; }
+.candidates { margin-top: 5px; color: #70808b; font-size: 12px; line-height: 1.6; }
+.note { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid #edf0f1; color: #75838c; font-size: 12px; line-height: 1.7; }
+.compact { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.compact .heading { gap: 4px 8px; }
+.compact .heading > strong { font-size: 12px; }
+.compact .phase { padding: 2px 5px; font-size: 11px; }
+.compact .stages { gap: 5px; margin: 10px 0 8px; }
+.compact .stages > li { gap: 4px; font-size: 11px; }
+.compact .stages > li > i { width: 18px; height: 18px; font-size: 11px; }
+.compact .stages > li::before { top: 8px; left: calc(-50% - 2px); right: calc(50% + 9px); }
+.compact .counts, .compact .candidates { font-size: 11px; }
+
+.overviewCell { min-width: 0; padding: 14px 0; }
+.secondaryState { display: grid; gap: 3px; margin-top: 10px; padding-top: 8px; border-top: 1px solid #e7eded; }
+.secondaryState > strong { display: flex; align-items: center; gap: 5px; color: var(--state-color, #64747d); font-size: 12px; line-height: 1.5; font-weight: 650; }
+.secondaryState > strong > i { font-style: normal; }
+.secondaryState > small { color: #6b7880; font-size: 11px; line-height: 1.5; }
+.secondaryState > em { color: #6b7880; font-size: 11px; font-style: normal; line-height: 1.5; }
+.separateProblems { display: block; margin-top: 8px; padding-top: 7px; border-top: 1px dashed #e0e6e9; }
+.separateProblems > a { margin: 0; }
+.drawerProgress { margin: 14px 14px 0; }
+.mobileCard.mobileCard { grid-template-columns: minmax(0, 1fr); }
+.mobileProgress { grid-column: 1 / -1; padding: 0 16px 14px; }
+.mobileContext { margin: 0 16px; padding: 12px 0; border-top: 1px solid #edf0f1; }
+
+@media (max-width: 420px) {
+  .progress:not(.compact) { padding: 14px; }
+  .stages { gap: 5px; }
+  .stages > li { font-size: 11px; }
+}

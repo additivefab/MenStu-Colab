@@ -1,6 +1,7 @@
 import { getStudentScope, scopeSql } from "../authorization";
 import { getD1 } from "../database";
 import type { AppUser } from "../feishu-auth";
+import { readMonthlyDeliveries } from "../monthly-delivery-service";
 import { loadProblemRecords } from "../problem-records-service";
 import { loadProgressResolutions } from "../progress-resolution-service";
 import { assembleMentorOverview } from "./assemble";
@@ -147,7 +148,7 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
     };
   }
 
-  const [reviewableResult, substantiveResult, trackResult, submittedResult, outstandingResult, proposalResult, milestoneResult, guidanceResult, paperResult, resolutions, problemRecords] = await Promise.all([
+  const [reviewableResult, substantiveResult, trackResult, submittedResult, outstandingResult, proposalResult, milestoneResult, guidanceResult, paperResult, resolutions, problemRecords, monthlyDeliveries] = await Promise.all([
     viewer.role === "superadmin"
       ? Promise.resolve({ results: studentIds
         .filter((studentId) => studentId !== viewer.studentId)
@@ -166,6 +167,7 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
     loadProblemRecords(d1, baseStudents.map((student) => ({
       id: student.id, name: student.display_name, stage: student.stage, canRecord: false,
     }))),
+    readMonthlyDeliveries(d1, studentIds, now),
   ]);
   const reviewableRows = reviewableResult.results as Array<{ student_id: string }>;
   const substantiveRows = substantiveResult.results as SubstantiveRow[];
@@ -191,5 +193,6 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
     papers: paperRows,
     resolutions,
     problemRecords,
+    monthlyDeliveries,
   }, viewer, now);
 }

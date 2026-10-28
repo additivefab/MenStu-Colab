@@ -1,3 +1,4 @@
+import { monthlyDeliveryPhase } from "../monthly-delivery.ts";
 import {
   overviewStates,
   overviewIssueStates,
@@ -266,7 +267,8 @@ function assertRecentProgress(value: unknown, path: string) {
 
 function assertStudent(value: unknown, path: string) {
   assertRecord(value, path);
-  assertExactKeys(value, studentKeys, path);
+  assertExactKeys(value, Object.hasOwn(value, "monthlyDelivery") ? [...studentKeys, "monthlyDelivery"] : studentKeys, path);
+  if (Object.hasOwn(value, "monthlyDelivery")) assertMonthlyDelivery(value.monthlyDelivery, `${path}.monthlyDelivery`);
   assertString(value.studentId, `${path}.studentId`, false);
   assertString(value.displayName, `${path}.displayName`, false);
   if (value.degreeLevel !== "博士" && value.degreeLevel !== "硕士") {
@@ -333,6 +335,18 @@ function assertStudent(value: unknown, path: string) {
   value.recentSubstantive.forEach((progress, index) => (
     assertRecentProgress(progress, `${path}.recentSubstantive[${index}]`)
   ));
+}
+
+function assertMonthlyDelivery(value: unknown, path: string) {
+  assertRecord(value, path);
+  const countKeys = ["total", "confirmed", "pending", "needsChanges", "candidates"] as const;
+  assertExactKeys(value, ["month", "phase", ...countKeys], path);
+  assertString(value.month, `${path}.month`, false);
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value.month)) contractError(`${path}.month`, "必须是有效的 YYYY-MM 月份");
+  countKeys.forEach((key) => assertInteger(value[key], `${path}.${key}`));
+  const counts = { confirmed: Number(value.confirmed), pending: Number(value.pending), needsChanges: Number(value.needsChanges) };
+  if (value.total !== counts.confirmed + counts.pending + counts.needsChanges) contractError(`${path}.total`, "必须等于已确认、待确认与待补充数量之和");
+  if (value.phase !== monthlyDeliveryPhase(counts)) contractError(`${path}.phase`, "必须与提交记录状态一致");
 }
 
 export function mentorOverviewResponseJsonBytes(value: unknown) {

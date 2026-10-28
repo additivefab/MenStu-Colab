@@ -131,6 +131,19 @@ test("0, 1, 26, and 100 students share one valid compact response contract", () 
   }
 });
 
+test("monthly delivery remains optional for old clients but validates exact counts and phase when present", () => {
+  const response = responseOf(1);
+  response.students[0].monthlyDelivery = {
+    month: "2026-08", phase: "submitted", total: 3, confirmed: 2, pending: 1, needsChanges: 0, candidates: 1,
+  };
+  assert.doesNotThrow(() => assertMentorOverviewResponse(response));
+  for (const patch of [{ phase: "confirmed" }, { total: 4 }, { candidates: -1 }, { month: "2026-13" }, { progress: 100 }]) {
+    const malformed = clone(response);
+    Object.assign(malformed.students[0].monthlyDelivery, patch);
+    assert.throws(() => assertMentorOverviewResponse(malformed));
+  }
+});
+
 test("structure and mutually exclusive counts must agree with students", () => {
   const missingField = clone(responseOf(1));
   delete missingField.students[0].stage;

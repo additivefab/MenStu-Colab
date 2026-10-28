@@ -1,4 +1,5 @@
 import type { ProblemRecord } from "../problem-records";
+import { summarizeMonthlyDelivery, type MonthlyDeliverySummary } from "../monthly-delivery.ts";
 import type { AppUser } from "../feishu-auth";
 import { activeBlockerText } from "../progress-blocker.ts";
 import { progressResolutionKey, type ProgressResolutionRow } from "../progress-resolution.ts";
@@ -118,6 +119,7 @@ export type MentorOverviewAssemblyInput = {
   papers: OverviewPaperRow[];
   resolutions?: ProgressResolutionRow[];
   problemRecords?: ProblemRecord[];
+  monthlyDeliveries?: ReadonlyMap<string, MonthlyDeliverySummary>;
 };
 
 function earliestAction(rows: OverviewTrackProgressRow[], waits: OverviewGuidanceRow[]) {
@@ -285,6 +287,7 @@ export function assembleMentorOverview(
       stage: student.stage,
       currentFocus: student.current_focus,
       cadenceDays: student.cadence_days,
+      monthlyDelivery: input.monthlyDeliveries?.get(student.id) ?? summarizeMonthlyDelivery([], now),
       latestSubstantiveTitle: latestSubstantive?.title ?? null,
       latestSubstantiveAt: latestSubstantive?.confirmed_at ?? null,
       latestSubmittedAt: latestSubmitted?.current_revision_created_at ?? null,

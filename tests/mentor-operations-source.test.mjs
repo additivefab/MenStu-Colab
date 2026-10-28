@@ -25,12 +25,15 @@ test("mentor decision inbox, leased reviews, guidance verification, agendas, and
   assert.match(dashboard, /className="mentor-inbox-summary"/);
   assert.match(dashboard, /AI 纪要候选/);
   assert.match(dashboard, /确认进展/);
-  assert.match(dashboard, /需要指导/);
+  assert.match(dashboard, /本次材料不完整，退回补充/);
   assert.match(dashboard, /退回并发送指导/);
   assert.match(dashboard, /guidance\?: ReviewGuidance/);
   assert.match(dashboard, /return entry\.ai_summary_origin/);
   assert.match(dashboardRoute, /ai_summary_origin/);
   assert.match(studentOverview, /student-formal-binary/);
+  assert.match(studentOverview, /确认本次进展/);
+  assert.match(studentOverview, /className="review-return-secondary"[\s\S]*本次材料不完整，退回补充/);
+  assert.match(studentOverview, /JSON\.stringify\(\{ id: entry\.id, expectedRevision: entry\.current_revision, action, note, guidance \}\)/);
   assert.match(studentOverview, /reviewProgress\(entry, "supplement", \{ nextAction: draft\.nextAction/);
   assert.match(studentOverview, /entry\.project \? <div><span>课题下一行动/);
   assert.match(studentOverview, /关联课题节点/);
