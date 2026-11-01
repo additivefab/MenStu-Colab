@@ -176,6 +176,13 @@
       "when": 1790681222834,
       "tag": "0024_administrator_local_login",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1793519281053,
+      "tag": "0025_mighty_mister_fear",
+      "breakpoints": true
     }
   ]
 }

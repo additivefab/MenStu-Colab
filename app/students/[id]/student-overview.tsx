@@ -14,6 +14,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import { paperDeadlineState, paperStageMeta, paperStages, type PaperStage } from "../../../lib/paper-progress";
 import { progressFollowUpNotice } from "../../../lib/progress-follow-up";
 import { calendarDayDiff, instantTimestamp, shanghaiDateKey } from "../../../lib/dashboard-overview/dates";
+import { StudentRepositoryCard } from "../../components/student-repository-card";
 
 type ProgressStatus = "pending" | "substantive" | "supporting" | "supplement" | "rejected";
 type ReviewStatus = "submitted" | "in_review" | "accepted" | "changes_requested" | "rejected";
@@ -765,6 +766,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       <div className="sw-identity"><span className="sw-avatar" aria-hidden="true">{student.name.slice(-2)}</span><div><div className="sw-name"><h1>{student.name}</h1><span>{student.gradeYear} 级{student.degree}</span>{student.stage && student.stage !== "待确认" ? <span>{student.stage}</span> : null}</div><p>{student.currentFocus && !["待补充", "尚未填写"].includes(student.currentFocus) ? student.currentFocus : "研究方向尚未填写"}</p></div></div>
       <div className="sw-profile-actions"><span>最近确认进展<strong>{student.lastSubstantiveAt ? dateText(student.lastSubstantiveAt) : "暂无"}</strong></span><button onClick={viewCompletedTasks}>已完成任务</button><button className="primary" onClick={writeGuidance}>写指导</button></div>
     </header>
+    <StudentRepositoryCard studentId={student.id} />
     <nav className="sw-tabs" aria-label="学生档案页面">
       <button aria-current={tab === "progress" ? "page" : undefined} onClick={() => switchTab("progress")}>进展与审核{pendingCount + pendingResultEntryIds.length ? <span>{pendingCount + pendingResultEntryIds.length} 待审</span> : null}</button>
       <button aria-current={tab === "tasks" ? "page" : undefined} onClick={() => switchTab("tasks")}>任务与结果</button>

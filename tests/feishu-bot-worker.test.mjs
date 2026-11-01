@@ -4,6 +4,7 @@ import { readdir } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { Miniflare } from "miniflare";
+import { applyD1Migrations } from "./database-fixture.mjs";
 
 // All credentials below are fixtures. Outbound requests are intercepted locally.
 const legacy = {
@@ -39,6 +40,7 @@ async function withWorker(bindings, run) {
     },
   });
   try {
+    await applyD1Migrations(worker);
     await run(worker);
     assert.equal(outboundRequests, 0, "credential boundary checks must not contact Feishu");
   } finally {

@@ -97,6 +97,47 @@ export const appUsers = sqliteTable(
   ],
 );
 
+export const studentRepositoryBindings = sqliteTable("student_repository_bindings", {
+  studentId: text("student_id").primaryKey().references(() => students.id),
+  githubUsername: text("github_username").notNull(),
+  repositoryUrl: text("repository_url").notNull(),
+  repositoryFullName: text("repository_full_name").notNull(),
+  visibility: text("visibility", { enum: ["private", "public", "unknown"] }).notNull().default("unknown"),
+  active: integer("active").notNull().default(1),
+  version: integer("version").notNull().default(1),
+  lastMutationId: text("last_mutation_id").notNull(),
+  createdByUserId: integer("created_by_user_id").references(() => appUsers.id),
+  updatedByUserId: integer("updated_by_user_id").references(() => appUsers.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("student_repository_visibility", sql`${table.visibility} IN ('private', 'public', 'unknown')`),
+  check("student_repository_active", sql`${table.active} IN (0, 1)`),
+  check("student_repository_version", sql`${table.version} >= 1`),
+  uniqueIndex("idx_student_repository_mutation").on(table.lastMutationId),
+]);
+
+export const studentRepositoryEvents = sqliteTable("student_repository_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  studentId: text("student_id").notNull().references(() => students.id),
+  version: integer("version").notNull(),
+  action: text("action", { enum: ["created", "updated", "unlinked"] }).notNull(),
+  actorUserId: integer("actor_user_id").references(() => appUsers.id),
+  actorType: text("actor_type", { enum: ["user", "system"] }).notNull(),
+  snapshotJson: text("snapshot_json").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("student_repository_event_action", sql`${table.action} IN ('created', 'updated', 'unlinked')`),
+  check("student_repository_event_actor", sql`${table.actorType} IN ('user', 'system')`),
+  check("student_repository_event_version", sql`${table.version} >= 1`),
+  uniqueIndex("idx_student_repository_event_version").on(table.studentId, table.version),
+]);
+
+export const studentRepositoryRollouts = sqliteTable("student_repository_rollouts", {
+  rolloutKey: text("rollout_key").primaryKey(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
 export const mentorStudentAssignments = sqliteTable(
   "mentor_student_assignments",
   {

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { readdir } from "node:fs/promises";
 import { Miniflare } from "miniflare";
 import { digest } from "../lib/local-password.ts";
+import { applyD1Migrations } from "./database-fixture.mjs";
 
 // Exercise the built HTTP handlers and real D1 SQL with synthetic records only.
 test("student-filtered reads preserve nested data and enforce the existing account scope", { timeout: 120000 }, async (t) => {
@@ -28,6 +29,7 @@ test("student-filtered reads preserve nested data and enforce the existing accou
     return response.json();
   };
   try {
+    await applyD1Migrations(mf);
     await mf.dispatchFetch(origin + "/api/health/ready");
     const db = await mf.getD1Database("DB");
     await db.prepare(`INSERT INTO students(id, display_name, degree, grade_year, stage, active) VALUES

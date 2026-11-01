@@ -20,6 +20,7 @@ import { MonthlyDeliveryProgress } from "../components/monthly-delivery-progress
 import type { MonthlyDeliverySummary } from "../lib/monthly-delivery";
 import type { ProblemRecordStudent } from "../lib/problem-records";
 import { clearMutationKey, mutationKeyForForm } from "../lib/client-idempotency";
+import { StudentRepositoryCard } from "./components/student-repository-card";
 
 declare global {
   interface Window {
@@ -1601,6 +1602,8 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
       </header>
 
       {(view === "today" || view === "progress") && student.monthlyDelivery ? <MonthlyDeliveryProgress summary={student.monthlyDelivery} /> : null}
+
+      <div hidden={view !== "today" && view !== "research"}><StudentRepositoryCard studentId={student.id} /></div>
 
       {view === "today" ? <><StudentNextAction action={data.studentNextAction} student={student} papers={papers} onPaper={(paperId) => openComposer("论文", paperId)} onProject={(milestoneId) => openComposer("项目", milestoneId)} onMeeting={openMeetingDesk} onGuidance={openGuidanceDesk} onProgress={(entryId) => navigateStudent({ view: "progress", entryId })} onSupplement={openSupplement} onResolution={(progressEntryId, itemKind) => setResolutionRequest({ progressEntryId, itemKind, key: Date.now() })} /><ProgressResolutionPanel studentId={student.id} mode="student" onChanged={onRefresh} openRequest={resolutionRequest} filterRequest={taskFilterRequest} compact /></> : null}
 

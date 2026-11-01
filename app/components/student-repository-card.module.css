@@ -1,0 +1,59 @@
+.card {
+  margin: 0 0 24px;
+  padding: 20px 24px;
+  border: 1px solid #dce5ed;
+  border-radius: 10px;
+  background: #fff;
+  color: #203047;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.card * { box-sizing: border-box; }
+.card .header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.card .header h2 { margin: 0; font-size: 18px; font-weight: 650; line-height: 1.5; }
+.card .header p { margin: 3px 0 0; color: #718096; font-size: 13px; }
+.card button, .card input, .card select { font: inherit; }
+.card button { border: 1px solid #d6dfeb; border-radius: 7px; padding: 7px 13px; background: #fff; color: #35445b; cursor: pointer; line-height: 1.5; }
+.card button:hover:not(:disabled) { background: #f3f7fe; border-color: #8aa9d8; }
+.card button:disabled { opacity: .55; cursor: not-allowed; }
+.card :focus-visible { outline: 3px solid #83aef1; outline-offset: 3px; }
+.binding { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 15px; }
+.repository { min-width: 0; }
+.repository strong { display: block; overflow-wrap: anywhere; font-size: 16px; font-weight: 600; }
+.metadata { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 6px; color: #65768f; font-size: 13px; }
+.metadata > span { overflow-wrap: anywhere; }
+.visibility { border-radius: 4px; padding: 2px 7px; background: #edf2f8; color: #50627a; }
+.card .open { display: inline-flex; flex-shrink: 0; justify-content: center; align-items: center; padding: 8px 13px; border-radius: 7px; background: #edf4ff; color: #245fc2; font-weight: 550; text-decoration: none; }
+.card .open:hover { background: #e2edff; text-decoration: underline; }
+.card .empty { margin: 15px 0 0; color: #65768f; }
+.card .helper { margin: 12px 0 0; color: #65768f; font-size: 13px; }
+.card .footer { margin: 16px 0 0; font-size: 12px; color: #718096; }
+.form { margin-top: 18px; padding-top: 18px; border-top: 1px solid #e5eaf1; }
+.fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.card label { display: grid; gap: 6px; min-width: 0; color: #42516a; font-size: 14px; }
+.card input, .card select { width: 100%; min-width: 0; border: 1px solid #d6dfeb; border-radius: 6px; padding: 9px 11px; background: #fff; color: #203047; }
+.card small { color: #718096; font-size: 12px; line-height: 1.6; }
+.urlField { grid-column: 1 / -1; grid-row: 2; }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.card .save { background: #245fc2; color: #fff; border-color: #245fc2; font-weight: 600; }
+.card .save:hover:not(:disabled) { background: #1c50a9; border-color: #1c50a9; }
+.card .unlink { margin-left: auto; color: #68778e; }
+.card .message { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-top: 15px; padding: 11px 14px; border-radius: 7px; background: #fff7e8; color: #785d2b; }
+.card .message p { flex: 1 1 100%; margin: 0; }
+.card .message span { font-size: 12px; }
+.card .notice { margin: 15px 0 0; padding: 10px 13px; color: #326650; background: #edf6f0; border-radius: 7px; }
+.card .confirm { margin-top: 16px; padding: 15px; background: #f7f9fc; border: 1px solid #e3e9f2; border-radius: 7px; }
+.card .confirm p { margin: 0; }
+@media (max-width: 640px) {
+  .card { padding: 17px 16px; margin-bottom: 18px; }
+  .card .header { align-items: flex-start; gap: 12px; }
+  .card .header > button { flex-shrink: 0; }
+  .binding { align-items: stretch; flex-direction: column; gap: 12px; }
+  .card .open { align-self: flex-start; }
+  .fields { grid-template-columns: minmax(0, 1fr); }
+  .urlField { grid-column: auto; grid-row: auto; }
+  .card .unlink { margin-left: 0; }
+  .card button, .card .open { min-height: 40px; }
+  .card input, .card select { font-size: 16px; }
+}

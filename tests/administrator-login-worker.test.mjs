@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readFile, readdir } from 'node:fs/promises';
 import { Miniflare } from 'miniflare';
 import { digest, hashPassword } from '../lib/local-password.ts';
+import { applyD1Migrations } from './database-fixture.mjs';
 
 test('v23 upgrade: administrators keep privileges, need no password change, and support persona, password change/reset/disable', {timeout:120000},async()=>{
   const root=fileURLToPath(new URL('../dist/server/',import.meta.url));
@@ -22,6 +23,9 @@ test('v23 upgrade: administrators keep privileges, need no password change, and 
       const sql=await readFile(new URL(name,migrationDir),'utf8');
       for(const statement of sql.split('--> statement-breakpoint').map(s=>s.trim()).filter(Boolean))await db.prepare(statement).run();
     }
+    // New repository tables are deployment-owned; keep schema version 23 so
+    // this fixture still exercises the credentials runtime upgrade path.
+    await applyD1Migrations(mf,{from:'0025_'});
     await db.prepare(`INSERT INTO students(id,display_name,degree,grade_year,stage) VALUES
       ('student-002','佘阳','博士',2023,'实验'),('student-001','原学生','博士',2024,'实验')`).run();
     await db.prepare(`INSERT INTO app_users(id,feishu_open_id,display_name,role,student_id) VALUES
@@ -39,7 +43,7 @@ test('v23 upgrade: administrators keep privileges, need no password change, and 
     const oldSession=await get('/api/auth/session','tanyan_session=existing-student-session');
     assert.equal(oldSession.status,200,await oldSession.clone().text());
     assert.equal((await oldSession.json()).user.id,2);
-    assert.equal((await db.prepare('SELECT version FROM app_schema_meta').first()).version,24);
+    assert.equal((await db.prepare('SELECT version FROM app_schema_meta').first()).version,25);
     const before=(await db.prepare('SELECT * FROM app_users').all()).results;
     const admins=(await db.prepare('SELECT * FROM local_credentials WHERE app_user_id IN (1,24)').all()).results;
     assert.equal(admins.length,2);

@@ -5,10 +5,18 @@ import { localAuthSchemaStatements, upgradeLocalCredentialsSchema } from "./loca
 import { provisionAdministratorLogins } from "./administrator-logins";
 import { progressResolutionSchemaStatements } from "./progress-resolution-schema";
 import { createProgressDeletionsSql, protectDeletedProgressSql } from "./ai-record-deletion";
+import { provisionConfirmedRepositoryBindings } from "./confirmed-repository-bindings";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-export const CURRENT_SCHEMA_VERSION = 24;
+export const CURRENT_SCHEMA_VERSION = 25;
+
+// These tables are owned exclusively by the hosted/local Drizzle migration.
+// Runtime bootstrap must never invent them or mark the schema upgraded before
+// deployment has installed all of them.
+const MIGRATION_OWNED_REPOSITORY_TABLES = [
+  "student_repository_bindings", "student_repository_events", "student_repository_rollouts",
+] as const;
 
 const REQUIRED_TABLES = [
   "students",
@@ -46,6 +54,7 @@ const REQUIRED_TABLES = [
   "feishu_meeting_summary_imports",
   "feishu_meeting_summary_links",
   "progress_evidence_sources",
+  ...MIGRATION_OWNED_REPOSITORY_TABLES,
 ] as const;
 
 export type DatabaseSchemaStatus = {
@@ -110,6 +119,13 @@ async function prepareDatabase() {
   if (before.version !== null && before.version > CURRENT_SCHEMA_VERSION) {
     throw new Error(`数据库版本 ${before.version} 高于应用支持版本 ${CURRENT_SCHEMA_VERSION}`);
   }
+  const missingRepositoryTables = MIGRATION_OWNED_REPOSITORY_TABLES.filter((name) => before.missingTables.includes(name));
+  if (missingRepositoryTables.length) {
+    throw new Error("科研仓库数据库迁移尚未应用，请先应用部署迁移");
+  }
+  if (before.version !== null && before.version >= 23 && before.missingTables.length) {
+    throw new Error(`数据库结构不完整：缺少 ${before.missingTables.join("、")}`);
+  }
   await migrateDatabase(before.version);
   const after = await getDatabaseSchemaStatus();
   if (after.version !== CURRENT_SCHEMA_VERSION || after.missingTables.length) {
@@ -122,6 +138,7 @@ export async function ensureDatabase() {
     await provisionInitialStudentLogins(getD1());
     await provisionLocalOnlyStudentLogins(getD1());
     await provisionAdministratorLogins(getD1());
+    await provisionConfirmedRepositoryBindings(getD1());
   }).catch((error) => {
     databaseReadyPromise = null;
     throw error;
@@ -131,6 +148,11 @@ export async function ensureDatabase() {
 
 async function migrateDatabase(previousVersion: number | null) {
   const d1 = getD1();
+  if (previousVersion === 24) {
+    await d1.prepare("UPDATE app_schema_meta SET version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND version = 24")
+      .bind(CURRENT_SCHEMA_VERSION).run();
+    return;
+  }
   if (previousVersion === 23) {
     await upgradeLocalCredentialsSchema(d1);
     await d1.prepare("UPDATE app_schema_meta SET version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND version = 23")

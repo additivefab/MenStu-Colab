@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readdir } from 'node:fs/promises';
 import { Miniflare } from 'miniflare';
 import { digest } from '../lib/local-password.ts';
+import { applyD1Migrations } from './database-fixture.mjs';
 
 // Run the built production Worker against an isolated in-memory D1, without Feishu credentials.
 test('Workers HTTP flow: original account -> activation -> login -> scoped data -> reset', {timeout:120000}, async () => {
@@ -21,9 +22,10 @@ test('Workers HTTP flow: original account -> activation -> login -> scoped data 
     const send=(path,body,cookie='', extra={}) => mf.dispatchFetch(origin+path,{
       method:'POST',headers:{'content-type':'application/json',origin,cookie,'cf-connecting-ip':'127.0.0.1',...extra},body:JSON.stringify(body),
     });
-    await mf.dispatchFetch(origin+'/api/health/ready'); // Exercise the real runtime migration.
+    await applyD1Migrations(mf);
+    await mf.dispatchFetch(origin+'/api/health/ready'); // Exercise version checks and runtime provisioning after deployment migrations.
     const db=await mf.getD1Database('DB');
-    assert.equal((await db.prepare('SELECT version FROM app_schema_meta').first()).version,24);
+    assert.equal((await db.prepare('SELECT version FROM app_schema_meta').first()).version,25);
     await db.prepare("INSERT INTO students(id,display_name,degree,grade_year,stage) VALUES ('student-001','测试学生一','博士',2024,'实验'),('student-002','测试学生二','硕士',2025,'实验')").run();
     await db.prepare("INSERT INTO app_users(id,feishu_open_id,display_name,role,student_id) VALUES (1,'old-feishu-id','测试学生一','student','student-001'),(2,'other-feishu-id','测试学生二','student','student-002'),(3,'superadmin-test','测试超管','superadmin',NULL)").run();
     await db.prepare("INSERT INTO app_sessions(token_hash,app_user_id,expires_at) VALUES (?,3,datetime('now','+1 day'))").bind(digest('admin-test-session')).run();

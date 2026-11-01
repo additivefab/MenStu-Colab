@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { Miniflare } from "miniflare";
 import { digest } from "../lib/local-password.ts";
+import { applyD1Migrations } from "./database-fixture.mjs";
 
 // Use the compiled Worker with isolated in-memory D1/R2. No production records,
 // credentials or external notification endpoints are used by this fixture.
@@ -73,6 +74,7 @@ test("unresolved problems survive new progress and remain actionable independent
   }, "mentor"));
 
   try {
+    await applyD1Migrations(mf);
     await mf.dispatchFetch(origin + "/api/health/ready");
     const db = await mf.getD1Database("DB");
     await db.prepare(`INSERT INTO students(id, display_name, degree, grade_year, stage, active) VALUES
