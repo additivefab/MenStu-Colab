@@ -18,13 +18,19 @@ export async function GET(request: Request) {
     const students: ProblemRecordStudent[] = [];
     for (const part of scopes) {
       const scope = scopeSql(part, "s.id");
-      const rows = await database.prepare(`SELECT s.id, s.display_name, s.stage FROM students s
+      const rows = await database.prepare(`SELECT s.id, s.display_name, s.stage,
+        (SELECT json_group_array(json_object('id', ro.id, 'title', ro.title, 'outputType', ro.output_type))
+          FROM research_outputs ro WHERE ro.student_id = s.id) AS research_outputs_json
+        FROM students s
         WHERE s.active = 1${scope.clause} ORDER BY s.display_name, s.id`)
-        .bind(...scope.bindings).all<{ id: string; display_name: string; stage: string }>();
+        .bind(...scope.bindings).all<{ id: string; display_name: string; stage: string; research_outputs_json: string | null }>();
       students.push(...rows.results.map((row) => ({
         id: row.id, name: row.display_name, stage: row.stage,
         // Match POST /api/student-guidance: assigned mentors may record daily guidance without formal-review authority.
         canRecord: auth.user.studentId !== row.id,
+        ...(row.research_outputs_json && row.research_outputs_json !== "[]"
+          ? { researchOutputs: JSON.parse(row.research_outputs_json) as Array<{ id: number; title: string; outputType: string }> }
+          : {}),
       })));
     }
     students.sort((left, right) => left.name.localeCompare(right.name, "zh-CN") || left.id.localeCompare(right.id));

@@ -744,6 +744,17 @@ export const researchOutputs = sqliteTable(
     identifier: text("identifier").notNull().default(""),
     url: text("url").notNull().default(""),
     summary: text("summary").notNull().default(""),
+    submissionStatus: text("submission_status").notNull().default("not_submitted"),
+    submissionUrl: text("submission_url").notNull().default(""),
+    submissionUsername: text("submission_username").notNull().default(""),
+    submissionPasswordCiphertext: text("submission_password_ciphertext"),
+    submissionPasswordIv: text("submission_password_iv"),
+    submissionNextAction: text("submission_next_action").notNull().default(""),
+    submissionNextActionDueDate: text("submission_next_action_due_date"),
+    patentApplicationNumber: text("patent_application_number").notNull().default(""),
+    patentApplicationDate: text("patent_application_date"),
+    patentOffice: text("patent_office").notNull().default(""),
+    patentReviewStage: text("patent_review_stage").notNull().default(""),
     linkedMilestoneId: integer("linked_milestone_id").references(() => researchMilestones.id),
     createdByUserId: integer("created_by_user_id")
       .notNull()
@@ -773,6 +784,20 @@ export const researchOutputEvents = sqliteTable(
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [index("idx_research_output_events_output").on(table.outputId, table.createdAt)],
+);
+
+export const researchOutputGuidanceLinks = sqliteTable(
+  "research_output_guidance_links",
+  {
+    guidanceNoteId: integer("guidance_note_id")
+      .primaryKey()
+      .references(() => studentGuidanceNotes.id),
+    outputId: integer("research_output_id")
+      .notNull()
+      .references(() => researchOutputs.id),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("idx_research_output_guidance_output").on(table.outputId, table.createdAt)],
 );
 
 export const proposalAuditEvents = sqliteTable(

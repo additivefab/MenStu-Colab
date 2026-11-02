@@ -15,11 +15,20 @@ export type ProblemRecord = {
   dueDate: string | null;
   href: string;
   trackType?: "paper" | "project";
+  researchOutputId?: number;
+  researchOutputTitle?: string;
+  researchOutputType?: string;
   /** Superseded unresolved records stay historical without losing their original status. */
   originalStatus?: Exclude<ProblemRecordStatus, "historical">;
 };
 
-export type ProblemRecordStudent = { id: string; name: string; stage: string; canRecord: boolean };
+export type ProblemRecordStudent = {
+  id: string;
+  name: string;
+  stage: string;
+  canRecord: boolean;
+  researchOutputs?: Array<{ id: number; title: string; outputType: string }>;
+};
 export type ProblemRecordsPayload = { records: ProblemRecord[]; students: ProblemRecordStudent[]; generatedAt: string };
 
 export const problemRecordBatchSize = 90;

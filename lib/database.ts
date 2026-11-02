@@ -65,6 +65,32 @@ export type DatabaseSchemaStatus = {
 
 let databaseReadyPromise: Promise<void> | null = null;
 
+async function ensureResearchOutputColumns() {
+  await ensureColumn("research_outputs", "submission_status", "TEXT NOT NULL DEFAULT 'not_submitted'");
+  await ensureColumn("research_outputs", "submission_url", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("research_outputs", "submission_username", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("research_outputs", "submission_password_ciphertext", "TEXT");
+  await ensureColumn("research_outputs", "submission_password_iv", "TEXT");
+  await ensureColumn("research_outputs", "submission_next_action", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("research_outputs", "submission_next_action_due_date", "TEXT");
+  await ensureColumn("research_outputs", "patent_application_number", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("research_outputs", "patent_application_date", "TEXT");
+  await ensureColumn("research_outputs", "patent_office", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("research_outputs", "patent_review_stage", "TEXT NOT NULL DEFAULT ''");
+}
+
+async function ensureResearchOutputGuidanceLinks() {
+  const d1 = getD1();
+  await d1.batch([
+    d1.prepare(`CREATE TABLE IF NOT EXISTS research_output_guidance_links (
+      guidance_note_id INTEGER PRIMARY KEY REFERENCES student_guidance_notes(id),
+      research_output_id INTEGER NOT NULL REFERENCES research_outputs(id),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_output_guidance_output ON research_output_guidance_links(research_output_id, created_at DESC)"),
+  ]);
+}
+
 export function getD1() {
   if (!env.DB) {
     throw new Error("D1 binding DB is unavailable");
@@ -73,7 +99,7 @@ export function getD1() {
 }
 
 async function ensureColumn(
-  table: "local_credentials" | "app_sessions" | "app_user_role_events" | "progress_entries" | "progress_attachments" | "progress_evidence_sources" | "research_milestones" | "student_guidance_notes" | "notification_deliveries" | "meeting_requests",
+  table: "local_credentials" | "app_sessions" | "app_user_role_events" | "progress_entries" | "progress_attachments" | "progress_evidence_sources" | "research_milestones" | "student_guidance_notes" | "notification_deliveries" | "meeting_requests" | "research_outputs",
   column: string,
   definition: string,
 ) {
@@ -114,6 +140,8 @@ async function prepareDatabase() {
     if (before.missingTables.length) {
       throw new Error(`数据库结构不完整：缺少 ${before.missingTables.join("、")}`);
     }
+    await ensureResearchOutputColumns();
+    await ensureResearchOutputGuidanceLinks();
     return;
   }
   if (before.version !== null && before.version > CURRENT_SCHEMA_VERSION) {
@@ -149,12 +177,16 @@ export async function ensureDatabase() {
 async function migrateDatabase(previousVersion: number | null) {
   const d1 = getD1();
   if (previousVersion === 24) {
+    await ensureResearchOutputColumns();
+    await ensureResearchOutputGuidanceLinks();
     await d1.prepare("UPDATE app_schema_meta SET version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND version = 24")
       .bind(CURRENT_SCHEMA_VERSION).run();
     return;
   }
   if (previousVersion === 23) {
     await upgradeLocalCredentialsSchema(d1);
+    await ensureResearchOutputColumns();
+    await ensureResearchOutputGuidanceLinks();
     await d1.prepare("UPDATE app_schema_meta SET version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND version = 23")
       .bind(CURRENT_SCHEMA_VERSION).run();
     return;
@@ -506,6 +538,17 @@ async function migrateDatabase(previousVersion: number | null) {
       identifier TEXT NOT NULL DEFAULT '',
       url TEXT NOT NULL DEFAULT '',
       summary TEXT NOT NULL DEFAULT '',
+      submission_status TEXT NOT NULL DEFAULT 'not_submitted',
+      submission_url TEXT NOT NULL DEFAULT '',
+      submission_username TEXT NOT NULL DEFAULT '',
+      submission_password_ciphertext TEXT,
+      submission_password_iv TEXT,
+      submission_next_action TEXT NOT NULL DEFAULT '',
+      submission_next_action_due_date TEXT,
+      patent_application_number TEXT NOT NULL DEFAULT '',
+      patent_application_date TEXT,
+      patent_office TEXT NOT NULL DEFAULT '',
+      patent_review_stage TEXT NOT NULL DEFAULT '',
       linked_milestone_id INTEGER REFERENCES research_milestones(id),
       created_by_user_id INTEGER NOT NULL REFERENCES app_users(id),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -518,6 +561,11 @@ async function migrateDatabase(previousVersion: number | null) {
       action TEXT NOT NULL,
       detail TEXT NOT NULL DEFAULT '',
       snapshot_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS research_output_guidance_links (
+      guidance_note_id INTEGER PRIMARY KEY REFERENCES student_guidance_notes(id),
+      research_output_id INTEGER NOT NULL REFERENCES research_outputs(id),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS proposal_audit_events (
@@ -616,6 +664,7 @@ async function migrateDatabase(previousVersion: number | null) {
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_outputs_student_updated ON research_outputs(student_id, updated_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_outputs_status ON research_outputs(lifecycle_status, updated_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_output_events_output ON research_output_events(output_id, created_at DESC)"),
+    d1.prepare("CREATE INDEX IF NOT EXISTS idx_research_output_guidance_output ON research_output_guidance_links(research_output_id, created_at DESC)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_proposal_audit_proposal_created ON proposal_audit_events(proposal_id, created_at DESC)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_summary_event_unique ON feishu_meeting_summary_imports(event_id)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_summary_message_unique ON feishu_meeting_summary_imports(message_id)"),
@@ -764,6 +813,12 @@ async function migrateDatabase(previousVersion: number | null) {
       .bind(CURRENT_SCHEMA_VERSION),
     d1.prepare("PRAGMA optimize"),
   ]);
+
+  // Older local databases can already have research_outputs while skipping
+  // the hosted Drizzle migration. Make the additive columns available before
+  // publishing the new schema version.
+  await ensureResearchOutputColumns();
+  await ensureResearchOutputGuidanceLinks();
 }
 
 export function riskFromDate(value: string | null) {

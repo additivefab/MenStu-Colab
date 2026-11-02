@@ -177,6 +177,20 @@ type ResearchOutput = {
   identifier: string;
   url: string;
   summary: string;
+  submission_status: string;
+  submission_url: string;
+  submission_username: string;
+  submission_password_present: boolean;
+  submission_password?: string;
+  submission_next_action: string;
+  submission_next_action_due_date: string | null;
+  patent_application_number: string;
+  patent_application_date: string | null;
+  patent_office: string;
+  patent_review_stage: string;
+  problem_count: number;
+  problem_status_summary: { open: number; pending: number; resolved: number };
+  latest_follow_up_date: string | null;
   linked_milestone_id: number | null;
   milestone_title: string | null;
   created_by_name: string;
@@ -188,6 +202,9 @@ type GuidanceNote = {
   id: number;
   student_id: string;
   source_progress_entry_id: number | null;
+  research_output_id: number | null;
+  research_output_title: string | null;
+  research_output_type: string | null;
   guidance_type: "meeting_followup" | "paper" | "milestone" | "blocker" | "general";
   title: string;
   content: string;
@@ -257,6 +274,22 @@ const outputLifecycleLabels: Record<ResearchOutput["lifecycle_status"], string> 
   published: "已发表/发布",
   archived: "已归档",
 };
+
+const submissionStatusLabels: Record<string, string> = {
+  not_submitted: "未投稿", planned: "准备投稿", submitted: "已投稿", with_editor: "编辑处理中",
+  under_review: "外审中", major_revision: "大修", minor_revision: "小修", accepted: "已录用",
+  rejected: "退稿", withdrawn: "已撤稿", published: "已发表",
+};
+
+function researchOutputIssuesHref(output: Pick<ResearchOutput, "id" | "student_id">, status: "all" | "open" | "pending" | "resolved" = "all") {
+  const params = new URLSearchParams({
+    mentorView: "issues",
+    issueStudent: output.student_id,
+    issueOutput: String(output.id),
+    issueStatus: status,
+  });
+  return `/?${params.toString()}`;
+}
 
 const proposalLabels: Record<ProposalStatus, string> = {
   draft: "方案草稿",
@@ -344,7 +377,10 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   const [outputOpen, setOutputOpen] = useState(false);
   const [outputBusy, setOutputBusy] = useState(false);
   const [outputUpdateBusy, setOutputUpdateBusy] = useState<number | null>(null);
+  const [outputEditBusy, setOutputEditBusy] = useState<number | null>(null);
   const [outputMessage, setOutputMessage] = useState("");
+  const [credentialBusy, setCredentialBusy] = useState<number | null>(null);
+  const [revealedCredentials, setRevealedCredentials] = useState<Record<number, string>>({});
   const [progressBusy, setProgressBusy] = useState<number | null>(null);
   const [progressMessage, setProgressMessage] = useState<Record<number, string>>({});
   const [milestoneBusy, setMilestoneBusy] = useState<number | null>(null);
@@ -498,6 +534,15 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
           identifier: output.identifier,
           url: output.url,
           summary: output.summary,
+          submissionStatus: output.submission_status,
+          submissionUrl: output.submission_url,
+          submissionUsername: output.submission_username,
+          submissionNextAction: output.submission_next_action,
+          submissionNextActionDueDate: output.submission_next_action_due_date,
+          patentApplicationNumber: output.patent_application_number,
+          patentApplicationDate: output.patent_application_date,
+          patentOffice: output.patent_office,
+          patentReviewStage: output.patent_review_stage,
           linkedMilestoneId: output.linked_milestone_id,
         }),
       });
@@ -508,6 +553,48 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     } catch (saveError) {
       setOutputMessage(saveError instanceof Error ? saveError.message : "成果阶段更新失败");
     } finally { setOutputUpdateBusy(null); }
+  }
+
+  async function updateOutput(event: FormEvent<HTMLFormElement>, output: ResearchOutput) {
+    event.preventDefault();
+    setOutputEditBusy(output.id); setOutputMessage("");
+    const values = Object.fromEntries(new FormData(event.currentTarget));
+    try {
+      const response = await fetch("/api/research-outputs", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...values, id: output.id, studentId }),
+      });
+      const payload = await response.json() as { error?: string; message?: string };
+      if (!response.ok) throw new Error(payload.error || "投稿信息更新失败");
+      setOutputMessage(payload.message || "投稿信息已更新");
+      await load();
+    } catch (saveError) {
+      setOutputMessage(saveError instanceof Error ? saveError.message : "投稿信息更新失败");
+    } finally { setOutputEditBusy(null); }
+  }
+
+  async function revealOutputCredential(output: ResearchOutput) {
+    if (viewerRole !== "superadmin" && viewerRole !== "admin") return;
+    if (revealedCredentials[output.id]) {
+      setRevealedCredentials((current) => { const next = { ...current }; delete next[output.id]; return next; });
+      return;
+    }
+    setCredentialBusy(output.id); setOutputMessage("");
+    try {
+      const response = await fetch(`/api/research-outputs?studentId=${encodeURIComponent(studentId)}&outputId=${output.id}&revealCredentials=1`, { cache: "no-store" });
+      const payload = await response.json() as { submissionPassword?: string; error?: string };
+      if (!response.ok) throw new Error(payload.error || "投稿密码读取失败");
+      setRevealedCredentials((current) => ({ ...current, [output.id]: payload.submissionPassword || "未设置" }));
+      window.setTimeout(() => setRevealedCredentials((current) => {
+        if (!Object.prototype.hasOwnProperty.call(current, output.id)) return current;
+        const next = { ...current };
+        delete next[output.id];
+        return next;
+      }), 30_000);
+    } catch (credentialError) {
+      setOutputMessage(credentialError instanceof Error ? credentialError.message : "投稿密码读取失败");
+    } finally { setCredentialBusy(null); }
   }
 
   async function resubmitProgress(event: FormEvent<HTMLFormElement>, entry: StudentProgress) {
@@ -820,7 +907,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         <details><summary>主题、关联纪要与验收设置</summary><div className="sw-form-grid"><label>指导主题（可选）<input name="title" maxLength={200} /></label><label>关联 AI 纪要<select name="sourceProgressEntryId" defaultValue=""><option value="">不关联</option>{meetingSummaries.map((item) => <option key={item.progress_entry_id} value={item.progress_entry_id}>{dateText(item.message_created_at)} · {item.title}</option>)}</select></label><label>完成确认方式<select name="verificationMode" defaultValue="self_report"><option value="self_report">学生自行确认完成</option><option value="mentor_verify">学生提交，导师验收</option></select></label><label>验收标准<textarea name="acceptanceCriteria" rows={2} maxLength={1200} placeholder="需要导师验收时，请写清完成标准" /></label></div></details>
         <div className="sw-actions"><button className="primary" disabled={guidanceSaveBusy}>{guidanceSaveBusy ? "保存中…" : "保存指导"}</button><button type="button" onClick={() => setComposeOpen(false)}>收起</button></div>
       </form>
-      <div className="sw-guidance-list">{activeGuidance.map((note) => <details key={note.id} id={`guidance-${note.id}`} tabIndex={-1}><summary><span className={`sw-guidance-status ${note.status}`}>{note.status === "completed" ? "已完成" : note.student_reported_at ? "待验收" : "进行中"}</span><div><strong>{note.title || note.next_action || note.content.split("\n")[0]}</strong><small>{note.mentor_name} · {dateText(note.created_at)}{note.due_date && note.status === "open" ? ` · 期限 ${note.due_date}` : ""}</small></div></summary><div className="sw-detail-body"><p>{note.content}</p>{note.next_action ? <DetailBlock label="下一步" value={note.next_action} /> : null}{note.due_date ? <DetailBlock label="完成期限" value={note.due_date} /> : null}{note.acceptance_criteria ? <DetailBlock label="验收标准" value={note.acceptance_criteria} /> : null}<p className="sw-muted">{note.status === "open" ? note.student_reported_at ? "学生已提交完成说明，等待验收" : note.acknowledged_at ? `学生已于 ${dateText(note.acknowledged_at)} 确认收到` : "等待学生确认收到" : `${note.completed_by_name || "学生"}已完成 · ${dateText(note.completed_at)}`}</p>{note.completion_note ? <DetailBlock label="完成说明" value={note.completion_note} /> : null}<footer className="sw-guidance-footer"><span>{note.source_title ? <a href={`#progress-${note.source_progress_entry_id}`}>关联进展：{note.source_title}</a> : note.verification_mode === "mentor_verify" ? "需导师验收" : "学生自行确认"}</span><button disabled={guidanceStatusBusy === note.id || (note.status === "open" && note.verification_mode === "mentor_verify" && !note.student_reported_at)} onClick={() => void updateGuidanceStatus(note, note.status === "open" ? "complete" : "reopen")}>{note.status === "completed" ? "重新打开" : note.student_reported_at ? "确认验收" : "标记完成"}</button></footer></div></details>)}{!detailsLoading && !detailsError && !guidanceNotes.length ? <p className="sw-empty">暂无指导记录。点击“写指导”即可添加。</p> : null}</div>
+      <div className="sw-guidance-list">{activeGuidance.map((note) => <details key={note.id} id={`guidance-${note.id}`} tabIndex={-1}><summary><span className={`sw-guidance-status ${note.status}`}>{note.status === "completed" ? "已完成" : note.student_reported_at ? "待验收" : "进行中"}</span><div><strong>{note.title || note.next_action || note.content.split("\n")[0]}</strong><small>{note.mentor_name} · {dateText(note.created_at)}{note.due_date && note.status === "open" ? ` · 期限 ${note.due_date}` : ""}</small></div></summary><div className="sw-detail-body"><p>{note.content}</p>{note.research_output_title ? <p className="sw-linked-output"><span>关联科研成果</span><a href="#outputs">{note.research_output_title} · {note.research_output_type === "patent" ? "专利" : "论文/成果"} ↗</a></p> : null}{note.next_action ? <DetailBlock label="下一步" value={note.next_action} /> : null}{note.due_date ? <DetailBlock label="完成期限" value={note.due_date} /> : null}{note.acceptance_criteria ? <DetailBlock label="验收标准" value={note.acceptance_criteria} /> : null}<p className="sw-muted">{note.status === "open" ? note.student_reported_at ? "学生已提交完成说明，等待验收" : note.acknowledged_at ? `学生已于 ${dateText(note.acknowledged_at)} 确认收到` : "等待学生确认收到" : `${note.completed_by_name || "学生"}已完成 · ${dateText(note.completed_at)}`}</p>{note.completion_note ? <DetailBlock label="完成说明" value={note.completion_note} /> : null}<footer className="sw-guidance-footer"><span>{note.source_title ? <a href={`#progress-${note.source_progress_entry_id}`}>关联进展：{note.source_title}</a> : note.verification_mode === "mentor_verify" ? "需导师验收" : "学生自行确认"}</span><button disabled={guidanceStatusBusy === note.id || (note.status === "open" && note.verification_mode === "mentor_verify" && !note.student_reported_at)} onClick={() => void updateGuidanceStatus(note, note.status === "open" ? "complete" : "reopen")}>{note.status === "completed" ? "重新打开" : note.student_reported_at ? "确认验收" : "标记完成"}</button></footer></div></details>)}{!detailsLoading && !detailsError && !guidanceNotes.length ? <p className="sw-empty">暂无指导记录。点击“写指导”即可添加。</p> : null}</div>
     </section>
 
     <section id="sw-research" tabIndex={-1} hidden={tab !== "research"} className="sw-research" aria-label="研究资料">
@@ -845,17 +932,26 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         <label>DOI / 专利号 / 仓库标识<input name="identifier" maxLength={500} placeholder="可选" /></label>
         <label>关联培养节点<select name="linkedMilestoneId" defaultValue=""><option value="">暂不关联</option>{proposal?.milestones.map((milestone) => <option key={milestone.id} value={milestone.id}>{milestone.title}</option>)}</select></label>
         <label>成果链接<input name="url" type="url" placeholder="仅支持 https://" /></label>
+        <label>投稿/申请状态<select name="submissionStatus" defaultValue="not_submitted">{Object.entries(submissionStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label>投稿系统/受理地址<input name="submissionUrl" type="url" placeholder="https://…" /></label>
+        <label>投稿账号<input name="submissionUsername" maxLength={200} placeholder="可选" /></label>
+        <label>投稿密码<input name="submissionPassword" type="password" maxLength={500} placeholder="仅管理员可查看，系统加密保存" /></label>
+        <label>下一动作<input name="submissionNextAction" maxLength={500} placeholder="例如：上传返修稿、补交专利材料" /></label>
+        <label>下一动作期限<input name="submissionNextActionDueDate" type="date" /></label>
+        <div className="wide student-patent-fields"><strong>专利申请信息（成果类型为专利时填写）</strong><div><label>申请号<input name="patentApplicationNumber" maxLength={200} placeholder="申请号/公开号" /></label><label>申请日<input name="patentApplicationDate" type="date" /></label><label>受理机构<input name="patentOffice" maxLength={300} placeholder="国家知识产权局或其他机构" /></label><label>审查节点<input name="patentReviewStage" maxLength={500} placeholder="例如：已受理、初审、实审、补正、授权" /></label></div></div>
         <label className="wide">成果说明<textarea name="summary" rows={3} maxLength={4000} placeholder="说明成果贡献和当前状态" /></label>
-        <div className="wide student-output-form-actions"><button className="primary" disabled={outputBusy}>{outputBusy ? "保存中…" : "保存成果"}</button></div>
+        <div className="wide student-output-form-actions"><small>账号密码不会出现在普通台账接口中；密码仅在管理员点击查看时解密返回。</small><button className="primary" disabled={outputBusy}>{outputBusy ? "保存中…" : "保存成果"}</button></div>
       </form> : null}
       {outputMessage ? <p className="student-output-message" role="status">{outputMessage}</p> : null}
       <div className="student-output-grid">{outputs.map((output) => <article key={output.id}>
         <div><span>{outputTypeLabels[output.output_type]}</span>{viewerRole === "superadmin" || viewerRole === "admin" ? <select aria-label={`${output.title}成果阶段`} value={output.lifecycle_status} disabled={outputUpdateBusy === output.id} onChange={(event) => void updateOutputLifecycle(output, event.target.value as ResearchOutput["lifecycle_status"])}>{Object.entries(outputLifecycleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : <em className={output.lifecycle_status}>{outputLifecycleLabels[output.lifecycle_status]}</em>}</div>
         <h3>{output.title}</h3>
         <p>{output.summary || "尚未填写成果说明"}</p>
-        <dl>{output.venue ? <div><dt>发布位置</dt><dd>{output.venue}</dd></div> : null}{output.identifier ? <div><dt>标识符</dt><dd>{output.identifier}</dd></div> : null}{output.milestone_title ? <div><dt>关联节点</dt><dd>{output.milestone_title}</dd></div> : null}</dl>
+        <dl>{output.venue ? <div><dt>发布位置</dt><dd>{output.venue}</dd></div> : null}{output.identifier ? <div><dt>标识符</dt><dd>{output.identifier}</dd></div> : null}{output.milestone_title ? <div><dt>关联节点</dt><dd>{output.milestone_title}</dd></div> : null}<div><dt>投稿/申请状态</dt><dd>{submissionStatusLabels[output.submission_status] || output.submission_status || "未设置"}</dd></div>{output.submission_url ? <div><dt>投稿系统</dt><dd><a href={output.submission_url} target="_blank" rel="noreferrer">打开地址 ↗</a></dd></div> : null}{output.submission_next_action ? <div><dt>下一动作</dt><dd>{output.submission_next_action}{output.submission_next_action_due_date ? ` · ${output.submission_next_action_due_date}` : ""}</dd></div> : null}{output.submission_username ? <div><dt>投稿账号</dt><dd>{output.submission_username}</dd></div> : null}{["paper", "patent"].includes(output.output_type) ? <div className="student-output-problem-summary"><dt>关联问题</dt><dd><a href={researchOutputIssuesHref(output)} aria-label={`查看${output.title}的全部关联问题`}><strong>全部 {output.problem_count} 项</strong></a><span className="student-output-problem-status-links"><a href={researchOutputIssuesHref(output, "open")}>待解决 {output.problem_status_summary.open}</a><a href={researchOutputIssuesHref(output, "pending")}>待确认 {output.problem_status_summary.pending}</a><a href={researchOutputIssuesHref(output, "resolved")}>已解决 {output.problem_status_summary.resolved}</a></span><small>{output.latest_follow_up_date ? <a href={researchOutputIssuesHref(output)}>{`最近跟进 ${output.latest_follow_up_date}`}</a> : <a href={researchOutputIssuesHref(output)}>尚无跟进日期</a>}</small></dd></div> : null}{output.output_type === "patent" ? <><div><dt>专利申请号</dt><dd>{output.patent_application_number || "未填写"}</dd></div><div><dt>申请日</dt><dd>{output.patent_application_date || "未填写"}</dd></div><div><dt>受理机构</dt><dd>{output.patent_office || "未填写"}</dd></div><div><dt>审查节点</dt><dd>{output.patent_review_stage || "未填写"}</dd></div></> : null}</dl>
+        {viewerRole === "superadmin" || viewerRole === "admin" ? <div className="student-output-credential"><span>{output.submission_password_present ? "投稿密码已加密保存" : "未保存投稿密码"}</span>{output.submission_password_present ? <button type="button" disabled={credentialBusy === output.id} onClick={() => void revealOutputCredential(output)}>{credentialBusy === output.id ? "读取中…" : revealedCredentials[output.id] ? `隐藏密码（${revealedCredentials[output.id]}）` : "查看密码"}</button> : null}</div> : null}
+        {viewerRole === "superadmin" || viewerRole === "admin" ? <details className="student-output-edit"><summary>编辑成果与投稿信息</summary><form onSubmit={(event) => void updateOutput(event, output)}><input type="hidden" name="outputType" value={output.output_type} /><input type="hidden" name="title" value={output.title} /><input type="hidden" name="venue" value={output.venue} /><input type="hidden" name="identifier" value={output.identifier} /><input type="hidden" name="url" value={output.url} /><input type="hidden" name="summary" value={output.summary} /><input type="hidden" name="linkedMilestoneId" value={output.linked_milestone_id ?? ""} /><label>成果阶段<select name="lifecycleStatus" defaultValue={output.lifecycle_status}>{Object.entries(outputLifecycleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>投稿/申请状态<select name="submissionStatus" defaultValue={output.submission_status}>{Object.entries(submissionStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>投稿系统地址<input name="submissionUrl" type="url" defaultValue={output.submission_url} /></label><label>投稿账号<input name="submissionUsername" defaultValue={output.submission_username} /></label><label>新密码（留空不变）<input name="submissionPassword" type="password" placeholder="留空保持原密码" /></label><label>下一动作<input name="submissionNextAction" defaultValue={output.submission_next_action} /></label><label>下一动作期限<input name="submissionNextActionDueDate" type="date" defaultValue={output.submission_next_action_due_date ?? ""} /></label>{output.output_type === "patent" ? <><label>申请号<input name="patentApplicationNumber" defaultValue={output.patent_application_number} /></label><label>申请日<input name="patentApplicationDate" type="date" defaultValue={output.patent_application_date ?? ""} /></label><label>受理机构<input name="patentOffice" defaultValue={output.patent_office} /></label><label>审查节点<input name="patentReviewStage" defaultValue={output.patent_review_stage} /></label></> : null}<button className="primary" disabled={outputEditBusy === output.id}>{outputEditBusy === output.id ? "保存中…" : "保存投稿信息"}</button></form></details> : null}
         {output.events.length ? <details className="student-output-events"><summary>变更记录（{output.events.length}）</summary>{output.events.map((event) => <div key={event.id}><strong>{event.detail}</strong><small>{event.actor_name} · {dateText(event.created_at)}</small></div>)}</details> : null}
-        <footer><span>{output.created_by_name} · {dateText(output.updated_at)}</span>{output.url ? <a href={output.url} target="_blank" rel="noreferrer">打开成果 ↗</a> : null}</footer>
+        <footer><span>{output.created_by_name} · {dateText(output.updated_at)}</span><a href={researchOutputIssuesHref(output)}>问题追踪 ↗</a>{output.url ? <a href={output.url} target="_blank" rel="noreferrer">打开成果 ↗</a> : null}</footer>
       </article>)}{!detailsLoading && !detailsError && !outputs.length ? <div className="student-empty">暂无成果记录。</div> : null}</div>
     </section>
 

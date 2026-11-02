@@ -85,3 +85,20 @@ test("admin assignment scope, evidence provenance, outputs, guidance, and upgrad
   assert.doesNotMatch(feishuImport, /messageId\.slice/);
   assert.match(feishuImport, /review_status, updated_at/);
 });
+
+test("research output issue links preserve the output scope and status filters", async () => {
+  const [dashboard, studentOverview, problemRecords] = await Promise.all([
+    readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/students/[id]/student-overview.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../components/problem-records.tsx", import.meta.url), "utf8"),
+  ]);
+  for (const source of [dashboard, studentOverview]) {
+    assert.match(source, /issueOutput/);
+    assert.match(source, /issueStatus: status/);
+    assert.match(source, /researchOutputIssuesHref\(output, "open"\)/);
+    assert.match(source, /researchOutputIssuesHref\(output, "pending"\)/);
+    assert.match(source, /researchOutputIssuesHref\(output, "resolved"\)/);
+  }
+  assert.match(problemRecords, /params\.get\("issueOutput"\)/);
+  assert.match(problemRecords, /record\.researchOutputId === filters\.output/);
+});

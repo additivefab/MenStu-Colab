@@ -204,3 +204,28 @@ test("large mentor scopes use bounded batches instead of one query per student",
     assert.ok(app.queries.every(({args}) => args.length <= 90));
   } finally { app.db.close(); }
 });
+
+test("research output summaries count linked blocker states and latest follow-up dates", async () => {
+  const rows = [
+    { research_output_id: 1, status: "open", due_date: "2026-10-20", updated_at: "2026-10-21 08:00:00" },
+    { research_output_id: 1, status: "pending", due_date: null, updated_at: "2026-10-22 08:00:00" },
+    { research_output_id: 1, status: "resolved", due_date: "2026-10-19", updated_at: "2026-10-23 08:00:00" },
+    { research_output_id: 2, status: "resolved", due_date: null, updated_at: "2026-10-18 08:00:00" },
+  ];
+  const database = {
+    prepare() {
+      return { bind() { return { async all() { return { results: rows }; } }; } };
+    },
+  };
+  const summaries = await problemRecordsService.loadResearchOutputProblemSummaries(database, [1, 2]);
+  assert.deepEqual(summaries.get(1), {
+    problem_count: 3,
+    problem_status_summary: { open: 1, pending: 1, resolved: 1 },
+    latest_follow_up_date: "2026-10-22",
+  });
+  assert.deepEqual(summaries.get(2), {
+    problem_count: 1,
+    problem_status_summary: { open: 0, pending: 0, resolved: 1 },
+    latest_follow_up_date: "2026-10-18",
+  });
+});

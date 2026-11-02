@@ -22,10 +22,29 @@ function clean(value: unknown, label: string, maxLength: number) {
   return text;
 }
 
-async function readStudentWorkspace(studentId: string) {
+async function readGuidanceNotes(studentId: string) {
   const d1 = getD1();
-  const [notes, meetingSummaries] = await Promise.all([
-    d1.prepare(`SELECT n.id, n.student_id, n.source_progress_entry_id, n.guidance_type, n.title,
+  try {
+    return await d1.prepare(`SELECT n.id, n.student_id, n.source_progress_entry_id, rol.research_output_id, n.guidance_type, n.title,
+      n.content, n.next_action, n.due_date, n.status, n.created_at, n.updated_at,
+      n.acceptance_criteria, n.verification_mode, n.acknowledged_at,
+      n.student_reported_at, n.mentor_verified_at, n.completed_at, n.completion_note,
+      n.version,
+      u.display_name AS mentor_name, completed_by.display_name AS completed_by_name,
+      p.title AS source_title, p.kind AS source_kind,
+      ro.title AS research_output_title, ro.output_type AS research_output_type
+      FROM student_guidance_notes n
+      JOIN app_users u ON u.id = n.mentor_user_id
+      LEFT JOIN app_users completed_by ON completed_by.id = n.completed_by_user_id
+      LEFT JOIN progress_entries p ON p.id = n.source_progress_entry_id AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)
+      LEFT JOIN research_output_guidance_links rol ON rol.guidance_note_id = n.id
+      LEFT JOIN research_outputs ro ON ro.id = rol.research_output_id
+      WHERE n.student_id = ?
+      ORDER BY CASE n.status WHEN 'open' THEN 0 ELSE 1 END, n.created_at DESC, n.id DESC
+      LIMIT 200`).bind(studentId).all();
+  } catch (error) {
+    if (!/research_output_guidance_links|research_output_id|no such table|no such column/i.test(error instanceof Error ? error.message : String(error))) throw error;
+    return d1.prepare(`SELECT n.id, n.student_id, n.source_progress_entry_id, n.guidance_type, n.title,
       n.content, n.next_action, n.due_date, n.status, n.created_at, n.updated_at,
       n.acceptance_criteria, n.verification_mode, n.acknowledged_at,
       n.student_reported_at, n.mentor_verified_at, n.completed_at, n.completion_note,
@@ -38,7 +57,14 @@ async function readStudentWorkspace(studentId: string) {
       LEFT JOIN progress_entries p ON p.id = n.source_progress_entry_id AND NOT EXISTS (SELECT 1 FROM progress_deletions deleted WHERE deleted.progress_entry_id = p.id)
       WHERE n.student_id = ?
       ORDER BY CASE n.status WHEN 'open' THEN 0 ELSE 1 END, n.created_at DESC, n.id DESC
-      LIMIT 200`).bind(studentId).all(),
+      LIMIT 200`).bind(studentId).all();
+  }
+}
+
+async function readStudentWorkspace(studentId: string) {
+  const d1 = getD1();
+  const [notes, meetingSummaries] = await Promise.all([
+    readGuidanceNotes(studentId),
     d1.prepare(`SELECT l.id AS link_id, i.id AS import_id, l.progress_entry_id,
       p.title, p.summary, p.evidence, p.current_revision, p.review_status, p.assessment, p.reviewer_note,
       p.submitted_at, i.detected_reason, i.message_created_at, i.received_at,
@@ -119,6 +145,8 @@ export async function POST(request: Request) {
     const verificationMode = clean(body.verificationMode, "验收方式", 30) || "self_report";
     const sourceProgressEntryId = body.sourceProgressEntryId === undefined || body.sourceProgressEntryId === null || body.sourceProgressEntryId === ""
       ? null : Number(body.sourceProgressEntryId);
+    const researchOutputId = body.researchOutputId === undefined || body.researchOutputId === null || body.researchOutputId === ""
+      ? null : Number(body.researchOutputId);
     if (!studentId || !guidanceTypes.has(guidanceType) || !content) {
       throw new InputError("请完整填写学生、指导类型和指导内容");
     }
@@ -129,6 +157,9 @@ export async function POST(request: Request) {
     if (dueDate && !isIsoDate(dueDate)) throw new InputError("完成期限不是有效日期");
     if (sourceProgressEntryId !== null && (!Number.isSafeInteger(sourceProgressEntryId) || sourceProgressEntryId < 1)) {
       throw new InputError("关联的进展记录无效");
+    }
+    if (researchOutputId !== null && (!Number.isSafeInteger(researchOutputId) || researchOutputId < 1)) {
+      throw new InputError("关联的科研成果无效");
     }
     // 日常指导与正式审核分权：被分配到该学生的导师可指导，正式进展判断仍走 can_review。
     if (!(await canViewStudent(auth.user, studentId))) {
@@ -152,6 +183,11 @@ export async function POST(request: Request) {
         .bind(sourceProgressEntryId, studentId).first();
       if (!source) throw new InputError("关联的进展记录不属于该学生、已删除或尚未通过审核");
     }
+    if (researchOutputId !== null) {
+      const output = await d1.prepare(`SELECT id FROM research_outputs WHERE id = ? AND student_id = ?`)
+        .bind(researchOutputId, studentId).first();
+      if (!output) throw new InputError("关联的科研成果不属于该学生或不存在");
+    }
     let createdId: number | null = null;
     try {
       const row = await d1.prepare(`INSERT INTO student_guidance_notes
@@ -173,11 +209,16 @@ export async function POST(request: Request) {
         .first<{ id: number }>();
       if (!row?.id) throw new Error("无法保存导师指导");
       createdId = row.id;
+      if (researchOutputId !== null) {
+        await d1.prepare(`INSERT INTO research_output_guidance_links (guidance_note_id, research_output_id)
+          VALUES (?, ?)`).bind(row.id, researchOutputId).run();
+      }
       await d1.prepare(`INSERT INTO student_guidance_events
         (guidance_note_id, actor_user_id, actor_type, action, note)
         VALUES (?, ?, 'staff', 'created', ?)`).bind(row.id, auth.user.id, title || content.slice(0, 120)).run();
     } catch (error) {
       if (createdId) {
+        await d1.prepare("DELETE FROM research_output_guidance_links WHERE guidance_note_id = ?").bind(createdId).run().catch(() => undefined);
         await d1.prepare("DELETE FROM student_guidance_notes WHERE id = ?").bind(createdId).run().catch(() => undefined);
       }
       throw error;

@@ -21,7 +21,73 @@ type GuidanceProblem = {
   id: number; student_id: string; title: string; content: string; status: "open" | "completed";
   student_reported_at: string | null; verification_mode: "self_report" | "mentor_verify";
   due_date: string | null; updated_at: string | null;
+  research_output_id: number | null; research_output_title: string | null; research_output_type: string | null;
 };
+
+export type ResearchOutputProblemSummary = {
+  problem_count: number;
+  problem_status_summary: { open: number; pending: number; resolved: number };
+  latest_follow_up_date: string | null;
+};
+
+/** Load blocker notes linked to research outputs without broadening the caller's student scope. */
+export async function loadResearchOutputProblemSummaries(
+  database: Database,
+  outputIds: readonly number[],
+): Promise<Map<number, ResearchOutputProblemSummary>> {
+  const summaries = new Map<number, ResearchOutputProblemSummary>();
+  for (const batch of problemRecordBatches([...new Set(outputIds)].filter((id) => Number.isSafeInteger(id) && id > 0))) {
+    const placeholders = batch.map(() => "?").join(",");
+    let rows: Array<{ research_output_id: number; status: "open" | "pending" | "resolved"; due_date: string | null; updated_at: string | null }> = [];
+    try {
+      rows = (await database.prepare(`SELECT rol.research_output_id,
+          CASE WHEN n.status = 'completed' THEN 'resolved'
+            WHEN n.verification_mode = 'mentor_verify' AND n.student_reported_at IS NOT NULL THEN 'pending'
+            ELSE 'open' END AS status,
+          n.due_date, n.updated_at
+        FROM research_output_guidance_links rol
+        JOIN student_guidance_notes n ON n.id = rol.guidance_note_id
+        WHERE rol.research_output_id IN (${placeholders}) AND n.guidance_type = 'blocker'`)
+        .bind(...batch).all<{ research_output_id: number; status: "open" | "pending" | "resolved"; due_date: string | null; updated_at: string | null }>()).results;
+    } catch (error) {
+      // Keep reads compatible with databases created before output links existed.
+      if (!/research_output_guidance_links|no such table|no such column/i.test(error instanceof Error ? error.message : String(error))) throw error;
+    }
+    for (const id of batch) summaries.set(id, { problem_count: 0, problem_status_summary: { open: 0, pending: 0, resolved: 0 }, latest_follow_up_date: null });
+    for (const row of rows) {
+      const summary = summaries.get(Number(row.research_output_id)) ?? { problem_count: 0, problem_status_summary: { open: 0, pending: 0, resolved: 0 }, latest_follow_up_date: null };
+      summary.problem_count += 1;
+      summary.problem_status_summary[row.status] += 1;
+      const followUpDate = row.due_date || row.updated_at?.slice(0, 10) || null;
+      if (followUpDate && (!summary.latest_follow_up_date || followUpDate > summary.latest_follow_up_date)) summary.latest_follow_up_date = followUpDate;
+      summaries.set(Number(row.research_output_id), summary);
+    }
+  }
+  return summaries;
+}
+
+async function loadGuidanceProblems(database: Database, batch: string[], placeholders: string) {
+  try {
+    return { results: (await database.prepare(`SELECT n.id, n.student_id, n.title, n.content, n.status, n.student_reported_at,
+        n.verification_mode, n.due_date, n.updated_at, rol.research_output_id,
+        ro.title AS research_output_title, ro.output_type AS research_output_type
+      FROM student_guidance_notes n
+      LEFT JOIN research_output_guidance_links rol ON rol.guidance_note_id = n.id
+      LEFT JOIN research_outputs ro ON ro.id = rol.research_output_id
+      WHERE n.student_id IN (${placeholders}) AND n.guidance_type = 'blocker'`)
+      .bind(...batch).all<GuidanceProblem>()).results };
+  } catch (error) {
+    // Existing v25 local databases are upgraded lazily by database bootstrap.
+    // Keep this read compatible while the additive column is being installed.
+    if (!/research_output_guidance_links|research_output_id|no such table|no such column/i.test(error instanceof Error ? error.message : String(error))) throw error;
+    return { results: (await database.prepare(`SELECT n.id, n.student_id, n.title, n.content, n.status, n.student_reported_at,
+        n.verification_mode, n.due_date, n.updated_at,
+        NULL AS research_output_id, NULL AS research_output_title, NULL AS research_output_type
+      FROM student_guidance_notes n
+      WHERE n.student_id IN (${placeholders}) AND n.guidance_type = 'blocker'`)
+      .bind(...batch).all<GuidanceProblem>()).results };
+  }
+}
 
 function progressKey(entryId: number, revision: number) {
   return `progress:${entryId}:${revision}:blocker`;
@@ -52,11 +118,7 @@ export async function loadProblemRecords(database: Database, students: readonly 
         WHERE rp.student_id IN (${placeholders}) AND rp.status = 'approved'
           AND m.status = 'blocked' AND m.archived_at IS NULL`)
         .bind(...batch).all<MilestoneProblem>(),
-      database.prepare(`SELECT id, student_id, title, content, status, student_reported_at,
-          verification_mode, due_date, updated_at
-        FROM student_guidance_notes
-        WHERE student_id IN (${placeholders}) AND guidance_type = 'blocker'`)
-        .bind(...batch).all<GuidanceProblem>(),
+      loadGuidanceProblems(database, batch, placeholders),
     ]);
     for (const row of current.results) {
       const student = byStudent.get(row.student_id);
@@ -108,6 +170,9 @@ export async function loadProblemRecords(database: Database, students: readonly 
           : row.verification_mode === "mentor_verify" && row.student_reported_at ? "pending" : "open",
         current: true, updatedAt: row.updated_at, dueDate: row.due_date || null,
         href: `/students/${encodeURIComponent(student.id)}#guidance-${row.id}`,
+        researchOutputId: row.research_output_id ?? undefined,
+        researchOutputTitle: row.research_output_title ?? undefined,
+        researchOutputType: row.research_output_type ?? undefined,
       });
     }
   }

@@ -16,10 +16,13 @@ function readFilters(query: string) {
   const params = new URLSearchParams(query);
   const status = params.get("issueStatus") ?? "active";
   const source = params.get("issueSource") ?? "all";
+  const outputValue = params.get("issueOutput");
+  const output = outputValue && /^\d+$/.test(outputValue) ? Number(outputValue) : null;
   return {
     student: params.get("issueStudent") ?? "all",
     status: (status === "active" || status === "all" || Object.hasOwn(statuses, status) ? status : "active") as StatusFilter,
     source: (source === "all" || Object.hasOwn(sources, source) ? source : "all") as ProblemRecordSource | "all",
+    output: output && Number.isSafeInteger(output) && output > 0 ? output : null,
   };
 }
 
@@ -56,14 +59,23 @@ export function ProblemRecords({ active, refreshRequest, query, onRecord }: {
   }, [active, refreshRequest, retry]);
 
   const recordableStudents = useMemo(() => data?.students.filter((student) => student.canRecord) ?? [], [data]);
+  const selectedOutputTitle = useMemo(() => {
+    if (!filters.output) return "";
+    for (const student of data?.students ?? []) {
+      const output = student.researchOutputs?.find((item) => item.id === filters.output);
+      if (output) return output.title;
+    }
+    return "";
+  }, [data, filters.output]);
   const scoped = useMemo(() => {
     const search = query.trim().toLocaleLowerCase("zh-CN");
     return (data?.records ?? []).filter((record) =>
       (filters.student === "all" || record.studentId === filters.student)
       && (filters.source === "all" || record.source === filters.source)
-      && (!search || `${record.studentName} ${record.title} ${record.content}`.toLocaleLowerCase("zh-CN").includes(search)),
+      && (filters.output === null || record.researchOutputId === filters.output)
+      && (!search || `${record.studentName} ${record.title} ${record.content} ${record.researchOutputTitle ?? ""}`.toLocaleLowerCase("zh-CN").includes(search)),
     );
-  }, [data, filters.source, filters.student, query]);
+  }, [data, filters.output, filters.source, filters.student, query]);
   const counts = useMemo(() => {
     const result = { active: 0, pending: 0, resolved: 0, historical: 0 };
     for (const record of scoped) {
@@ -94,7 +106,7 @@ export function ProblemRecords({ active, refreshRequest, query, onRecord }: {
 
   return <section className={styles.workspace} aria-label="全组问题记录">
     <div className={styles.heading}>
-      <div><h2>问题记录</h2><p>未解决问题会持续保留，与本次进展独立跟进，不影响学生继续提交。</p></div>
+      <div><h2>问题记录</h2><p>未解决问题会持续保留，与本次进展独立跟进，不影响学生继续提交。</p>{filters.output ? <p className={styles.filterContext}>当前成果：{selectedOutputTitle || `成果 #${filters.output}`} · 可按状态继续筛选</p> : null}</div>
       <button className="primary" disabled={!recordableStudents.length} onClick={() => onRecord(recordableStudents, filters.student)}>＋ 记录问题</button>
     </div>
     <div className={styles.metrics} aria-label="问题状态统计">
@@ -107,7 +119,7 @@ export function ProblemRecords({ active, refreshRequest, query, onRecord }: {
       <label>学生<select value={filters.student} onChange={(event) => updateFilter("issueStudent", event.target.value)}><option value="all">全部学生</option>{data?.students.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label>
       <label>来源<select value={filters.source} onChange={(event) => updateFilter("issueSource", event.target.value)}><option value="all">全部来源</option>{Object.entries(sources).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <label>状态<select value={filters.status} onChange={(event) => updateFilter("issueStatus", event.target.value)}><option value="active">所有未解决</option><option value="all">全部状态</option>{Object.entries(statuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-      <span className={styles.resultCount}>{filtered.length} 条{loading && data ? " · 同步中…" : ""}</span>
+      <span className={styles.resultCount}>{filtered.length} 条{filters.output ? " · 当前成果" : ""}{loading && data ? " · 同步中…" : ""}</span>
     </div>
     {error ? <div className={styles.error} role="alert">{error}<button onClick={() => setRetry((value) => value + 1)}>重新加载</button></div> : null}
     {!data && !error ? <div className={styles.empty} role="status">正在读取问题记录…</div> : null}
@@ -116,6 +128,7 @@ export function ProblemRecords({ active, refreshRequest, query, onRecord }: {
       {visible.map((record) => <article key={record.id} className={styles.record}>
         <div className={styles.recordTop}><span>{record.studentName} · {sources[record.source]}{record.trackType ? ` · ${record.trackType === "paper" ? "论文" : "课题"}` : ""}</span><span className={`${styles.status} ${record.status === "resolved" ? styles.resolved : ""}`}>{statuses[record.status]}</span></div>
         <h3>{record.title || "问题记录"}</h3>
+        {record.researchOutputTitle ? <p className={styles.linkedOutput}><span>关联成果</span><a href={`/students/${encodeURIComponent(record.studentId)}#outputs`}>{record.researchOutputTitle} · {record.researchOutputType === "patent" ? "专利" : "论文/成果"} ↗</a></p> : null}
         <p className={styles.content}>{record.content}</p>
         <div className={styles.recordFoot}><span>{record.dueDate ? `跟进日期 ${record.dueDate}` : "未设跟进日期"}{record.sourceCurrent === false ? " · 来自较早修订" : !record.current ? " · 非当前记录" : ""}{record.status === "historical" && record.originalStatus ? ` · 原状态：${statuses[record.originalStatus]}` : ""}</span><a href={record.href}>查看与处理 <span aria-hidden="true">↗</span></a></div>
       </article>)}

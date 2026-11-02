@@ -144,6 +144,33 @@ type StudentPaper = {
   pending_count: number;
 };
 
+type ResearchOutput = {
+  id: number;
+  student_id: string;
+  student_name: string;
+  output_type: "paper" | "dataset" | "software" | "patent" | "report" | "presentation" | "other";
+  title: string;
+  lifecycle_status: string;
+  venue: string;
+  identifier: string;
+  url: string;
+  summary: string;
+  submission_status: string;
+  submission_url: string;
+  submission_username: string;
+  submission_password_present: boolean;
+  submission_next_action: string;
+  submission_next_action_due_date: string | null;
+  patent_application_number: string;
+  patent_application_date: string | null;
+  patent_office: string;
+  patent_review_stage: string;
+  problem_count: number;
+  problem_status_summary: { open: number; pending: number; resolved: number };
+  latest_follow_up_date: string | null;
+  updated_at: string;
+};
+
 type Student = {
   monthlyDelivery?: MonthlyDeliverySummary;
   id: string;
@@ -377,6 +404,7 @@ type DashboardData = {
   };
   students: Student[];
   papers: StudentPaper[];
+  researchOutputs: ResearchOutput[];
   pending: PendingEntry[];
   workflowTasks: Array<{
     id: number;
@@ -1260,6 +1288,26 @@ function MentorProgressDecision({ entry, monthlyDelivery, busy, note, onNote, on
 
 type MentorResearchTab = "papers" | "proposals" | "outputs";
 
+const researchOutputTypeLabels: Record<ResearchOutput["output_type"], string> = {
+  paper: "论文", dataset: "数据集", software: "软件", patent: "专利", report: "报告", presentation: "展示", other: "其他",
+};
+
+const researchSubmissionStatusLabels: Record<string, string> = {
+  not_submitted: "未投稿", planned: "准备投稿", submitted: "已投稿", with_editor: "编辑处理中",
+  under_review: "外审中", major_revision: "大修", minor_revision: "小修", accepted: "已录用",
+  rejected: "退稿", withdrawn: "已撤稿", published: "已发表",
+};
+
+function researchOutputIssuesHref(output: Pick<ResearchOutput, "id" | "student_id">, status: "all" | "open" | "pending" | "resolved" = "all") {
+  const params = new URLSearchParams({
+    mentorView: "issues",
+    issueStudent: output.student_id,
+    issueOutput: String(output.id),
+    issueStatus: status,
+  });
+  return `/?${params.toString()}`;
+}
+
 function mentorResearchTabFromUrl(): MentorResearchTab {
   if (typeof window === "undefined") return "papers";
   const requested = new URL(window.location.href).searchParams.get("researchTab");
@@ -1284,17 +1332,24 @@ function MentorResearchLedger({ data, onToast }: { data: DashboardData; onToast:
     window.history[tab === next ? "replaceState" : "pushState"]({}, "", url);
   }
   return <div className="mentor-research-ledger">
-    <div className="research-ledger-tabs" role="tablist" aria-label="论文与课题分类"><button role="tab" aria-selected={tab === "papers"} className={tab === "papers" ? "active" : ""} onClick={() => selectTab("papers")}>论文 <b>{data.papers.length}</b></button><button role="tab" aria-selected={tab === "proposals"} className={tab === "proposals" ? "active" : ""} onClick={() => selectTab("proposals")}>课题方案 <b>{data.metrics.proposalPending} 待审</b></button><button role="tab" aria-selected={tab === "outputs"} className={tab === "outputs" ? "active" : ""} onClick={() => selectTab("outputs")}>成果 <b>{data.metrics.outputs}</b></button></div>
+    <div className="research-ledger-tabs" role="tablist" aria-label="探研台账分类"><button role="tab" aria-selected={tab === "papers"} className={tab === "papers" ? "active" : ""} onClick={() => selectTab("papers")}>论文 <b>{data.papers.length}</b></button><button role="tab" aria-selected={tab === "proposals"} className={tab === "proposals" ? "active" : ""} onClick={() => selectTab("proposals")}>课题方案 <b>{data.metrics.proposalPending} 待审</b></button><button role="tab" aria-selected={tab === "outputs"} className={tab === "outputs" ? "active" : ""} onClick={() => selectTab("outputs")}>成果/投稿 <b>{data.researchOutputs.length}</b></button></div>
     {tab === "papers" ? <section className="panel research-paper-ledger"><PanelHeader title="论文" count={data.papers.length} /><div className="research-paper-list">{data.papers.map((paper) => <a key={paper.id} href={`/students/${encodeURIComponent(paper.student_id)}#papers`}><div><span>{paper.student_name} · {paper.paper_type}</span><strong>{paper.title}</strong><small>{paper.target_venue || "目标期刊/会议待定"}</small></div><div><b>{paperStageMeta[paper.current_stage].label}</b><em>{paper.planned_submission_date || "未设投稿日期"}</em><small>{paper.pending_count} 项待确认 · {paper.update_count} 次更新</small></div></a>)}{!data.papers.length ? <div className="empty-small">暂无论文。</div> : null}</div></section> : null}
     {tab === "proposals" ? <ProposalWorkspace viewer={data.viewer} students={data.students} onToast={onToast} initialSelectedId={initialProposalId} /> : null}
-    {tab === "outputs" ? <section className="panel research-output-ledger"><PanelHeader title="科研成果" count={data.metrics.outputs} /><div>{data.students.filter((student) => student.outputCount > 0).sort((a, b) => b.outputCount - a.outputCount).map((student) => <a key={student.id} href={`/students/${encodeURIComponent(student.id)}#outputs`}><span><strong>{student.name}</strong><small>{student.stage} · {student.degree}</small></span><b>{student.outputCount} 项</b></a>)}{!data.metrics.outputs ? <div className="empty-small">尚无已登记成果。</div> : null}</div></section> : null}
+    {tab === "outputs" ? <section className="panel research-output-ledger"><PanelHeader title="探研成果与投稿台账" count={data.researchOutputs.length} /><div className="research-output-summary"><span>全部成果 <b>{data.researchOutputs.length}</b></span><span>投稿处理中 <b>{data.researchOutputs.filter((output) => ["submitted", "with_editor", "under_review", "major_revision", "minor_revision"].includes(output.submission_status)).length}</b></span><span>待返修/待决定 <b>{data.researchOutputs.filter((output) => ["major_revision", "minor_revision"].includes(output.submission_status)).length}</b></span><span>期限已到 <b>{data.researchOutputs.filter((output) => output.submission_next_action_due_date && output.submission_next_action_due_date < new Date().toISOString().slice(0, 10)).length}</b></span></div><div className="research-output-list">{data.researchOutputs.map((output) => <article key={output.id}><header><div><span>{output.student_name} · {researchOutputTypeLabels[output.output_type]}</span><strong>{output.title}</strong></div><b className={`research-submission-status ${output.submission_status}`}>{researchSubmissionStatusLabels[output.submission_status] || output.submission_status || "未设置"}</b></header><div className="research-output-facts"><span><small>期刊/机构</small><b>{output.venue || "待填写"}</b></span><span><small>投稿系统</small>{output.submission_url ? <a href={output.submission_url} target="_blank" rel="noreferrer">打开地址 ↗</a> : <b>待填写</b>}</span><span><small>稿件号/标识符</small><b>{output.identifier || "待填写"}</b></span><span><small>账号</small><b>{output.submission_username || (output.submission_password_present ? "已保存密码" : "未设置")}</b></span><span><small>下一动作</small><b>{output.submission_next_action || "待填写"}{output.submission_next_action_due_date ? ` · ${output.submission_next_action_due_date}` : ""}</b></span>{output.output_type === "patent" ? <span><small>专利申请</small><b>{output.patent_application_number || "申请号待填写"}{output.patent_application_date ? ` · ${output.patent_application_date}` : ""}</b></span> : null}{output.output_type === "patent" ? <span><small>受理/审查</small><b>{output.patent_office || "机构待填写"}{output.patent_review_stage ? ` · ${output.patent_review_stage}` : ""}</b></span> : null}{["paper", "patent"].includes(output.output_type) ? <span className="research-output-problem-fact"><small>关联问题</small><b><a href={researchOutputIssuesHref(output)} aria-label={`查看${output.title}的全部关联问题`}>全部 {output.problem_count} 项</a></b><span className="research-output-problem-status-links"><a href={researchOutputIssuesHref(output, "open")}>待解决 {output.problem_status_summary.open}</a><a href={researchOutputIssuesHref(output, "pending")}>待确认 {output.problem_status_summary.pending}</a><a href={researchOutputIssuesHref(output, "resolved")}>已解决 {output.problem_status_summary.resolved}</a></span><em>{output.latest_follow_up_date ? <a href={researchOutputIssuesHref(output)}>{`最近跟进 ${output.latest_follow_up_date}`}</a> : <a href={researchOutputIssuesHref(output)}>尚无跟进日期</a>}</em></span> : null}</div><footer><a href={`/students/${encodeURIComponent(output.student_id)}#outputs`}>打开成果详情 ↗</a><a href={researchOutputIssuesHref(output)}>问题追踪 ↗</a></footer></article>)}{!data.researchOutputs.length ? <div className="empty-small">尚无已登记成果。</div> : null}</div></section> : null}
   </div>;
 }
 
-function GuidanceQuickModal({ students, onClose, onSaved, problemMode = false, initialStudentId = "", followUp }: { students: Array<Pick<Student, "id" | "name" | "stage">>; onClose: () => void; onSaved: () => Promise<void>; problemMode?: boolean; initialStudentId?: string; followUp?: ReviewReceipt }) {
+type GuidanceStudent = Pick<Student, "id" | "name" | "stage"> & {
+  researchOutputs?: Array<{ id: number; title: string; outputType: string }>;
+};
+
+function GuidanceQuickModal({ students, onClose, onSaved, problemMode = false, initialStudentId = "", followUp }: { students: GuidanceStudent[]; onClose: () => void; onSaved: () => Promise<void>; problemMode?: boolean; initialStudentId?: string; followUp?: ReviewReceipt }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [selectedStudentId, setSelectedStudentId] = useState(initialStudentId);
   const [verificationMode, setVerificationMode] = useState<"self_report" | "mentor_verify">(problemMode ? "self_report" : "mentor_verify");
+  const selectedStudent = students.find((student) => student.id === selectedStudentId);
+  const selectedResearchOutputs = selectedStudent?.researchOutputs?.filter((output) => ["paper", "patent"].includes(output.outputType)) ?? [];
   const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -1334,7 +1389,8 @@ function GuidanceQuickModal({ students, onClose, onSaved, problemMode = false, i
 
   return <div className="modal-layer" role="presentation"><div className="modal guidance-quick-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="guidance-quick-title"><button className="close" aria-label={problemMode ? "关闭记录问题对话框" : followUp ? "关闭后续工作安排" : "关闭记录指导对话框"} onClick={onClose}>×</button><div className="modal-title"><span>{problemMode ? "问题记录" : followUp ? "后续工作" : "导师指导"}</span><h2 id="guidance-quick-title">{problemMode ? "记录一个需要跟进的问题" : followUp ? "安排后续工作" : "把讨论变成一条可验收的下一步行动"}</h2><p>{problemMode ? "先记下问题，跟进安排和日期可以选填；记录会同步保留在学生档案。" : followUp ? "本次进展已确认。下一步和完成期限由你指定，独立于本月提交进度。" : "学生确认收到并提交完成说明；需要时由导师做最终验收。"}</p></div><form onSubmit={submit}>
     {followUp ? <><input type="hidden" name="studentId" value={followUp.studentId} /><input type="hidden" name="sourceProgressEntryId" value={followUp.entryId} /><p className="guidance-source-note">关联已确认进展：{followUp.title} · V{followUp.revision}</p></> : null}
-    <div className="form-row"><label>学生<select name="studentId" disabled={Boolean(followUp)} required defaultValue={students.some((student) => student.id === initialStudentId) ? initialStudentId : ""}><option value="" disabled>请选择学生</option>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label>{problemMode ? <input type="hidden" name="guidanceType" value="blocker" /> : <label>指导类型<select name="guidanceType" defaultValue="general"><option value="general">一般指导</option><option value="meeting_followup">组会跟进</option><option value="paper">论文指导</option><option value="milestone">培养节点</option><option value="blocker">问题记录</option></select></label>}</div>
+    <div className="form-row"><label>学生<select name="studentId" disabled={Boolean(followUp)} required value={students.some((student) => student.id === selectedStudentId) ? selectedStudentId : ""} onChange={(event) => setSelectedStudentId(event.target.value)}><option value="" disabled>请选择学生</option>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {student.stage}</option>)}</select></label>{problemMode ? <input type="hidden" name="guidanceType" value="blocker" /> : <label>指导类型<select name="guidanceType" defaultValue="general"><option value="general">一般指导</option><option value="meeting_followup">组会跟进</option><option value="paper">论文指导</option><option value="milestone">培养节点</option><option value="blocker">问题记录</option></select></label>}</div>
+    {problemMode ? <label>关联论文 / 专利成果<select key={selectedStudentId} name="researchOutputId" defaultValue=""><option value="">不关联成果</option>{selectedResearchOutputs.map((output) => <option key={output.id} value={output.id}>{output.title} · {output.outputType === "patent" ? "专利" : "论文"}</option>)}</select>{selectedResearchOutputs.length ? <small>关联后会在问题记录和成果详情之间互相跳转。</small> : <small>该学生暂未登记论文或专利成果，可先保存问题，之后再补充成果。</small>}</label> : null}
     <label>{problemMode ? "问题标题" : "指导主题"}<input name="title" maxLength={200} defaultValue={followUp ? `后续工作：${followUp.title}`.slice(0, 200) : ""} required placeholder={problemMode ? "例如：实验设备预约冲突" : "例如：补齐实验对照并形成可审阅图表"} /></label>
     <label>{problemMode ? "情况说明" : "指导内容"}<textarea name="content" maxLength={3000} rows={4} required placeholder={problemMode ? "记录遇到的困难、影响和需要的支持" : "记录结论、关键取舍和学生需要理解的原因"} /></label>
     <label>{problemMode ? "跟进安排（可选）" : "下一步行动"}<textarea name="nextAction" maxLength={800} rows={2} required={!problemMode} placeholder={problemMode ? "例如：协调设备使用时间，确认替代方案" : "例如：补做对照实验，更新结果图"} /></label>

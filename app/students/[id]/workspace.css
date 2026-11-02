@@ -116,6 +116,18 @@
 .sw-guidance-footer { display: flex; justify-content: space-between; align-items: center; gap: 20px; border-top: 1px solid #edf0f5; padding-top: 16px; font-size: 13px; color: #718096; }
 .sw-guidance-footer > span { min-width: 0; overflow-wrap: anywhere; }
 .sw-guidance-footer > button { flex-shrink: 0; }
+.sw-linked-output { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin: 12px 0; font-size: 13px; }
+.sw-linked-output span { color: #718096; }
+.sw-linked-output a { color: #2f6f66; font-weight: 600; text-decoration: none; }
+.sw-linked-output a:hover { text-decoration: underline; }
+.student-output-problem-summary dd { display: grid; gap: 3px; }
+.student-output-problem-summary dd a { display: grid; gap: 3px; color: inherit; text-decoration: none; }
+.student-output-problem-status-links { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.student-output-problem-status-links a, .student-output-problem-summary dd > small a { display: inline; color: #2f6f66; font-size: 11px; text-decoration: none; }
+.student-output-problem-status-links a:hover, .student-output-problem-summary dd > small a:hover { text-decoration: underline; }
+.student-output-problem-summary dd a:hover strong { text-decoration: underline; }
+.student-output-problem-summary dd strong { color: #365f52; font-size: 12px; }
+.student-output-problem-summary dd small { color: #718096; font-size: 11px; }
 .sw-research { display: grid; gap: 20px; }
 .sw-research-nav { display: flex; gap: 24px; font-size: 14px; }
 .sw-paper { border-top: 1px solid #e7ecf3; }

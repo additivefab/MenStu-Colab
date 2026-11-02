@@ -7,6 +7,7 @@ import { isCurrentResearchTrack } from "../../../lib/progress-track";
 import { loadProgressResolutions } from "../../../lib/progress-resolution-service";
 import { acceptedTrackProgressSql } from "../../../lib/dashboard-overview/query-sql";
 import { readMonthlyDeliveries } from "../../../lib/monthly-delivery-service";
+import { loadResearchOutputProblemSummaries, type ResearchOutputProblemSummary } from "../../../lib/problem-records-service";
 
 type StudentRow = {
   id: string;
@@ -117,6 +118,30 @@ type StudentPaperRow = {
   status: string;
   latest_progress_at: string | null;
   created_at: string;
+  updated_at: string;
+};
+
+type ResearchOutputRow = {
+  id: number;
+  student_id: string;
+  student_name: string;
+  output_type: string;
+  title: string;
+  lifecycle_status: string;
+  venue: string;
+  identifier: string;
+  url: string;
+  summary: string;
+  submission_status: string;
+  submission_url: string;
+  submission_username: string;
+  submission_password_ciphertext: string;
+  submission_next_action: string;
+  submission_next_action_due_date: string | null;
+  patent_application_number: string;
+  patent_application_date: string | null;
+  patent_office: string;
+  patent_review_stage: string;
   updated_at: string;
 };
 
@@ -275,6 +300,8 @@ export async function GET(request: Request) {
     const resolutionRows = await loadProgressResolutions(studentIds);
     let progressRows: ProgressRow[] = [];
     let paperRows: StudentPaperRow[] = [];
+    let outputRows: ResearchOutputRow[] = [];
+    let outputProblemSummaries = new Map<number, ResearchOutputProblemSummary>();
     let milestoneRows: MilestoneSummaryRow[] = [];
     let evidenceRows: EvidenceSourceRow[] = [];
     let attachmentRows: AttachmentRow[] = [];
@@ -282,7 +309,7 @@ export async function GET(request: Request) {
     let revisionRows: ProgressRevisionRow[] = [];
     if (studentIds.length) {
       const placeholders = studentIds.map(() => "?").join(",");
-      const [progress, papers, milestones] = await Promise.all([
+      const [progress, papers, milestones, outputs] = await Promise.all([
         d1.prepare(`SELECT p.id, p.student_id, p.kind, p.title, p.summary, p.evidence,
         p.literature_ref, p.git_url, p.status, p.review_status, p.assessment,
         p.reviewer_note, p.reviewed_by_user_id, p.review_claimed_at, p.submitted_by_user_id,
@@ -341,10 +368,22 @@ export async function GET(request: Request) {
           WHERE rp.student_id IN (${placeholders}) AND m.archived_at IS NULL
           ORDER BY rp.student_id, m.sort_order, m.target_date`)
           .bind(...studentIds).all<MilestoneSummaryRow>(),
+        d1.prepare(`SELECT ro.id, ro.student_id, s.display_name AS student_name,
+            ro.output_type, ro.title, ro.lifecycle_status, ro.venue, ro.identifier, ro.url,
+            ro.summary, ro.submission_status, ro.submission_url, ro.submission_username,
+            ro.submission_password_ciphertext, ro.submission_next_action,
+            ro.submission_next_action_due_date, ro.patent_application_number,
+            ro.patent_application_date, ro.patent_office, ro.patent_review_stage, ro.updated_at
+          FROM research_outputs ro JOIN students s ON s.id = ro.student_id
+          WHERE ro.student_id IN (${placeholders})
+          ORDER BY ro.updated_at DESC, ro.id DESC`)
+          .bind(...studentIds).all<ResearchOutputRow>(),
       ]);
       progressRows = progress.results;
       paperRows = papers.results;
       milestoneRows = milestones.results;
+      outputRows = outputs.results;
+      outputProblemSummaries = await loadResearchOutputProblemSummaries(d1, outputRows.map((output) => Number(output.id)));
 
       const progressIds = progressRows.map((entry) => entry.id);
       if (progressIds.length) {
@@ -671,6 +710,17 @@ export async function GET(request: Request) {
           milestones: student.milestones.filter((milestone) => milestone.proposal_status === "approved"),
         })),
         papers,
+        researchOutputs: outputRows.map((output) => ({
+          ...output,
+          ...(outputProblemSummaries.get(Number(output.id)) ?? {
+            problem_count: 0,
+            problem_status_summary: { open: 0, pending: 0, resolved: 0 },
+            latest_follow_up_date: null,
+          }),
+          submission_username: "",
+          submission_password_ciphertext: "",
+          submission_password_present: Boolean(output.submission_password_ciphertext),
+        })),
         pending: [],
         workflowTasks: [],
         studentNextAction,
@@ -798,6 +848,16 @@ export async function GET(request: Request) {
       },
       students,
       papers,
+      researchOutputs: outputRows.map((output) => ({
+        ...output,
+        ...(outputProblemSummaries.get(Number(output.id)) ?? {
+          problem_count: 0,
+          problem_status_summary: { open: 0, pending: 0, resolved: 0 },
+          latest_follow_up_date: null,
+        }),
+        submission_password_ciphertext: "",
+        submission_password_present: Boolean(output.submission_password_ciphertext),
+      })),
       pending,
       workflowTasks,
       metrics: {
