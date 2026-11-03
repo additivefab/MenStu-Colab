@@ -223,14 +223,42 @@ test("walltime exceeded: job stopped, run failed with evidence (T16)", async (t)
   assert.ok(paths.includes("partial/progress.csv"), "partial evidence kept");
 });
 
-test("invalid metrics are not reported as formal metrics (T19)", async (t) => {
+test("invalid metrics are still reported so the platform marks them invalid (T19)", async (t) => {
   const env = await setup(t);
   const work = makeWork({ spec: makeSpec({ sha: env.repo.sha, dataset: env.dataset, params: { mode: "badmetrics" } }) });
   env.platform.enqueue(work);
   const state = await env.newRunner().runOnce();
   const [complete] = env.platform.requestsFor(work.runId, "complete");
-  assert.equal(complete.manifest.metricsArtifactPath, null);
+  // Contract: metricsArtifactPath names a published metrics.json even when it is
+  // invalid; withholding it would make the platform record "unknown", not "invalid".
+  assert.equal(complete.manifest.metricsArtifactPath, "metrics.json");
+  assert.ok(complete.publishedFiles.some((file) => file.relativePath === "metrics.json"), "the invalid file is uploaded for platform validation");
   assert.match(state.metricsNote, /failed validation/);
+});
+
+test("no metrics.json: metricsArtifactPath stays null (platform: unknown)", async (t) => {
+  const env = await setup(t);
+  const work = makeWork({ spec: makeSpec({ sha: env.repo.sha, dataset: env.dataset, params: { mode: "nometrics" } }) });
+  env.platform.enqueue(work);
+  const state = await env.newRunner().runOnce();
+  assert.equal(state.outcome, "completed");
+  const [complete] = env.platform.requestsFor(work.runId, "complete");
+  assert.equal(complete.manifest.metricsArtifactPath, null);
+  assert.equal(complete.exitCode, 0);
+});
+
+test("reconcile mode sends no heartbeat before reconcile and honors the reconcile response", async (t) => {
+  const env = await setup(t);
+  const work = makeWork({ spec: makeSpec({ sha: env.repo.sha, dataset: env.dataset }) });
+  env.platform.enqueue(work);
+  await env.newRunner({ afterSubmit: () => { throw new Error("simulated crash"); } }).runOnce();
+  env.platform.requestCancel(work.runId);
+  env.platform.enqueue({ ...work, mode: "reconcile", repository: null });
+  const second = await env.newRunner().runOnce();
+  const requests = env.platform.requestsFor(work.runId).filter((entry) => entry.leaseEpoch === 2);
+  assert.equal(requests[0].action, "reconcile", "first call under the reconcile lease is reconcile, not heartbeat");
+  assert.equal(second.cancelRequested, true, "cancelRequested from the reconcile response is persisted");
+  assert.ok(["canceled", "completed"].includes(second.outcome));
 });
 
 test("LEASE_LOST: local actions abandoned, job not killed, next lease adopts it", async (t) => {

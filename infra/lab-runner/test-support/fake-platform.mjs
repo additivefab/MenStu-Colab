@@ -48,17 +48,22 @@ export async function startFakePlatform({ token }) {
     if (!run || run.leaseEpoch !== body.leaseEpoch) return reply(409, { code: "LEASE_LOST", error: "lease lost" });
 
     if (body.action === "heartbeat") {
+      // Like the real platform: a run awaiting reconcile accepts no heartbeat.
+      if (run.status === "reconciling") return reply(409, { code: "RECONCILE_REQUIRED", error: "reconcile first" });
       if (["dispatching", "running", "collecting"].includes(body.phase) && run.status !== "cancel_requested") run.status = body.phase;
       return reply(200, { leaseExpiresAt: new Date(Date.now() + 120_000).toISOString(), cancelRequested: run.cancelRequested });
     }
     if (body.action === "reconcile") {
+      if (run.status !== "reconciling") return reply(409, { code: "NOT_RECONCILING", error: "not reconciling" });
       if (body.found) {
-        const map = { pending: "running", running: "running", finished: "collecting", failed: "failed", canceled: "canceled", unknown: "running" };
-        run.status = map[body.schedulerState] ?? "running";
+        const map = { pending: "running", running: "running", finished: "collecting", failed: "failed", canceled: "canceled", unknown: "reconciling" };
+        run.status = map[body.schedulerState] ?? "reconciling";
+        if (run.status === "running" && run.cancelRequested) run.status = "cancel_requested";
       } else {
         run.status = run.cancelRequested ? "canceled" : "dispatching";
       }
-      return reply(200, { status: run.status });
+      // ComputeReconcileResponse (lib/research-loop/contracts.ts).
+      return reply(200, { status: run.status, leaseExpiresAt: new Date(Date.now() + 120_000).toISOString(), cancelRequested: run.cancelRequested });
     }
     if (body.action === "complete") {
       run.status = body.outcome;

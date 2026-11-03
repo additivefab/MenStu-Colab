@@ -37,6 +37,13 @@ export type ArtifactKind = typeof ARTIFACT_KINDS[number];
 export const EGRESS_DECISIONS = ["published", "held", "rejected"] as const;
 export type EgressDecision = typeof EGRESS_DECISIONS[number];
 
+/** Extensions the egress gate treats as images (`EgressPolicy.allowImages`).
+ * One list for the runner's gate and the platform's re-check, so the two can
+ * never disagree. Vector/PDF figures can embed raster data, so they count. */
+export const EGRESS_IMAGE_EXTENSIONS: readonly string[] = [
+  ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".svg", ".pdf", ".eps", ".ico", ".heic", ".heif", ".avif",
+];
+
 // Allowed state transitions. Services must reject anything not listed here.
 // Terminal states have no outgoing edges; a re-run is a new run/attempt row.
 export const AGENT_ATTEMPT_TRANSITIONS: Readonly<Record<AgentAttemptStatus, readonly AgentAttemptStatus[]>> = {
@@ -328,6 +335,10 @@ export function validateMetricsFile(value: unknown): { ok: true; metrics: Metric
 
 export type ManifestArtifact = {
   relativePath: string;
+  /** sha256 of the file bytes. The empty string is allowed only together with
+   * `egressDecision: "rejected"`: the runner never opens non-regular entries
+   * (symlinks, FIFOs, sockets, devices, unsafe names), so it has no content
+   * hash for them. The platform records such entries and never publishes them. */
   sha256: string;
   sizeBytes: number;
   kind: ArtifactKind;
@@ -353,9 +364,16 @@ export type RunManifest = {
     entrypointId: string;
     startedAt: string;
     endedAt: string;
-    exitCode: number;
+    /** Process exit code (or 128 + signal). null = the job started but its exit
+     * code is unknown (e.g. the launcher was SIGKILLed and the scheduler has
+     * none). Must equal ComputeCompleteRequest.exitCode (null-aware). */
+    exitCode: number | null;
   };
-  /** relativePath of the metrics artifact, or null when evaluation produced none. */
+  /** relativePath of the metrics artifact, or null when the job produced none.
+   * Set whenever `metrics.json` exists as a regular, published output, even if
+   * the runner's own validation fails: the platform validates it again and
+   * records technical_validity "invalid" (T19). null means "no metrics"
+   * (technical_validity "unknown" for an otherwise successful run). */
   metricsArtifactPath: string | null;
   artifacts: ManifestArtifact[];
 };
@@ -418,12 +436,20 @@ export type ComputeReconcileRequest = {
   schedulerJobId?: string;
   schedulerState?: "pending" | "running" | "finished" | "failed" | "canceled" | "unknown";
 };
+/** Platform's answer to a reconcile. `status` is authoritative: a terminal
+ * status means nothing is left to do; "dispatching" means the runner proved no
+ * job exists and must submit under this lease (after another findByTag).
+ * `cancelRequested` has the same meaning as in a heartbeat. For a terminal
+ * status the lease has ended and `leaseExpiresAt` is the reconcile time. */
+export type ComputeReconcileResponse = { status: RunStatus; leaseExpiresAt: string; cancelRequested: boolean };
 
 export type ComputeCompleteRequest = {
   action: "complete";
   runId: string;
   leaseEpoch: number;
   outcome: "completed" | "failed" | "canceled";
+  /** null = the job never started, or its exit code is unknown. Compared with
+   * manifest.execution.exitCode using strict (null-aware) equality. */
   exitCode: number | null;
   failureReason?: string;
   manifest: RunManifest | null;
@@ -445,6 +471,7 @@ export type AgentClaimResponse =
         credentialProfileId: string;
         baseCommitSha: string;
         task: ResearchTaskSnapshot;
+        /** agentContextSnapshotSha256(task, baseCommitSha); workers verify it. */
         contextSnapshotSha256: string;
         /** null when the platform has no GitHub App configured; the worker then
          * uses its own configured read-only access. */
@@ -453,6 +480,13 @@ export type AgentClaimResponse =
         repositoryFullName: string;
       };
     };
+
+/** Hash bound into every agent attempt: the confirmed task snapshot plus the
+ * base commit. The platform stores it at start and re-checks it at claim; the
+ * worker recomputes it from the claim payload before doing any work. */
+export async function agentContextSnapshotSha256(task: ResearchTaskSnapshot, baseCommitSha: string) {
+  return sha256Hex(canonicalJson({ task, baseCommitSha } as unknown as JsonValue));
+}
 
 export type AgentEvent = {
   sequence: number;

@@ -11,7 +11,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
-import { evaluatePathPolicy, LIMITS } from "../../lib/research-loop/contracts.ts";
+import { agentContextSnapshotSha256, evaluatePathPolicy, LIMITS } from "../../lib/research-loop/contracts.ts";
 import { ClaudeAdapter } from "./adapters/claude.mjs";
 import { CodexAdapter } from "./adapters/codex.mjs";
 import { createPlatformClient, LeaseLostError } from "./platform-client.mjs";
@@ -209,6 +209,11 @@ export async function runAttempt(work, ctx, { shutdownSignal } = {}) {
 
   try {
     sink.push("status", { phase: "claimed", provider: work.provider, modelId: work.modelId, baseCommitSha: work.baseCommitSha, workerId: config.workerId ?? null });
+    // The claim's task snapshot and base SHA must be exactly what the platform
+    // bound at attempt start (contracts: agentContextSnapshotSha256).
+    if (await agentContextSnapshotSha256(work.task, work.baseCommitSha) !== work.contextSnapshotSha256) {
+      throw Object.assign(new Error("task snapshot or base commit does not match contextSnapshotSha256"), { code: "CONTEXT_MISMATCH" });
+    }
     adapter = adapters[work.provider] ?? null;
     if (!adapter) throw Object.assign(new Error(`provider ${work.provider} is not available on this worker`), { code: "PROVIDER_UNSUPPORTED" });
     const capabilities = adapter.capabilities();

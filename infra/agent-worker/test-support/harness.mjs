@@ -3,10 +3,13 @@
 // profile/config builders. No network beyond 127.0.0.1.
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+
+import { canonicalJson } from "../../../lib/research-loop/contracts.ts";
 
 export const WORKER_TOKEN = "wkr_test_token_0123456789abcdef";
 
@@ -99,8 +102,13 @@ export function makeTask(overrides = {}) {
   };
 }
 
+/** Same definition as contracts.ts agentContextSnapshotSha256 (sync for fixtures). */
+export function contextHash(task, baseCommitSha) {
+  return createHash("sha256").update(canonicalJson({ task, baseCommitSha })).digest("hex");
+}
+
 export function makeWork(repo, overrides = {}) {
-  return {
+  const work = {
     attemptId: "att_0123456789abcdef",
     leaseEpoch: 3,
     leaseExpiresAt: new Date(Date.now() + 120_000).toISOString(),
@@ -115,6 +123,8 @@ export function makeWork(repo, overrides = {}) {
     repositoryFullName: repo.fullName,
     ...overrides,
   };
+  if (!("contextSnapshotSha256" in overrides)) work.contextSnapshotSha256 = contextHash(work.task, work.baseCommitSha);
+  return work;
 }
 
 /** Provisions <profilesDir>/<id>/{codex/auth.json, claude/oauth_token} with 0600/0700. */

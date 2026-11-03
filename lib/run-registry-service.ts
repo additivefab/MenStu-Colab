@@ -11,10 +11,10 @@ import { GithubNotConfiguredError, mintRepositoryReadToken } from "./github/toke
 import { GithubCommitNotFoundError, resolveCommitSha } from "./github/repository-read.ts";
 import { issueRunnerToken, type LabRunner } from "./lab-runner-auth.ts";
 import {
-  ARTIFACT_KINDS, EGRESS_DECISIONS, LIMITS, RUN_TRANSITIONS, TERMINAL_RUN_STATUSES,
+  ARTIFACT_KINDS, EGRESS_DECISIONS, EGRESS_IMAGE_EXTENSIONS, LIMITS, RUN_TRANSITIONS, TERMINAL_RUN_STATUSES,
   canTransition, canonicalJson, isCommitSha, isSha256, newId, normalizeRepoPath, runSpecSha256, sha256Hex,
   validateMetricsFile,
-  type ArtifactKind, type ComputeClaimResponse, type EgressDecision, type EgressPolicy, type JsonValue,
+  type ArtifactKind, type ComputeClaimResponse, type ComputeReconcileResponse, type EgressDecision, type EgressPolicy, type JsonValue,
   type ManifestArtifact, type RunManifest, type RunSpec, type RunStatus,
 } from "./research-loop/contracts.ts";
 
@@ -892,7 +892,7 @@ export async function heartbeatRun(d1: D1Database, runner: LabRunner, body: Reco
   return { leaseExpiresAt: expires, cancelRequested: Boolean(run.cancel_requested_at || set.cancel_requested_at) };
 }
 
-export async function reconcileRun(d1: D1Database, runner: LabRunner, body: Record<string, unknown>) {
+export async function reconcileRun(d1: D1Database, runner: LabRunner, body: Record<string, unknown>): Promise<ComputeReconcileResponse> {
   const run = await leasedRun(d1, runner, body);
   if (run.status !== "reconciling") {
     if (isTerminal(run.status)) throw leaseLost();
@@ -926,14 +926,16 @@ export async function reconcileRun(d1: D1Database, runner: LabRunner, body: Reco
     payload: { action: "reconcile", found: body.found, schedulerState: state as string, schedulerJobId: jobId ?? null, ...(problems.length ? { reasons: problems } : {}) },
   }));
   if (!ok) throw leaseLost();
-  return { status: to ?? run.status, leaseExpiresAt: expires, cancelRequested: cancel };
+  // A terminal status ends the lease now (contracts: ComputeReconcileResponse).
+  return { status: to ?? run.status, leaseExpiresAt: expires ?? now, cancelRequested: cancel };
 }
 
 // ---------------------------------------------------------------------------
 // Completion: manifest verification, egress re-check, metrics
 // ---------------------------------------------------------------------------
 
-const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".svg", ".ico", ".heic", ".heif", ".avif"]);
+// Same list as the runner's gate (contracts), so the re-check never diverges.
+const IMAGE_EXTENSIONS = new Set<string>(EGRESS_IMAGE_EXTENSIONS);
 
 export function extensionOf(path: string) {
   const name = path.split("/").pop() ?? "";
@@ -989,9 +991,11 @@ function parseManifest(value: unknown): RunManifest {
   if (!Array.isArray(m.artifacts) || m.artifacts.length > 500) shapeError("manifest 产物需为不超过 500 项的列表");
   const artifacts: ManifestArtifact[] = m.artifacts.map((raw, index) => {
     const item = obj(raw, `artifacts[${index}]`);
-    if (!isSha256(item.sha256)) shapeError(`产物 ${index + 1} 的 sha256 无效`);
-    if (!ARTIFACT_KINDS.includes(item.kind as ArtifactKind)) shapeError(`产物 ${index + 1} 的类型无效`);
     if (!EGRESS_DECISIONS.includes(item.egressDecision as EgressDecision)) shapeError(`产物 ${index + 1} 的外发决定无效`);
+    // Non-regular entries (symlinks, special files) carry no content hash; the
+    // contract allows "" only for rejected entries, which are never published.
+    if (!isSha256(item.sha256) && !(item.sha256 === "" && item.egressDecision === "rejected")) shapeError(`产物 ${index + 1} 的 sha256 无效`);
+    if (!ARTIFACT_KINDS.includes(item.kind as ArtifactKind)) shapeError(`产物 ${index + 1} 的类型无效`);
     const sizeBytes = int(item.sizeBytes, `artifacts[${index}].sizeBytes`);
     if (sizeBytes < 0) shapeError(`产物 ${index + 1} 的大小无效`);
     return {
@@ -1036,7 +1040,7 @@ function parseManifest(value: unknown): RunManifest {
       entrypointId: str(execution.entrypointId, "execution.entrypointId", 80),
       startedAt: str(execution.startedAt ?? "", "execution.startedAt", 40),
       endedAt: str(execution.endedAt ?? "", "execution.endedAt", 40),
-      exitCode: int(execution.exitCode, "execution.exitCode"),
+      exitCode: execution.exitCode === null ? null : int(execution.exitCode, "execution.exitCode"),
     },
     metricsArtifactPath,
     artifacts,
@@ -1066,7 +1070,8 @@ function verifyManifestIdentity(manifest: RunManifest, run: RunRow, spec: RunSpe
   if (manifest.environment.imageDigest !== digest && manifest.environment.imageDigest !== spec.entrypoint.imageRef) {
     throw new ManifestError("MANIFEST_MISMATCH", "manifest 字段 environment.imageDigest 与运行规范不一致");
   }
-  if (exitCode !== null && manifest.execution.exitCode !== exitCode) {
+  // Null-aware: null (unknown) only matches null.
+  if (manifest.execution.exitCode !== exitCode) {
     throw new ManifestError("MANIFEST_MISMATCH", "manifest 字段 execution.exitCode 与回报不一致");
   }
 }
@@ -1161,6 +1166,7 @@ function evaluateMetrics(manifest: RunManifest, plans: ArtifactPlan[], spec: Run
   if (manifest.metricsArtifactPath === null) validity = outcome === "completed" && exitCode === 0 ? "unknown" : "invalid";
   else validity = metricsValid && outcome === "completed" && exitCode === 0 ? "valid" : "invalid";
   if (outcome !== "completed") notes.push(`运行结果为 ${outcome}`);
+  else if (exitCode === null) notes.push("退出码未知");
   else if (exitCode !== 0) notes.push(`退出码为 ${exitCode}`);
   return { metricsJson, sourceId, validity, notes: notes.join("；") };
 }
