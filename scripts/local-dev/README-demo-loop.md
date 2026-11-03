@@ -47,7 +47,7 @@ Ctrl-C 停止替身、代理工作进程和执行器；开发服务器不受影�
 3. 在变更请求中审阅改动，「发布为 Draft PR」；到 `http://127.0.0.1:4610/` 查看 PR。平台上的 PR 链接是 github.com 格式（平台只接受该前缀），本地不可打开。
 4. 「登记运行」：代码版本选该变更请求，入口 `demo_train_eval`，数据集「演示合成数据 v1」，GPU 0。
 5. 换 `synthetic-mentor` 登录，核对后「批准此规范」（发起人不能批准自己登记的运行）。
-6. 执行器几秒内完成：`accuracy = 1`，产物 `metrics.json`、`predictions.csv`、`logs/job.log`。导师「保存评审」。
+6. 执行器几秒内完成：`accuracy = 1`。只有 `metrics.json` 外发；`predictions.csv`、`logs/job.log` 按默认策略扣留在实验室（需数据持有方授权后外发，演示数据集未登记 `autoPublishPaths`）。导师「保存评审」。
 
 ## 安全边界
 

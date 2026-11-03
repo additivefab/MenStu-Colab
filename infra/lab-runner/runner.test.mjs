@@ -77,7 +77,9 @@ test("happy path: executes, gates outputs, reports manifest and metrics (T18, D5
   const byPath = Object.fromEntries(manifest.artifacts.map((artifact) => [artifact.relativePath, artifact]));
   assert.equal(byPath["metrics.json"].egressDecision, "published");
   assert.equal(byPath["metrics.json"].kind, "metrics");
-  assert.equal(byPath["table.csv"].egressDecision, "published");
+  // R03: held by default; only the validated metrics.json leaves the lab.
+  assert.equal(byPath["table.csv"].egressDecision, "held");
+  assert.match(byPath["table.csv"].egressReason, /需数据持有方授权后外发/);
   assert.equal(byPath["table.csv"].kind, "table");
   assert.equal(byPath["figure.png"].egressDecision, "held");
   assert.equal(byPath["figure.png"].kind, "figure");
@@ -234,11 +236,14 @@ test("invalid metrics are still reported so the platform marks them invalid (T19
   env.platform.enqueue(work);
   const state = await env.newRunner().runOnce();
   const [complete] = env.platform.requestsFor(work.runId, "complete");
-  // Contract: metricsArtifactPath names a published metrics.json even when it is
-  // invalid; withholding it would make the platform record "unknown", not "invalid".
+  // Contract: metricsArtifactPath names metrics.json even when it is invalid;
+  // withholding it would make the platform record "unknown", not "invalid".
+  // R03: an invalid metrics.json is held (not uploaded); the platform records invalid.
   assert.equal(complete.manifest.metricsArtifactPath, "metrics.json");
-  assert.ok(complete.publishedFiles.some((file) => file.relativePath === "metrics.json"), "the invalid file is uploaded for platform validation");
-  assert.match(state.metricsNote, /failed validation/);
+  const artifact = complete.manifest.artifacts.find((item) => item.relativePath === "metrics.json");
+  assert.equal(artifact.egressDecision, "held");
+  assert.ok(!(complete.publishedFiles ?? []).some((file) => file.relativePath === "metrics.json"), "an untrusted metrics file is not uploaded");
+  assert.match(state.metricsNote, /not published: metrics\.json 未通过可信指标校验/);
 });
 
 test("no metrics.json: metricsArtifactPath stays null (platform: unknown)", async (t) => {

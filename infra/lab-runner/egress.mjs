@@ -3,12 +3,22 @@
 // whether it may leave the lab (published), stays on lab storage (held), or
 // is refused outright (rejected). No side effects: nothing is moved, deleted
 // or written here.
+//
+// Policy (R03, held by default): only a `metrics.json` that passes
+// `checkMetricsEgress` is published automatically. Any other output is held
+// unless the dataset's egress policy names it in `autoPublishPaths` (set by a
+// data steward). Extension, image, size and raw-dataset-hash checks apply to
+// every candidate. The hash check is defence in depth only: content scanning
+// cannot detect encoded, split or mixed copies, which is why the default is held.
 import { constants as fsConstants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { extname, join, sep } from "node:path";
 
-import { EGRESS_IMAGE_EXTENSIONS, LIMITS, normalizeRepoPath } from "../../lib/research-loop/contracts.ts";
+import {
+  EGRESS_HELD_DEFAULT_REASON, EGRESS_IMAGE_EXTENSIONS, LIMITS, METRICS_EGRESS_LIMITS, METRICS_EGRESS_PATH,
+  checkMetricsEgress, matchAutoPublishPath, normalizeRepoPath,
+} from "../../lib/research-loop/contracts.ts";
 
 /** Extensions treated as images for `allowImages`: the shared contract list,
  * identical to the platform's re-check. */
@@ -17,7 +27,7 @@ const TABLE_EXTENSIONS = new Set([".csv", ".tsv", ".parquet", ".xlsx", ".xls", "
 const LOG_EXTENSIONS = new Set([".log", ".out", ".err"]);
 const MODEL_EXTENSIONS = new Set([".pt", ".pth", ".ckpt", ".safetensors", ".onnx", ".h5", ".hdf5", ".pkl", ".joblib", ".bin", ".npz", ".npy"]);
 
-export const METRICS_RELATIVE_PATH = "metrics.json";
+export const METRICS_RELATIVE_PATH = METRICS_EGRESS_PATH;
 
 /** Artifact kind from path/extension only (never from content). */
 export function classifyKind(relativePath) {
@@ -33,14 +43,28 @@ export function classifyKind(relativePath) {
 
 /**
  * Pure per-file decision for a regular file whose hash and size are known.
- * Order matters: a raw-data copy is rejected even if it would also be held.
+ * `metricsCheck` is the `checkMetricsEgress` result for `metrics.json` (the
+ * caller reads the same bytes it hashed). Order matters: a raw-data copy is
+ * rejected even if it would also be held; nothing is published without a
+ * basis (trusted metrics or an explicit `autoPublishPaths` opt-in).
  */
-export function decideRegularFile({ relativePath, sizeBytes, sha256, linkCount = 1 }, policy, datasetHashes, publishedBytesSoFar) {
+export function decideRegularFile({ relativePath, sizeBytes, sha256, linkCount = 1, metricsCheck }, policy, datasetHashes, publishedBytesSoFar) {
   const extension = extname(relativePath).toLowerCase();
   if (policy.blockDatasetHashMatches !== false && datasetHashes.has(sha256)) {
     return { decision: "rejected", reason: "sha256 matches a dataset manifest entry (raw data copy)" };
   }
   if (linkCount > 1) return { decision: "held", reason: "hard link (link count > 1)" };
+  let basis;
+  if (relativePath === METRICS_RELATIVE_PATH) {
+    if (!metricsCheck?.ok) {
+      return { decision: "held", reason: `metrics.json 未通过可信指标校验，按默认策略扣留：${metricsCheck?.error ?? "未校验"}` };
+    }
+    basis = "可信指标 metrics.json（tanyan.metrics/v1 与外发约束校验通过）";
+  } else {
+    const pattern = matchAutoPublishPath(relativePath, policy);
+    if (!pattern) return { decision: "held", reason: EGRESS_HELD_DEFAULT_REASON };
+    basis = `数据持有方授权外发：autoPublishPaths 命中 "${pattern}"；扩展名、大小与数据集哈希检查已通过`;
+  }
   const allowed = new Set((policy.allowedExtensions ?? []).map((value) => String(value).toLowerCase()));
   if (!extension || !allowed.has(extension)) return { decision: "held", reason: `extension ${extension || "(none)"} not allowlisted` };
   if (IMAGE_EXTENSIONS.has(extension) && policy.allowImages !== true) return { decision: "held", reason: "image output and allowImages=false" };
@@ -51,7 +75,7 @@ export function decideRegularFile({ relativePath, sizeBytes, sha256, linkCount =
   if (publishedBytesSoFar + sizeBytes > policy.maxTotalBytes) {
     return { decision: "held", reason: `total published bytes would exceed maxTotalBytes ${policy.maxTotalBytes}` };
   }
-  return { decision: "published", reason: "allowlisted extension within size limits" };
+  return { decision: "published", reason: basis };
 }
 
 function sanitizeForReport(path) {
@@ -66,14 +90,21 @@ function describeSpecial(stats) {
   return "special file";
 }
 
-async function hashRegularFileNoFollow(absolutePath, expectedIno) {
+/** Hashes a regular file opened without following links. With `keepBytes`,
+ * also returns the exact bytes hashed (used for the small metrics file, so
+ * the content check sees what the hash covers). */
+async function hashRegularFileNoFollow(absolutePath, expectedIno, keepBytes = false) {
   const handle = await open(absolutePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
   try {
     const stats = await handle.stat();
     if (!stats.isFile() || stats.ino !== expectedIno) throw new Error("file changed during egress scan");
     const hash = createHash("sha256");
-    for await (const chunk of handle.createReadStream({ autoClose: false })) hash.update(chunk);
-    return hash.digest("hex");
+    const chunks = [];
+    for await (const chunk of handle.createReadStream({ autoClose: false })) {
+      hash.update(chunk);
+      if (keepBytes) chunks.push(chunk);
+    }
+    return { sha256: hash.digest("hex"), bytes: keepBytes ? Buffer.concat(chunks) : null };
   } finally {
     await handle.close();
   }
@@ -117,8 +148,13 @@ export async function evaluateEgress({ outDir, policy, datasetHashes, locatorPre
         entries.push({ relativePath, special: "resolved path escapes out/" });
         continue;
       }
-      const sha256 = await hashRegularFileNoFollow(absolutePath, stats.ino);
-      entries.push({ relativePath, absolutePath, sizeBytes: stats.size, sha256, linkCount: stats.nlink });
+      const isMetrics = relativePath === METRICS_RELATIVE_PATH;
+      const keepBytes = isMetrics && stats.size <= METRICS_EGRESS_LIMITS.maxBytes;
+      const { sha256, bytes } = await hashRegularFileNoFollow(absolutePath, stats.ino, keepBytes);
+      const metricsCheck = !isMetrics ? undefined
+        : bytes ? checkMetricsEgress(bytes)
+          : { ok: false, error: `metrics.json 大小 ${stats.size} 超过可信指标上限 ${METRICS_EGRESS_LIMITS.maxBytes}` };
+      entries.push({ relativePath, absolutePath, sizeBytes: stats.size, sha256, linkCount: stats.nlink, metricsCheck });
     }
   }
 
