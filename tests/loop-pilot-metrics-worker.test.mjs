@@ -112,12 +112,13 @@ async function seed(db) {
   await attempt("att_pm6", "task_pm6", "pm-a", "change_ready", "2026-09-20 00:10:00", "2026-09-20 00:20:00", "2026-09-20 00:30:00",
     { inputTokens: 99999, outputTokens: 1 });
 
-  const change = (id, taskId, attemptId, studentId, status, prNumber, createdAt, updatedAt) => db.prepare(`INSERT INTO change_requests(id, task_id,
-    attempt_id, student_id, github_repository_id, base_commit_sha, branch_name, head_commit_sha, pr_number, pr_url, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 7101, ?, ?, ?, ?, '', ?, ?, ?)`)
-    .bind(id, taskId, attemptId, studentId, SHA, `tanyan/${id}`, SHA, prNumber, status, createdAt, updatedAt).run();
+  const change = (id, taskId, attemptId, studentId, status, prNumber, createdAt, updatedAt, publishedAt = null) => db.prepare(`INSERT INTO change_requests(id, task_id,
+    attempt_id, student_id, github_repository_id, base_commit_sha, branch_name, head_commit_sha, pr_number, pr_url, status, created_at, updated_at, published_at)
+    VALUES (?, ?, ?, ?, 7101, ?, ?, ?, ?, '', ?, ?, ?, ?)`)
+    .bind(id, taskId, attemptId, studentId, SHA, `tanyan/${id}`, SHA, prNumber, status, createdAt, updatedAt, publishedAt).run();
   await change("cr_pm1", "task_pm1", "att_pm1", "pm-a", "open", 11, "2026-10-02 03:40:00", "2026-10-02 05:40:00");
-  await change("cr_pm3", "task_pm2", "att_pm3", "pm-b", "merged", 12, "2026-10-05 02:35:00", "2026-10-06 00:00:00");
+  // cr_pm3 was published after 0028, so its recorded published_at survives the later merge.
+  await change("cr_pm3", "task_pm2", "att_pm3", "pm-b", "merged", 12, "2026-10-05 02:35:00", "2026-10-06 00:00:00", "2026-10-05 05:35:00");
   await change("cr_pm4", "task_pm4", "att_pm4", "pm-b", "open", 13, "2026-10-10 05:00:00", "2026-10-10 06:00:00");
   await change("cr_pm5", "task_pm3", "att_pm5", "pm-a", "open", 15, "2026-10-07 00:30:00", "2026-10-07 01:30:00");
   await change("cr_pm6", "task_pm6", "att_pm6", "pm-a", "open", 14, "2026-09-20 00:30:00", "2026-09-20 01:00:00");
@@ -224,10 +225,12 @@ test("pilot metrics: superadmin only, known answers, empty period, no per-studen
       ratio("closed_loop_completion", 0.5, 2, 4);
       // Guidance 10-02 00:00 → cr_pm1 opened 10-02 05:40.
       dist("guidance_to_first_pr", 340, 340, 1);
-      // T1 220 min, T3 90 min; T2 (merged) and T4 (webhook-touched) are not recoverable; T6 opened before the period.
-      dist("confirmation_to_first_pr", 155, 220, 2);
-      assert.match(m.confirmation_to_first_pr.caveat, /有 2 个/);
-      dist("change_review_time", 90, 120, 2);
+      // T1 220 min, T3 90 min, T2 335 min (published_at kept after merge); legacy T4 (webhook-touched) is not
+      // recoverable; T6 opened before the period.
+      dist("confirmation_to_first_pr", 220, 335, 3);
+      assert.match(m.confirmation_to_first_pr.caveat, /有 1 个/);
+      // cr_pm1 120, cr_pm5 60, cr_pm3 180 min.
+      dist("change_review_time", 120, 180, 3);
       dist("run_queue_time", 20, 40, 7);
       dist("run_execution_time", 60, 60, 7);
       // Plan-first att_pm4 is excluded from queue/run time.

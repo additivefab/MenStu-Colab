@@ -110,7 +110,7 @@ export type PilotMetricsReport = {
 
 export type PilotRows = {
   tasks: { id: string; first_confirmed_at: string | null; guidance_created_at: string | null }[];
-  changeRequests: { id: string; task_id: string; status: string; pr_number: number | null; created_at: string; updated_at: string; webhook_touched: number }[];
+  changeRequests: { id: string; task_id: string; status: string; pr_number: number | null; created_at: string; updated_at: string; published_at: string | null; webhook_touched: number }[];
   attempts: { id: string; task_id: string; status: string; created_at: string; started_at: string | null; ended_at: string | null; usage_json: string; plan_first: number }[];
   runs: {
     id: string; task_id: string; run_spec_sha256: string; attempt: number; status: string; submit_tag: string;
@@ -207,14 +207,19 @@ function unavailableMetric(base: Base, kind: PilotMetricKind, unit: string, reas
 // ---------------------------------------------------------------------------
 
 /**
- * When the PR of a change request was opened. change_requests has no
- * published_at column; `updated_at` equals the publish moment only while the
- * row is still `open` and no GitHub webhook has touched it since (a later
- * synchronize/close/reopen overwrites it). Other published rows are left out
- * and counted as not recoverable — never guessed.
+ * When the PR of a change request was opened: `published_at` (schema 28). Rows
+ * published before 0028 have none; for them `updated_at` equals the publish
+ * moment only while the row is still `open` and no GitHub webhook has touched
+ * it since (a later synchronize/close/reopen overwrites it). Other such rows
+ * are left out and counted as not recoverable — never guessed.
  */
 function publishInstant(cr: PilotRows["changeRequests"][number]) {
-  if (cr.pr_number === null || cr.status !== "open" || Number(cr.webhook_touched)) return null;
+  if (cr.pr_number === null) return null;
+  if (cr.published_at) {
+    const published = ms(cr.published_at);
+    return Number.isFinite(published) ? published : null;
+  }
+  if (cr.status !== "open" || Number(cr.webhook_touched)) return null;
   const value = ms(cr.updated_at);
   return Number.isFinite(value) ? value : null;
 }
@@ -250,8 +255,8 @@ export function buildPilotMetrics(period: PilotPeriod, rows: PilotRows): PilotMe
     firstPr.set(taskId, ambiguous ? null : first);
   }
   const prCaveat = unrecoverable
-    ? `平台未单独记录 PR 打开时间；仅当变更请求仍为“已打开”且此后未被 GitHub 回调更新时，其更新时间才等于打开时间。有 ${unrecoverable} 个已发布变更请求的打开时间无法确证，未计入样本。`
-    : "平台未单独记录 PR 打开时间；以仍为“已打开”且未被 GitHub 回调更新的变更请求的更新时间作为打开时间。";
+    ? `有 ${unrecoverable} 个变更请求发布于记录 PR 打开时间之前（0028 迁移前），且此后状态已变化，打开时间无法确证，未计入样本。`
+    : undefined;
   const leadTimes = (startOf: (task: PilotRows["tasks"][number]) => string | null) => {
     const values: number[] = [];
     for (const task of rows.tasks) {
@@ -435,7 +440,7 @@ export async function readPilotMetrics(d1: D1Database, period: PilotPeriod): Pro
         g.created_at AS guidance_created_at
       FROM research_tasks t
       LEFT JOIN student_guidance_notes g ON g.id = t.source_guidance_note_id`).all<PilotRows["tasks"][number]>(),
-    d1.prepare(`SELECT cr.id, cr.task_id, cr.status, cr.pr_number, cr.created_at, cr.updated_at,
+    d1.prepare(`SELECT cr.id, cr.task_id, cr.status, cr.pr_number, cr.created_at, cr.updated_at, cr.published_at,
         EXISTS (SELECT 1 FROM github_webhook_deliveries w WHERE w.status = 'processed'
           AND json_valid(w.summary_json) AND json_extract(w.summary_json, '$.changeRequestId') = cr.id) AS webhook_touched
       FROM change_requests cr`).all<PilotRows["changeRequests"][number]>(),

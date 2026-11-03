@@ -38,7 +38,7 @@ test("research loop tables require migration 0026 before the runtime upgrades to
     await applyD1Migrations(mf, { from: "0026_" });
     const recovered = await (await mf.dispatchFetch("http://localhost/api/health/ready")).json();
     assert.equal(recovered.checks.find((check) => check.id === "schema")?.status, "pass", JSON.stringify(recovered));
-    assert.equal((await db.prepare("SELECT version FROM app_schema_meta WHERE id=1").first()).version, 27);
+    assert.equal((await db.prepare("SELECT version FROM app_schema_meta WHERE id=1").first()).version, 28);
     assert.equal((await db.prepare(`SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name IN (${placeholders})`).bind(...LOOP_TABLES).first()).n, LOOP_TABLES.length);
     assert.deepEqual((await db.prepare("PRAGMA foreign_key_check").all()).results, []);
   } finally { await mf.dispose(); }
@@ -67,7 +67,33 @@ test("schema 27 tables require migration 0027 before the runtime upgrades from 2
     await applyD1Migrations(mf, { from: "0027_" });
     const recovered = await (await mf.dispatchFetch("http://localhost/api/health/ready")).json();
     assert.equal(recovered.checks.find((check) => check.id === "schema")?.status, "pass", JSON.stringify(recovered));
-    assert.equal((await db.prepare("SELECT version FROM app_schema_meta WHERE id=1").first()).version, 27);
+    assert.equal((await db.prepare("SELECT version FROM app_schema_meta WHERE id=1").first()).version, 28);
     assert.deepEqual((await db.prepare("PRAGMA foreign_key_check").all()).results, []);
+  } finally { await mf.dispose(); }
+});
+
+// Schema 28 adds change_requests.published_at (0028): a version-27 database
+// without it stops at readiness and keeps version 27 until 0028 is applied.
+test("schema 28 column requires migration 0028 before the runtime upgrades from 27", { timeout: 120_000 }, async () => {
+  const root = fileURLToPath(new URL("../dist/server/", import.meta.url));
+  const files = (await readdir(root, { recursive: true })).filter((file) => file.endsWith(".js"));
+  const mf = new Miniflare({
+    modules: ["index.js", ...files.filter((file) => file !== "index.js")].map((path) => ({ type: "ESModule", path: root + path })),
+    modulesRoot: root, compatibilityDate: "2026-05-22", compatibilityFlags: ["nodejs_compat"],
+    d1Databases: { DB: "research-loop-schema-28" }, r2Buckets: ["FILES"],
+    outboundService: () => new Response("No external services in this test", { status: 502 }),
+  });
+  try {
+    const db = await applyD1Migrations(mf, { before: "0028_" });
+    await db.prepare("UPDATE app_schema_meta SET version = 27 WHERE id = 1").run();
+    const failed = await mf.dispatchFetch("http://localhost/api/health/ready");
+    assert.equal(failed.status, 503);
+    assert.equal((await db.prepare("SELECT version FROM app_schema_meta WHERE id=1").first()).version, 27);
+    await applyD1Migrations(mf, { from: "0028_" });
+    const recovered = await (await mf.dispatchFetch("http://localhost/api/health/ready")).json();
+    assert.equal(recovered.checks.find((check) => check.id === "schema")?.status, "pass", JSON.stringify(recovered));
+    assert.equal((await db.prepare("SELECT version FROM app_schema_meta WHERE id=1").first()).version, 28);
+    const columns = (await db.prepare("SELECT name FROM pragma_table_info('change_requests')").all()).results.map((row) => row.name);
+    assert.ok(columns.includes("published_at"));
   } finally { await mf.dispose(); }
 });

@@ -9,7 +9,7 @@ import { provisionConfirmedRepositoryBindings } from "./confirmed-repository-bin
 
 const DAY = 24 * 60 * 60 * 1000;
 
-export const CURRENT_SCHEMA_VERSION = 27;
+export const CURRENT_SCHEMA_VERSION = 28;
 
 // These tables are owned exclusively by the hosted/local Drizzle migration.
 // Runtime bootstrap must never invent them or mark the schema upgraded before
@@ -29,6 +29,10 @@ export const MIGRATION_OWNED_RESEARCH_LOOP_TABLES = [
   // Schema 27 (0027): baselines, interpretations, review delegation, plan-first attempts, loop notifications.
   "run_baselines", "result_interpretations", "review_delegations", "agent_attempt_plans", "loop_notifications",
 ] as const;
+
+// Columns added by migrations to existing migration-owned tables, reported as
+// "table.column" in missingTables. Schema 28 (0028): change_requests.published_at.
+const MIGRATION_OWNED_COLUMNS = [["change_requests", "published_at"]] as const;
 
 const REQUIRED_TABLES = [
   "students",
@@ -135,6 +139,12 @@ export async function getDatabaseSchemaStatus(): Promise<DatabaseSchemaStatus> {
     .bind(...REQUIRED_TABLES)
     .all<{ name: string }>();
   const present = new Set(tables.results.map((item) => item.name));
+  const missingColumns: string[] = [];
+  for (const [table, column] of MIGRATION_OWNED_COLUMNS) {
+    if (!present.has(table)) continue;
+    const columns = await d1.prepare(`SELECT name FROM pragma_table_info(?)`).bind(table).all<{ name: string }>();
+    if (!columns.results.some((item) => item.name === column)) missingColumns.push(`${table}.${column}`);
+  }
   const metaTable = await d1.prepare(`SELECT name FROM sqlite_master
     WHERE type = 'table' AND name = 'app_schema_meta'`).first<{ name: string }>();
   const meta = metaTable
@@ -143,7 +153,7 @@ export async function getDatabaseSchemaStatus(): Promise<DatabaseSchemaStatus> {
   return {
     version: meta ? Number(meta.version) : null,
     expectedVersion: CURRENT_SCHEMA_VERSION,
-    missingTables: REQUIRED_TABLES.filter((name) => !present.has(name)),
+    missingTables: [...REQUIRED_TABLES.filter((name) => !present.has(name)), ...missingColumns],
   };
 }
 
@@ -167,6 +177,9 @@ async function prepareDatabase() {
   const missingResearchLoopTables = MIGRATION_OWNED_RESEARCH_LOOP_TABLES.filter((name) => before.missingTables.includes(name));
   if (missingResearchLoopTables.length) {
     throw new Error("科研闭环数据库迁移（0026/0027）尚未应用，请先应用部署迁移");
+  }
+  if (MIGRATION_OWNED_COLUMNS.some(([table, column]) => before.missingTables.includes(`${table}.${column}`))) {
+    throw new Error("科研闭环数据库迁移（0028）尚未应用，请先应用部署迁移");
   }
   if (before.version !== null && before.version >= 23 && before.missingTables.length) {
     throw new Error(`数据库结构不完整：缺少 ${before.missingTables.join("、")}`);
@@ -193,6 +206,12 @@ export async function ensureDatabase() {
 
 async function migrateDatabase(previousVersion: number | null) {
   const d1 = getD1();
+  if (previousVersion === 27) {
+    // 0028 only adds change_requests.published_at, verified present before this point.
+    await d1.prepare("UPDATE app_schema_meta SET version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND version = 27")
+      .bind(CURRENT_SCHEMA_VERSION).run();
+    return;
+  }
   if (previousVersion === 26) {
     // 0027 only adds migration-owned tables, verified complete before this point.
     await d1.prepare("UPDATE app_schema_meta SET version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND version = 26")
