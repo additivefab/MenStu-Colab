@@ -12,8 +12,9 @@
 // - change_extra_review: change_requests.status = 'pending_review',
 //   requires_extra_review = 1, extra_review_approved_at IS NULL, and the
 //   attempt was not requested by the viewer (no self-review).
-// - run_approval: runs.status = 'awaiting_approval' and the run was not created
-//   by the viewer (no self-approval, superadmin included).
+// - run_approval: runs.status = 'awaiting_approval' and neither the run nor its
+//   run spec was created by the viewer (no self-approval, superadmin included;
+//   mirrors approveRun).
 // - result_review: runs.status = 'completed' with no result_reviews row or
 //   state = 'pending'. Technically invalid results are included (the mentor
 //   still decides); the item says so.
@@ -100,8 +101,10 @@ const KIND_QUERIES: KindQuery[] = [
   },
   {
     kind: "run_approval",
-    from: "runs r JOIN research_tasks t ON t.id = r.task_id JOIN students s ON s.id = r.student_id",
-    where: "r.status = 'awaiting_approval' AND r.created_by_user_id <> ?",
+    from: `runs r JOIN research_tasks t ON t.id = r.task_id JOIN students s ON s.id = r.student_id
+      JOIN run_specs rs ON rs.sha256 = r.run_spec_sha256`,
+    // Mirrors approveRun: neither the run's creator nor the spec's author may approve.
+    where: "r.status = 'awaiting_approval' AND ? NOT IN (r.created_by_user_id, rs.created_by_user_id)",
     selfExcluded: true,
     objectId: "r.id",
     waiting: "r.created_at",

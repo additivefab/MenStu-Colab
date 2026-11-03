@@ -215,6 +215,17 @@ test("research loop inbox: scope, self-exclusion, ordering and cap", { timeout: 
       }
     });
 
+    await t.test("a run whose spec the viewer authored is excluded, mirroring approveRun", async () => {
+      // A student resubmits a spec mentor A wrote: approveRun refuses mentor A, so the inbox must too.
+      await db.prepare("UPDATE run_specs SET created_by_user_id = 2011 WHERE sha256 = (SELECT run_spec_sha256 FROM runs WHERE id = 'run_d')").run();
+      try {
+        assert.ok(!ids(await inbox("mentorA")).includes("run_approval:run_d"));
+      } finally {
+        await db.prepare("UPDATE run_specs SET created_by_user_id = 2001 WHERE sha256 = (SELECT run_spec_sha256 FROM runs WHERE id = 'run_d')").run();
+      }
+      assert.ok(ids(await inbox("mentorA")).includes("run_approval:run_d"));
+    });
+
     await t.test("superadmin sees every active student but not their own runs, capped at 200", async () => {
       const rootItems = await inbox("root");
       assert.equal(rootItems.length, 200);
