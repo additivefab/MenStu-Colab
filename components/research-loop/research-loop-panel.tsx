@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { getJson, newKey, postJson, type RunList, type TaskSummary } from "./api";
 import { anchorId, LoopNavigationContext, type ChangeRequestRef, type LoopNavigation } from "./navigation";
 import { sequenceNumbers } from "./numbering";
+import { Delegations } from "./delegations";
 import { Readiness } from "./readiness";
 import type { StageTarget } from "./stage-model";
 import { TaskCard } from "./task-card";
@@ -212,5 +213,6 @@ function PanelContent({ studentId, mode, prefill, guidanceHref }: {
         defaultOpen={highlight ? highlight === task.id : index === 0} onChanged={() => void reload()} />)}
       {!visible.length ? <p className={styles.empty}>{tasks.length ? "没有进行中的任务。可以查看全部任务。" : mode === "student" ? "还没有研究任务。可以自己新建，或请导师把指导意见转为任务。" : "还没有研究任务。可以新建，或在“指导”中把意见转为任务。"}</p> : null}
     </> : null}
+    {mode === "staff" ? <Delegations studentId={studentId} /> : null}
   </section></LoopNavigationContext.Provider>;
 }

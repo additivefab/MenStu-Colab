@@ -1,0 +1,19 @@
+/* FB1 peer code review delegations (staff section + delegate's dashboard list). */
+.section { margin-top: 16px; padding-top: 14px; border-top: 1px solid #e5eaf1; min-width: 0; }
+.section > summary { font-size: 14px; font-weight: 600; color: #35445b; }
+.count { margin-left: 8px; color: #8290a3; font-size: 12px; font-weight: 500; }
+.scope { margin: 8px 0 4px !important; color: #5d6c82; font-size: 13px; }
+.history { margin-top: 8px; }
+.history > button { padding: 2px 8px !important; font-size: 13px !important; }
+
+.student { margin-top: 14px; min-width: 0; }
+.studentHead { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+.studentHead h4 small { margin-left: 6px; }
+.list { margin: 6px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.list > li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; padding: 8px 10px; border: 1px solid #edf1f6; border-radius: 7px; min-width: 0; }
+.list > li > span:first-child { display: grid; gap: 2px; min-width: 0; flex: 1 1 240px; }
+.list > li strong { overflow-wrap: anywhere; }
+.list > li small { overflow-wrap: anywhere; }
+.right { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.open { padding: 5px 12px; border: 1px solid #245fc2; border-radius: 7px; color: #245fc2 !important; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.open:hover { background: #f3f7fe; text-decoration: none !important; }
