@@ -16,6 +16,7 @@ import { RunForm } from "./run-form";
 import { StageBar, stageLine } from "./stage-bar";
 import { computeTaskStages, type StageKey, type StageTarget } from "./stage-model";
 import { TaskForm, type TaskContentDraft } from "./task-form";
+import { comparisonBaseVersion, ProtectedPathList, VersionDiff } from "./version-diff";
 import { Blocked, ConfirmButton, ErrorNote, Notice, Pill } from "./ui";
 import styles from "./research-loop.module.css";
 import stageStyles from "./stage-bar.module.css";
@@ -32,7 +33,6 @@ export function contentOf(version: TaskVersion | undefined): TaskContentDraft | 
 }
 
 function VersionBody({ version }: { version: TaskVersion }) {
-  const extraProtected = version.protectedPaths.filter((path) => !defaults.has(path));
   const budget = [
     version.budget.maxAgentMinutes !== undefined ? `代理 ≤ ${version.budget.maxAgentMinutes} 分钟` : "",
     version.budget.maxGpuCount !== undefined ? `GPU ≤ ${version.budget.maxGpuCount}` : "",
@@ -43,7 +43,8 @@ function VersionBody({ version }: { version: TaskVersion }) {
     {version.hypothesis ? <div><h5>假设</h5><p>{version.hypothesis}</p></div> : null}
     <div><h5>执行说明</h5><p>{version.instructions}</p></div>
     <div><h5>验收标准</h5><p>{version.acceptanceCriteria}</p></div>
-    <div><h5>修改范围</h5><p>{version.allowedPaths.length ? version.allowedPaths.join("、") : "除受保护路径外的整个仓库"}；受保护路径：默认 {defaults.size} 项{extraProtected.length ? ` + ${extraProtected.join("、")}` : ""}</p></div>
+    <div><h5>修改范围</h5><p>{version.allowedPaths.length ? version.allowedPaths.join("、") : "除受保护路径外的整个仓库"}</p></div>
+    <div><h5>受保护路径</h5><ProtectedPathList paths={version.protectedPaths} /></div>
     <div><h5>预算</h5><p>{budget || "未设上限"}</p></div>
   </div>;
 }
@@ -135,6 +136,7 @@ export function TaskCard({ summary, runs, options, defaultOpen, onChanged }: {
   const [editing, setEditing] = useState(false);
   const [runFormOpen, setRunFormOpen] = useState(false);
   const [showVersion, setShowVersion] = useState<number | null>(null);
+  const [compareWithCurrent, setCompareWithCurrent] = useState(false);
   const [sectionOpen, setSectionOpen] = useState<Partial<Record<SectionKey, boolean>>>({});
   const [focusKey, setFocusKey] = useState<number | null>(null);
   const [pendingFocus, setPendingFocus] = useState<(StageTarget & { key: number }) | null>(null);
@@ -219,6 +221,13 @@ export function TaskCard({ summary, runs, options, defaultOpen, onChanged }: {
   const latest = versions[versions.length - 1];
   const confirmed = versions.find((item) => item.version === task.confirmedVersion);
   const viewing = versions.find((item) => item.version === (showVersion ?? latest?.version));
+  // G1: a draft with an earlier version shows what it changes right above the confirm button.
+  const baseNumber = comparisonBaseVersion(task);
+  const draftBase = baseNumber === null ? undefined : versions.find((item) => item.version === baseNumber);
+  const draftDiff = draftBase && latest && latest.version === task.currentVersion && draftBase.version !== latest.version ? draftBase : undefined;
+  const canCompare = Boolean(viewing && latest && viewing.version !== latest.version);
+  // Comparing the draft's own base already shows the same diff; don't repeat it.
+  const showDraftDiff = draftDiff && !(canCompare && compareWithCurrent && viewing?.version === draftDiff.version);
   const permissions = detail?.permissions;
   const attemptCrIds = new Set(changeRequests.map((item) => item.attemptId));
   return <article className={styles.task} id={anchorId.task(summary.id)} ref={cardRef}>
@@ -236,12 +245,14 @@ export function TaskCard({ summary, runs, options, defaultOpen, onChanged }: {
       <Notice>{notice}</Notice>
       {detail ? <>
         <StageSection label="任务内容" title="任务内容" line={lineOf("task")} open={isOpen("task")} onToggle={toggle("task")}>
-          {versions.length > 1 ? <div className={stageStyles.sectionTools}><label className={styles.versionPick}><span className={styles.srOnly}>查看版本</span><select value={viewing?.version ?? ""} onChange={(event) => setShowVersion(Number(event.target.value))}>{[...versions].reverse().map((item) => <option key={item.version} value={item.version}>第 {item.version} 版{item.version === task.confirmedVersion ? "（已确认）" : item.version === task.currentVersion && task.status === "draft" ? "（待确认）" : ""}</option>)}</select></label></div> : null}
+          {versions.length > 1 ? <div className={stageStyles.sectionTools}><label className={styles.versionPick}><span className={styles.srOnly}>查看版本</span><select value={viewing?.version ?? ""} onChange={(event) => { setShowVersion(Number(event.target.value)); setCompareWithCurrent(false); }}>{[...versions].reverse().map((item) => <option key={item.version} value={item.version}>第 {item.version} 版{item.version === task.confirmedVersion ? "（已确认）" : item.version === task.currentVersion && task.status === "draft" ? "（待确认）" : ""}</option>)}</select></label>{canCompare ? <button type="button" aria-pressed={compareWithCurrent} onClick={() => setCompareWithCurrent(!compareWithCurrent)}>{compareWithCurrent ? "收起比较" : "与当前版比较"}</button> : null}</div> : null}
           {task.status === "draft" && task.confirmedVersion ? <p className={styles.warning}>第 {task.currentVersion} 版是修改后的草稿，需要重新确认；确认前不能启动新的代理或运行。</p> : null}
           {viewing ? <>
             <VersionBody version={viewing} />
             <p className={styles.muted}>快照 sha256 <code>{shortSha(viewing.snapshotSha256, 16)}</code>{viewing.confirmedAt ? ` · 确认于 ${dateLabel(viewing.confirmedAt)}` : " · 未确认"}</p>
+            {canCompare && compareWithCurrent && latest ? <VersionDiff previous={viewing} current={latest} heading={`当前第 ${latest.version} 版与第 ${viewing.version} 版相比`} /> : null}
           </> : null}
+          {showDraftDiff && draftDiff && latest && !editing ? <VersionDiff previous={draftDiff} current={latest} heading={`与第 ${draftDiff.version} 版相比（第 ${latest.version} 版的改动）`} /> : null}
           {editing && latest ? <TaskForm title={`修改任务（将生成第 ${task.currentVersion + 1} 版）`} submitLabel="保存为新版本" note="已确认的版本不会被覆盖；新版本需要重新确认。" initial={contentOf(latest) as TaskContentDraft} onSubmit={revise} onCancel={() => setEditing(false)} /> : <div className={styles.actions}>
             {permissions?.canConfirm ? <button type="button" className={styles.primary} disabled={busy} onClick={() => void act({ action: "confirm", version: task.currentVersion }, `已确认第 ${task.currentVersion} 版。`)}>确认第 {task.currentVersion} 版</button> : null}
             {permissions?.canRevise ? <button type="button" disabled={busy} onClick={() => setEditing(true)}>修改任务</button> : null}
