@@ -1,5 +1,6 @@
 import { canReviewStudent, canViewStudent } from "./authorization";
 import type { AppUser } from "./feishu-auth";
+import { notifyLoopEvent } from "./loop-notifications";
 import { canCodeReviewStudent } from "./review-delegation";
 import {
   taskSnapshotSha256, type ResearchTaskSnapshot, type ResearchTaskStatus, type TaskBudget,
@@ -346,6 +347,7 @@ export async function createTask(d1: D1Database, user: AppUser, body: Record<str
   if (!row || row.student_id !== studentId || row.created_by_user_id !== user.id) {
     throw conflictError("研究任务创建冲突，请刷新页面后重试");
   }
+  await notifyLoopEvent(d1, { kind: "task_draft", taskId: row.id, actorUserId: user.id });
   return { task: taskSummary(row), replayed: false };
 }
 

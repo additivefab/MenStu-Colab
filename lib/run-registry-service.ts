@@ -7,6 +7,7 @@
 import { env } from "cloudflare:workers";
 import { canReviewStudent, canViewStudent } from "./authorization";
 import type { AppUser } from "./feishu-auth";
+import { notifyLoopEvent } from "./loop-notifications";
 import { GithubNotConfiguredError, mintRepositoryReadToken } from "./github/tokens.ts";
 import { GithubCommitNotFoundError, resolveCommitSha } from "./github/repository-read.ts";
 import { issueRunnerToken, type LabRunner } from "./lab-runner-auth.ts";
@@ -612,6 +613,7 @@ export async function createRun(d1: D1Database, actor: AppUser, body: Record<str
     if (String(error).includes("UNIQUE")) throw conflict("运行创建冲突，请重试", "CREATE_CONFLICT");
     throw error;
   }
+  await notifyLoopEvent(d1, { kind: "run_awaiting_approval", runId, actorUserId: actor.id });
   const created = await loadRun(d1, runId);
   return { runId, runSpecSha256: sha256, attempt: created?.attempt ?? 1, status: "awaiting_approval" as RunStatus, replayed: false };
 }
@@ -736,6 +738,7 @@ export async function rerunRun(d1: D1Database, actor: AppUser, body: Record<stri
     if (String(error).includes("UNIQUE")) throw conflict("重跑冲突，请重试", "CREATE_CONFLICT");
     throw error;
   }
+  await notifyLoopEvent(d1, { kind: "run_awaiting_approval", runId, actorUserId: actor.id });
   const created = await loadRun(d1, runId);
   return { runId, runSpecSha256: source.run_spec_sha256, attempt: created?.attempt ?? source.attempt + 1, status: "awaiting_approval" as RunStatus, replayed: false };
 }
@@ -1382,7 +1385,9 @@ export async function completeRun(d1: D1Database, runner: LabRunner, body: Recor
     set: { exit_code: exitCode, failure_reason: reason, ended_at: now, lease_expires_at: null },
   })]);
   if (!ok) throw leaseLost();
-  return { status: plan.path[plan.path.length - 1], replayed: false, ...summary };
+  const finalStatus = plan.path[plan.path.length - 1];
+  if (finalStatus === "completed") await notifyLoopEvent(d1, { kind: "run_result_ready", runId: run.id });
+  return { status: finalStatus, replayed: false, ...summary };
 }
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ import {
   ResearchLoopHttpError, TaskSnapshotMismatchError, canDecideTask, conflictError, forbiddenError, inputError, isConstraintError,
   loadTaskVersionSnapshot, notFoundError, parseEntityId, readTaskRow,
 } from "./research-tasks-service";
+import { notifyLoopEvent } from "./loop-notifications";
 import { canCodeReviewStudent } from "./review-delegation";
 
 // Agent attempts (docs/科研闭环_实施规格_v1.md §6.1): user start/cancel, the
@@ -976,6 +977,7 @@ export async function submitAgentResult(d1: D1Database, bucket: R2Bucket | undef
   }
   const row = batch[0].results[0];
   if (!row) throw leaseLost();
+  await notifyLoopEvent(d1, { kind: "change_request", changeRequestId, actorUserId: null });
   return resultResponse(d1, row, false, pathPolicy);
 }
 
@@ -1013,6 +1015,7 @@ async function submitPlan(d1: D1Database, runner: LabRunner, attempt: AttemptRow
   ]);
   const row = results[0].results[0];
   if (!row) throw leaseLost();
+  await notifyLoopEvent(d1, { kind: "plan_submitted", attemptId: attempt.id });
   return resultResponse(d1, row, false);
 }
 
