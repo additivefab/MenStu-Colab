@@ -94,6 +94,10 @@ function HashRow({ name, value, copyLabel }: { name: string; value: string; copy
 /** Full hashes for checking; the approval binds the spec hash shown here. */
 function Traceability({ detail, current }: { detail: RunDetail; current: RunSummary }) {
   const { spec } = detail;
+  // Batch 7 (G02): the SIF file the runner verified (a file hash, not the OCI digest).
+  const imageEnv = detail.result?.manifest?.environment;
+  const imageFileSha = typeof imageEnv?.imageFileSha256 === "string" ? imageEnv.imageFileSha256 : "";
+  const imageSource = typeof imageEnv?.imageSource === "string" ? imageEnv.imageSource : "";
   return <details className={`${styles.subtle} ${rc.trace}`}>
     <summary>可追溯信息（完整哈希，可复制核对）</summary>
     <div className={rc.traceSpec}>
@@ -103,6 +107,8 @@ function Traceability({ detail, current }: { detail: RunDetail; current: RunSumm
     <dl className={`${styles.fields} ${rc.traceFields}`}>
       <HashRow name="完整提交 SHA" value={spec.executedCommitSha} copyLabel="复制 SHA" />
       <HashRow name="镜像" value={spec.entrypoint.imageRef} copyLabel="复制镜像" />
+      {imageFileSha ? <Field label="镜像文件 SHA-256" value={<span className={rc.hashRow}><span title={imageFileSha}>{shortSha(imageFileSha, 16)}<small> · 运行器提交前核对的 SIF 文件</small></span><CopyButton text={imageFileSha} label="复制镜像文件哈希" /></span>} mono /> : null}
+      {imageSource ? <Field label="镜像来源" value={imageSource} /> : null}
       <HashRow name="数据集清单" value={spec.dataset.manifestSha256} copyLabel="复制清单哈希" />
       <HashRow name="划分清单" value={spec.dataset.splitManifestSha256} copyLabel="复制划分哈希" />
       <Field label="评价协议" value={<span className={rc.hashRow}><span>{spec.evaluationProtocolSha256}</span><CopyButton text={spec.evaluationProtocolSha256} label="复制协议哈希" /></span>} mono />

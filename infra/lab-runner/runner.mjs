@@ -25,7 +25,8 @@ import { evaluateEgress, METRICS_RELATIVE_PATH } from "./egress.mjs";
 import { buildManifest } from "./manifest.mjs";
 import { CheckoutError, checkoutCommit } from "./lib/checkout.mjs";
 import { ConfigError, loadConfig, loadRunnerToken } from "./lib/config.mjs";
-import { buildContainerCommand } from "./lib/container.mjs";
+import { buildContainerCommand, checkImageConfig, createImageHashCache, ImageProvenanceError, verifyImage } from "./lib/container.mjs";
+import { pickEnv, runCommand } from "./lib/process.mjs";
 import { DataBindingError, loadDatasetFileHashes, verifyDatasetBinding } from "./lib/dataset.mjs";
 import { readJsonIfExists, sleep, writeJsonAtomic } from "./lib/fsutil.mjs";
 import { createLogger, errorMessage } from "./lib/log.mjs";
@@ -43,6 +44,18 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
   logger.addSecret(token);
   scheduler ??= createScheduler(config);
   platform ??= createPlatformClient({ platformUrl: config.platformUrl, token, timeoutMs: config.limits.requestTimeoutSeconds * 1000 });
+  // Image provenance (G02): malformed entries are fatal at startup; legacy
+  // string entries keep working but are logged as unverified.
+  let imageWarnings;
+  try {
+    imageWarnings = checkImageConfig(config.apptainer);
+  } catch (error) {
+    if (error instanceof ImageProvenanceError) throw new ConfigError(error.message);
+    throw error;
+  }
+  for (const warning of imageWarnings) logger.warn(warning.message, warning.fields);
+  const imageHashCache = createImageHashCache();
+  const runImageVerify = (path) => runCommand(config.apptainer.binary, ["verify", path], { env: pickEnv(config.apptainer.hostEnv), timeoutMs: 600_000 });
   const active = new Map();
   let stopping = false;
 
@@ -156,9 +169,24 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
 
     const outDir = join(ctx.runDir, "out");
     await mkdir(outDir, { recursive: true, mode: 0o700 });
+    // Image provenance (G02): hash the SIF (cached by stat identity) and check
+    // immutability right before the job is written and submitted.
+    let image;
+    try {
+      image = await verifyImage(spec.entrypoint.imageRef, config.apptainer, { cache: imageHashCache, runVerify: runImageVerify });
+    } catch (error) {
+      if (error instanceof ImageProvenanceError) throw new PreparationError(`image verification failed: ${error.message}`);
+      throw error;
+    }
+    ctx.state.image = image.verified
+      ? { imageRef: spec.entrypoint.imageRef, path: image.path, sifSha256: image.sifSha256, source: image.source }
+      : { imageRef: spec.entrypoint.imageRef, path: image.path, unverified: true };
+    await persist(ctx);
+    if (image.verified) logger.info("image verified", { runId: ctx.work.runId, sifSha256: image.sifSha256, cached: image.cached });
+    ensureLease(ctx);
     let command;
     try {
-      command = buildContainerCommand({ spec, runId: ctx.work.runId, srcDir, dataPath: dataset.dataPath, outDir, apptainer: config.apptainer });
+      command = buildContainerCommand({ spec, runId: ctx.work.runId, srcDir, dataPath: dataset.dataPath, outDir, apptainer: config.apptainer, imagePath: image.path });
     } catch (error) {
       throw new PreparationError(`container command rejected: ${errorMessage(error)}`);
     }
@@ -351,6 +379,7 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
         runnerId: config.runnerId,
         schedulerJobId: ctx.state.schedulerJobId ?? "",
         environment,
+        image: ctx.state.image?.imageRef === ctx.work.spec.entrypoint.imageRef ? ctx.state.image : null,
         status: { startedAt: status.startedAt, endedAt: status.endedAt, exitCode },
         artifacts: gate.artifacts,
         metricsArtifactPath: metrics.path,

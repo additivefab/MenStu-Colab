@@ -27,7 +27,14 @@
     "applyMemoryLimit": false,
     "allowPullByDigest": false,
     "images": {
-      "registry.example.org/lab/train@sha256:0000000000000000000000000000000000000000000000000000000000000000": "/srv/tanyan-lab-runner/images/train-0000.sif"
+      "registry.example.org/lab/train@sha256:0000000000000000000000000000000000000000000000000000000000000000": {
+        "ociDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "sifPath": "/srv/tanyan-lab-runner/images/train-0000.sif",
+        "sifSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "source": "apptainer build from lab/train.def (git rev REPLACE) by admin REPLACE; pulled from registry.example.org/lab/train@sha256:0000…",
+        "verifySignature": false,
+        "allowRunnerWritable": false
+      }
     },
     "hostEnv": ["PATH", "HOME", "USER", "LANG", "APPTAINER_CACHEDIR", "APPTAINER_TMPDIR", "XDG_RUNTIME_DIR"],
     "forwardIntoContainer": ["CUDA_VISIBLE_DEVICES"]
