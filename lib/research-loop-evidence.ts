@@ -81,10 +81,14 @@ export type EvidenceTaskEventRow = { id: number; task_id: string; version: numbe
 export type EvidenceTaskVersionRow = { task_id: string; version: number; created_at: string; confirmed_at: string | null };
 export type EvidenceChangeRequestRow = {
   id: string; task_id: string; pr_number: number | null; pr_url: string; status: string; created_at: string; updated_at: string;
+  /** Insertion order (rowid); breaks same-second created_at ties. */
+  seq?: number;
 };
 export type EvidenceRunRow = {
   id: string; task_id: string; status: string; failure_reason: string; created_at: string; ended_at: string | null;
   technical_validity: string | null; metrics_json: string | null; review_state: string | null; interpreted: number | null;
+  /** Insertion order (rowid); breaks same-second created_at ties. */
+  seq?: number;
 };
 export type EvidenceRows = {
   tasks: EvidenceTaskRow[];
@@ -231,9 +235,13 @@ export function buildEvidenceReport(studentId: string, period: EvidencePeriod, r
   // Blockers, as of period end.
   type Blocker = EvidenceReport["blockers"][number] & { at: number; sortId: string };
   const blockers: Blocker[] = [];
-  const newer = (a: { created_at: string; id: string }, b: { created_at: string; id: string }) => {
+  // created_at has second resolution; within the same second the insertion
+  // order (rowid) is the true creation order. Ids are random and only a last resort.
+  const newer = (a: { created_at: string; id: string; seq?: number }, b: { created_at: string; id: string; seq?: number }) => {
     const ta = time(a.created_at), tb = time(b.created_at);
-    return ta !== tb ? ta > tb : a.id > b.id;
+    if (ta !== tb) return ta > tb;
+    if (typeof a.seq === "number" && typeof b.seq === "number" && a.seq !== b.seq) return a.seq > b.seq;
+    return a.id > b.id;
   };
   // 1) Failed runs not followed by a newer completed run in the same task.
   for (const run of rows.runs) {
@@ -302,10 +310,10 @@ export async function readEvidenceReport(d1: D1Database, studentId: string, peri
       JOIN research_tasks t ON t.id = e.task_id WHERE t.student_id = ?`).bind(studentId).all<EvidenceTaskEventRow>(),
     d1.prepare(`SELECT v.task_id, v.version, v.created_at, v.confirmed_at FROM research_task_versions v
       JOIN research_tasks t ON t.id = v.task_id WHERE t.student_id = ?`).bind(studentId).all<EvidenceTaskVersionRow>(),
-    d1.prepare(`SELECT c.id, c.task_id, c.pr_number, c.pr_url, c.status, c.created_at, c.updated_at FROM change_requests c
+    d1.prepare(`SELECT c.id, c.task_id, c.pr_number, c.pr_url, c.status, c.created_at, c.updated_at, c.rowid AS seq FROM change_requests c
       JOIN research_tasks t ON t.id = c.task_id WHERE c.student_id = ? AND t.student_id = c.student_id`)
       .bind(studentId).all<EvidenceChangeRequestRow>(),
-    d1.prepare(`SELECT r.id, r.task_id, r.status, r.failure_reason, r.created_at, r.ended_at,
+    d1.prepare(`SELECT r.id, r.task_id, r.status, r.failure_reason, r.created_at, r.ended_at, r.rowid AS seq,
         rr.technical_validity, rr.metrics_json, rv.state AS review_state,
         EXISTS (SELECT 1 FROM result_interpretations i WHERE i.run_id = r.id) AS interpreted
       FROM runs r JOIN research_tasks t ON t.id = r.task_id

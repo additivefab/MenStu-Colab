@@ -526,14 +526,9 @@ test("batch 4 rules: baseline, interpretation, progress draft and evidence repor
       assert.equal(newerRow.status, "completed");
       assert.equal(newerRow.technicalValidity, "valid");
       assert.deepEqual(newerRow.metrics, { accuracy: 0.93 });
-      // "Newer" follows run creation order (per-task run number), the same order the
-      // stage bar uses: a failure blocks unless a later-registered run of the same
-      // task completed. Check every listed failure against that rule.
-      for (const run of second.runs.filter((item) => item.status === "failed")) {
-        const cleared = second.runs.some((other) => other.taskId === run.taskId && other.status === "completed"
-          && (other.number ?? 0) > (run.number ?? 0));
-        const blocked = second.blockers.some((item) => item.kind === "run_failed" && item.runId === run.runId);
-        assert.equal(blocked, !cleared, `failure ${run.runId} (#${run.number}) blocker must follow creation order`);
+      // task_rra: both failures were followed by completed, valid runs (r.interp / r.reviewNoInterp).
+      for (const runId of [r.failed, r.interpFailed]) {
+        assert.ok(!second.blockers.some((item) => item.kind === "run_failed" && item.runId === runId), `stale failure ${runId}`);
       }
     });
 

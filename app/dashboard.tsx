@@ -22,6 +22,7 @@ import type { ProblemRecordStudent } from "../lib/problem-records";
 import { clearMutationKey, mutationKeyForForm } from "../lib/client-idempotency";
 import { StudentRepositoryCard } from "./components/student-repository-card";
 import { ResearchLoopPanel } from "../components/research-loop/research-loop-panel";
+import { DelegatedReviews } from "../components/research-loop/delegated-reviews";
 import type { LoopInboxItem, LoopInboxKind } from "../lib/research-loop-inbox";
 import loopStyles from "./components/loop-inbox.module.css";
 import { ResearchLoopAdmin } from "../components/research-loop/admin-panel";
@@ -974,6 +975,7 @@ export default function Dashboard() {
           <ProblemRecords active={activeView === "issues" && !loading && !error} query={query} refreshRequest={issuesRefreshRequest} onRecord={(students, selectedStudentId) => setIssueForm({ students, selectedStudentId })} />
         </div>
 
+        {data && activeView === "inbox" ? <DelegatedReviews /> : null}
         {data && activeView === "inbox" ? (
           <MentorDecisionInbox
             data={data}
@@ -1805,7 +1807,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
 
       <div hidden={view !== "today" && view !== "research"}><StudentRepositoryCard studentId={student.id} /></div>
 
-      {view === "today" ? <><StudentNextAction action={data.studentNextAction} student={student} papers={papers} onPaper={(paperId) => openComposer("论文", paperId)} onProject={(milestoneId) => openComposer("项目", milestoneId)} onMeeting={openMeetingDesk} onGuidance={openGuidanceDesk} onProgress={(entryId) => navigateStudent({ view: "progress", entryId })} onSupplement={openSupplement} onResolution={(progressEntryId, itemKind) => setResolutionRequest({ progressEntryId, itemKind, key: Date.now() })} /><ProgressResolutionPanel studentId={student.id} mode="student" onChanged={onRefresh} openRequest={resolutionRequest} filterRequest={taskFilterRequest} compact /></> : null}
+      {view === "today" ? <><StudentNextAction action={data.studentNextAction} student={student} papers={papers} onPaper={(paperId) => openComposer("论文", paperId)} onProject={(milestoneId) => openComposer("项目", milestoneId)} onMeeting={openMeetingDesk} onGuidance={openGuidanceDesk} onProgress={(entryId) => navigateStudent({ view: "progress", entryId })} onSupplement={openSupplement} onResolution={(progressEntryId, itemKind) => setResolutionRequest({ progressEntryId, itemKind, key: Date.now() })} /><ProgressResolutionPanel studentId={student.id} mode="student" onChanged={onRefresh} openRequest={resolutionRequest} filterRequest={taskFilterRequest} compact /><DelegatedReviews /></> : null}
 
       {view === "research" ? <>
         <StudentViewIntro id="student-view-research-title" title="我的研究" metric={`${paperReturned + projectReturned}`} metricLabel="项待补充">
