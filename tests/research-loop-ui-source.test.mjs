@@ -64,7 +64,13 @@ test("agent events are polled incrementally with afterSequence", () => {
 });
 
 test("profile, student portal and settings render the research loop", () => {
-  assert.match(overview, /switchTab\("loop"\)\}>科研闭环<\/button>/u);
+  assert.match(overview, /switchTab\("loop"\)\}>代码与实验<\/button>/u);
+  assert.match(overview, /aria-label="代码与实验"/u);
+  assert.doesNotMatch(overview, /科研闭环/u);
+  assert.match(overview, /hash === "research-loop" \|\| \/\^research-\(\?:task\|run\|cr\|attempt\)-\/u\.test\(hash\)/u);
+  assert.match(overview, /guidanceHref=\{\(noteId\) => `#guidance-\$\{noteId\}`\}/u);
+  assert.match(adminPanel, />代码与实验配置<\/h2>/u);
+  assert.doesNotMatch(dashboard, /代码只能由本地模型读取|科研闭环/u);
   assert.match(overview, /sourceGuidanceNoteId: note\.id/u);
   assert.match(overview, />转为研究任务<\/button>/u);
   assert.match(panel, /sourceGuidanceNoteId: creating\.sourceGuidanceNoteId/u);
