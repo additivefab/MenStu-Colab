@@ -49,7 +49,8 @@ export const EGRESS_IMAGE_EXTENSIONS: readonly string[] = [
 export const AGENT_ATTEMPT_TRANSITIONS: Readonly<Record<AgentAttemptStatus, readonly AgentAttemptStatus[]>> = {
   queued: ["running", "cancel_requested", "canceled", "failed"],
   running: ["waiting_approval", "change_ready", "failed", "cancel_requested"],
-  waiting_approval: ["running", "failed", "cancel_requested"],
+  // Plan-first (FB2): an approved plan re-queues the attempt for the edit phase.
+  waiting_approval: ["queued", "running", "failed", "cancel_requested", "canceled"],
   cancel_requested: ["canceled", "failed", "change_ready"],
   change_ready: [],
   failed: [],
@@ -478,6 +479,11 @@ export type AgentClaimResponse =
         /** Opaque profile id; the worker maps it to a local credential dir. */
         credentialProfileId: string;
         baseCommitSha: string;
+        /** FB2: "plan" = return a plan only (no file changes); "edit" = make
+         * changes. Absent means "edit" (attempts without a plan row). */
+        mode?: "plan" | "edit";
+        /** FB2: the human-approved plan the edit phase must follow. */
+        approvedPlan?: string | null;
         task: ResearchTaskSnapshot;
         /** agentContextSnapshotSha256(task, baseCommitSha); workers verify it. */
         contextSnapshotSha256: string;
@@ -523,7 +529,10 @@ export type AgentResultRequest = {
   action: "result";
   attemptId: string;
   leaseEpoch: number;
-  outcome: "change_ready" | "failed" | "canceled";
+  /** FB2: "plan_ready" is valid only in plan mode and carries `plan`, no files. */
+  outcome: "change_ready" | "failed" | "canceled" | "plan_ready";
+  /** FB2: the agent's plan (plain text, ≤ 20 000 chars) for outcome "plan_ready". */
+  plan?: string;
   modelId: string;
   sdkVersion: string;
   files: ChangedFile[];
