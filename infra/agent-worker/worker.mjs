@@ -453,11 +453,14 @@ async function main(argv) {
   const configPath = index >= 0 ? argv[index + 1] : process.env.AGENT_WORKER_CONFIG;
   if (!configPath) throw new Error("usage: worker.mjs --config <config.json>");
   const config = await loadConfig(configPath);
+  // Isolation startup policy (G01): refuses unsafe pilot configs, wires the launcher.
+  const { prepareWorkerIsolation } = await import("./preflight.mjs");
+  const { adapterConfig } = await prepareWorkerIsolation(config, { logger: createLogger(new Redactor()) });
   const workerToken = await readWorkerToken(config);
   const client = createPlatformClient({ platformUrl: config.platformUrl, workerToken });
   const controller = new AbortController();
   for (const sig of ["SIGINT", "SIGTERM"]) process.once(sig, () => controller.abort());
-  await runWorker({ config, client, adapters: createAdapters(config), baseSecrets: [workerToken] }, { signal: controller.signal });
+  await runWorker({ config, client, adapters: createAdapters(adapterConfig), baseSecrets: [workerToken] }, { signal: controller.signal });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
