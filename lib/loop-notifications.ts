@@ -82,7 +82,7 @@ function subject(studentName: string, title: string) {
 }
 
 const RUN_NUMBER = `(SELECT COUNT(*) FROM runs earlier WHERE earlier.task_id = r.task_id
-  AND (earlier.created_at < r.created_at OR (earlier.created_at = r.created_at AND earlier.id <= r.id)))`;
+  AND (earlier.created_at < r.created_at OR (earlier.created_at = r.created_at AND earlier.rowid <= r.rowid)))`;
 
 const REVIEW_STATE_LABELS: Record<string, string> = { accepted: "已验收", rejected: "未通过", needs_followup: "需要跟进" };
 

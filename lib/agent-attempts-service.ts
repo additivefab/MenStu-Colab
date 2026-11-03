@@ -416,8 +416,8 @@ export async function startAgentAttempt(d1: D1Database, user: AppUser, body: Rec
   const attemptId = newId("att");
   const insertAttempt = d1.prepare(`INSERT INTO agent_attempts
       (id, task_id, task_version, student_id, provider, credential_profile_id, github_repository_id, base_commit_sha,
-       context_snapshot_sha256, status, idempotency_key, requested_by_user_id)
-      SELECT ?, id, confirmed_version, student_id, ?, ?, ?, ?, ?, 'queued', ?, ?
+       context_snapshot_sha256, status, idempotency_key, requested_by_user_id, created_at)
+      SELECT ?, id, confirmed_version, student_id, ?, ?, ?, ?, ?, 'queued', ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now')
       FROM research_tasks WHERE id = ? AND status = 'confirmed' AND confirmed_version = ?`)
     .bind(attemptId, provider, profile.id, Number(link.github_repository_id), baseCommitSha, contextSnapshotSha256,
       idempotencyKey, user.id, taskId, Number(task.confirmed_version));

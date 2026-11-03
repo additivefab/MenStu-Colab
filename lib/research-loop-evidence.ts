@@ -118,7 +118,9 @@ function runNumbers(runs: readonly EvidenceRunRow[]) {
   for (const run of runs) byTask.set(run.task_id, [...(byTask.get(run.task_id) ?? []), run]);
   const numbers = new Map<string, number>();
   for (const list of byTask.values()) {
-    list.sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : compareId(a.id, b.id)));
+    // Same-second ties: insertion order (rowid), matching the server-side SQL numbering.
+    list.sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1
+      : typeof a.seq === "number" && typeof b.seq === "number" && a.seq !== b.seq ? a.seq - b.seq : compareId(a.id, b.id)));
     list.forEach((run, index) => numbers.set(run.id, index + 1));
   }
   return numbers;

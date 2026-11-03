@@ -622,8 +622,11 @@ function newRunStatements(d1: D1Database, input: {
   runId: string; sha256: string; taskId: string; studentId: string; key: string; actor: AppUser; payload: Record<string, JsonValue>;
 }) {
   return [
-    d1.prepare(`INSERT INTO runs (id, run_spec_sha256, attempt, task_id, student_id, status, idempotency_key, submit_tag, created_by_user_id)
-      VALUES (?, ?, (SELECT COALESCE(MAX(attempt), 0) + 1 FROM runs WHERE run_spec_sha256 = ?), ?, ?, 'awaiting_approval', ?, ?, ?)`)
+    // created_at in milliseconds: run numbers follow creation order, and
+    // second resolution made same-second runs tie (resolved below by rowid).
+    d1.prepare(`INSERT INTO runs (id, run_spec_sha256, attempt, task_id, student_id, status, idempotency_key, submit_tag, created_by_user_id, created_at)
+      VALUES (?, ?, (SELECT COALESCE(MAX(attempt), 0) + 1 FROM runs WHERE run_spec_sha256 = ?), ?, ?, 'awaiting_approval', ?, ?, ?,
+        strftime('%Y-%m-%d %H:%M:%f', 'now'))`)
       .bind(input.runId, input.sha256, input.sha256, input.taskId, input.studentId, input.key, `tanyan-${input.runId}`, input.actor.id),
     d1.prepare(`INSERT INTO run_events (run_id, sequence, from_status, to_status, actor_type, actor_id, payload_json)
       VALUES (?, 1, '', 'awaiting_approval', 'user', ?, ?)`)
@@ -751,7 +754,7 @@ export async function rerunRun(d1: D1Database, actor: AppUser, body: Record<stri
 /** Per-task creation-order number of the run aliased `alias` (same rule as
  * components/research-loop/numbering.ts: created_at, then id). */
 export const runNumberSql = (alias: string) => `(SELECT COUNT(*) FROM runs rn WHERE rn.task_id = ${alias}.task_id
-  AND (rn.created_at < ${alias}.created_at OR (rn.created_at = ${alias}.created_at AND rn.id <= ${alias}.id)))`;
+  AND (rn.created_at < ${alias}.created_at OR (rn.created_at = ${alias}.created_at AND rn.rowid <= ${alias}.rowid)))`;
 
 /** Same-status audit event (from = to = the run's current status) by a user.
  * `guard` is an extra SQL condition; the event is only written while it holds.

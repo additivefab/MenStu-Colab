@@ -76,13 +76,13 @@ type KindQuery = {
 };
 
 // Run numbers follow components/research-loop/numbering.ts: creation order,
-// ties on id, over every run of the task (rows are never deleted).
+// ties on insertion order (rowid), over every run of the task (rows are never deleted).
 const RUN_NUMBER = `(SELECT COUNT(*) FROM runs earlier WHERE earlier.task_id = r.task_id
-  AND (earlier.created_at < r.created_at OR (earlier.created_at = r.created_at AND earlier.id <= r.id)))`;
+  AND (earlier.created_at < r.created_at OR (earlier.created_at = r.created_at AND earlier.rowid <= r.rowid)))`;
 
 // Agent attempt numbers, same creation-order rule as runs.
 const ATTEMPT_NUMBER = `(SELECT COUNT(*) FROM agent_attempts earlier WHERE earlier.task_id = aa.task_id
-  AND (earlier.created_at < aa.created_at OR (earlier.created_at = aa.created_at AND earlier.id <= aa.id)))`;
+  AND (earlier.created_at < aa.created_at OR (earlier.created_at = aa.created_at AND earlier.rowid <= aa.rowid)))`;
 
 const KIND_QUERIES: KindQuery[] = [
   {
