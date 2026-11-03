@@ -3144,7 +3144,7 @@ function SettingsView({ viewer, onFeishu, students, onRosterImported }: {
     <section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><small>科研闭环需要的仓库授权通过 GitHub App 逐个开通，见“科研闭环配置”；未开通的仓库仍由导师本地工作区管理。</small></div></section>
     <section className="panel setting-card"><PanelHeader title="开源流程参考" subtitle="TUM · Moodle · OSIRIS · eLabFTW" /><div className="setting-body"><p>设计参考了以下开源项目的方案管理、权限和审核流程。</p><div className="reference-links"><a href="https://github.com/ls1intum/thesis-management" target="_blank" rel="noreferrer">TUM</a><a href="https://github.com/moodle/moodle" target="_blank" rel="noreferrer">Moodle</a><a href="https://github.com/OSIRIS-Solutions/osiris" target="_blank" rel="noreferrer">OSIRIS</a><a href="https://github.com/elabftw/elabftw" target="_blank" rel="noreferrer">eLabFTW</a></div></div></section>
     <AccountManagement viewer={viewer} students={students} />
-    <section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section>
+    <section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="A / C / D 分类；C 类于 2026-11-03 按科研闭环决定调整" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>已绑定的科研代码仓库可由授权代码代理（Codex / Claude）在实验室工作进程中按确认的任务读取和修改；专利及保密项目仍仅限本地模型；原始实验数据只能在实验室服务器上计算，不得拷贝，也不发送给任何模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section>
   </div>;
 }
 
