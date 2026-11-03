@@ -1,6 +1,7 @@
 // Run reads, artifact access and result review (docs/科研闭环_实施规格_v1.md §6.3).
 import { canReviewStudent, canViewStudent } from "./authorization";
 import type { AppUser } from "./feishu-auth";
+import { notifyLoopEvent } from "./loop-notifications";
 import {
   HYPOTHESIS_OUTCOMES, REVIEW_STATES, TERMINAL_RUN_STATUSES, type HypothesisOutcome, type ReviewState, type RunStatus,
 } from "./research-loop/contracts.ts";
@@ -227,6 +228,7 @@ async function reviewResult(d1: D1Database, actor: AppUser, body: Record<string,
     WHERE run_id = ? AND version = ?`)
     .bind(state, hypothesisOutcome, note, actor.id, run.id, body.expectedVersion).run();
   if (!updated.meta.changes) throw new RunServiceError(409, "评审已被他人更新，请刷新后重试", "STALE_VERSION");
+  await notifyLoopEvent(d1, { kind: "review_saved", runId: run.id, version: body.expectedVersion + 1, actorUserId: actor.id });
   return { runId: run.id, state, hypothesisOutcome, version: body.expectedVersion + 1 };
 }
 
@@ -275,6 +277,7 @@ async function createFollowup(d1: D1Database, actor: AppUser, body: Record<strin
   const linked = await d1.prepare(`UPDATE result_reviews SET followup_task_id = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP
     WHERE run_id = ? AND followup_task_id IS NULL`).bind(created.taskId, run.id).run();
   const review = await d1.prepare("SELECT followup_task_id FROM result_reviews WHERE run_id = ?").bind(run.id).first<{ followup_task_id: string | null }>();
+  if (!created.replayed) await notifyLoopEvent(d1, { kind: "task_draft", taskId: created.taskId, actorUserId: actor.id });
   return {
     taskId: created.taskId, version: created.version, replayed: created.replayed,
     linkedOnReview: Boolean(linked.meta.changes) || review?.followup_task_id === created.taskId,

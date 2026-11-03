@@ -7,6 +7,7 @@
 // whose attempt they did not request; never extra review.
 import { canReviewStudent, canViewStudent } from "../authorization";
 import type { AppUser } from "../feishu-auth";
+import { notifyLoopEvent } from "../loop-notifications";
 import { canCodeReviewStudent } from "../review-delegation";
 import { LIMITS } from "../research-loop/contracts.ts";
 import { changeObjectKey } from "./publisher.ts";
@@ -223,6 +224,7 @@ export async function approveExtraReview(d1: D1Database, user: AppUser, id: stri
     }
     await explainCasFailure(d1, id, expectedVersion);
   }
+  await notifyLoopEvent(d1, { kind: "change_request", changeRequestId: id, actorUserId: user.id });
 }
 
 export async function rejectChangeRequest(d1: D1Database, user: AppUser, id: string, expectedVersion: number) {

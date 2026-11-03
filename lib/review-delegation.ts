@@ -15,7 +15,7 @@ import type { AppUser } from "./feishu-auth";
 /** Validity of an active delegation row `rd`, checked on every request so
  * revocation (of the delegation, the student, the delegate or the delegator's
  * own review scope) takes effect immediately (T12). */
-const VALID_DELEGATION_SQL = `rd.active = 1
+export const VALID_DELEGATION_SQL = `rd.active = 1
   AND EXISTS (SELECT 1 FROM students s WHERE s.id = rd.student_id AND s.active = 1)
   AND EXISTS (SELECT 1 FROM app_users r WHERE r.id = rd.reviewer_user_id AND r.active = 1 AND r.role <> 'pending'
     AND (r.student_id IS NULL OR r.student_id <> rd.student_id))
