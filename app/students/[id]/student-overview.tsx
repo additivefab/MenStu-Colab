@@ -793,7 +793,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       } else if (hash === "tasks" || hash === "tasks-completed" || hash === "tasks-pending") {
         setTab("tasks"); setTasksVisited(true);
         setTaskFilterRequest({ filter: hash === "tasks-completed" ? "completed" : hash === "tasks-pending" ? "pending" : "open", key: Date.now() });
-      } else if (hash === "research-loop" || hash.startsWith("research-task-")) {
+      } else if (hash === "research-loop" || /^research-(?:task|run|cr|attempt)-/u.test(hash)) {
         setTab("loop"); setLoopVisited(true);
       } else if (hash.startsWith("guidance")) {
         setTab("guidance");
@@ -877,7 +877,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       <button aria-current={tab === "tasks" ? "page" : undefined} onClick={() => switchTab("tasks")}>任务与结果</button>
       <button aria-current={tab === "guidance" ? "page" : undefined} onClick={() => switchTab("guidance")}>指导{openGuidanceCount ? <span>{openGuidanceCount} 进行中</span> : null}</button>
       <button aria-current={tab === "research" ? "page" : undefined} onClick={() => switchTab("research")}>研究资料</button>
-      <button aria-current={tab === "loop" ? "page" : undefined} onClick={() => switchTab("loop")}>科研闭环</button>
+      <button aria-current={tab === "loop" ? "page" : undefined} onClick={() => switchTab("loop")}>代码与实验</button>
     </nav>
     {error ? <p className="sw-message" role="alert">{error} <button onClick={() => void load()}>重试</button></p> : null}
     {detailsLoading ? <p className="sw-muted" role="status">正在读取指导记录和科研成果…</p> : null}
@@ -918,8 +918,8 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       {tasksVisited ? <ProgressResolutionPanel studentId={studentId} mode="staff" openRequest={taskOpenRequest} filterRequest={taskFilterRequest} refreshKey={aiRefreshKey} onChanged={load} /> : null}
     </section>
 
-    <section id="sw-loop" tabIndex={-1} hidden={tab !== "loop"} aria-label="科研闭环">
-      {loopVisited ? <ResearchLoopPanel studentId={studentId} mode={viewerRole === "student" ? "student" : "staff"} prefill={loopPrefill} /> : null}
+    <section id="sw-loop" tabIndex={-1} hidden={tab !== "loop"} aria-label="代码与实验">
+      {loopVisited ? <ResearchLoopPanel studentId={studentId} mode={viewerRole === "student" ? "student" : "staff"} prefill={loopPrefill} guidanceHref={(noteId) => `#guidance-${noteId}`} /> : null}
     </section>
 
     <section id="sw-guidance" tabIndex={-1} hidden={tab !== "guidance"} className="sw-panel" aria-label="指导">

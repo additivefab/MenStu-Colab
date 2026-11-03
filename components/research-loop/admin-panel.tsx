@@ -316,7 +316,7 @@ function ProfileSection() {
 export function ResearchLoopAdmin({ students }: { students: StudentOption[] }) {
   return <section className={styles.admin} aria-labelledby="loop-admin-title">
     <header className={styles.panelHead}>
-      <div><h2 id="loop-admin-title">科研闭环配置</h2><p>GitHub 仓库授权、实验室执行器与数据、代理凭据档案</p></div>
+      <div><h2 id="loop-admin-title">代码与实验配置</h2><p>GitHub 仓库授权、实验室执行器与数据、代理凭据档案</p></div>
     </header>
     <GithubSection />
     <LabSection students={students} />
