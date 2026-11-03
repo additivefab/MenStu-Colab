@@ -994,3 +994,403 @@ export const localLoginRollouts = sqliteTable("local_login_rollouts", {
   rolloutKey: text("rollout_key").primaryKey(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+// ---------------------------------------------------------------------------
+// Schema 26: research loop (task → agent attempt → change request → run →
+// result review). Contract: docs/科研闭环_实施规格_v1.md. All tables below are
+// created only by Drizzle migration 0026; runtime never invents them.
+// ---------------------------------------------------------------------------
+
+const AGENT_PROVIDERS = sql`('codex', 'claude', 'deepseek')`;
+
+export const researchTasks = sqliteTable("research_tasks", {
+  id: text("id").primaryKey(),
+  studentId: text("student_id").notNull().references(() => students.id),
+  sourceGuidanceNoteId: integer("source_guidance_note_id").references(() => studentGuidanceNotes.id),
+  sourceRunId: text("source_run_id"),
+  parentTaskId: text("parent_task_id"),
+  title: text("title").notNull(),
+  status: text("status").notNull().default("draft"),
+  currentVersion: integer("current_version").notNull().default(1),
+  confirmedVersion: integer("confirmed_version"),
+  createdByUserId: integer("created_by_user_id").notNull().references(() => appUsers.id),
+  lastMutationId: text("last_mutation_id").notNull().unique(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("research_task_status", sql`${table.status} IN ('draft', 'confirmed', 'closed', 'canceled')`),
+  check("research_task_version", sql`${table.currentVersion} >= 1`),
+  index("idx_research_tasks_student").on(table.studentId, table.updatedAt),
+]);
+
+export const researchTaskVersions = sqliteTable("research_task_versions", {
+  taskId: text("task_id").notNull().references(() => researchTasks.id),
+  version: integer("version").notNull(),
+  researchQuestion: text("research_question").notNull(),
+  hypothesis: text("hypothesis").notNull().default(""),
+  instructions: text("instructions").notNull(),
+  acceptanceCriteria: text("acceptance_criteria").notNull(),
+  allowedPathsJson: text("allowed_paths_json").notNull().default("[]"),
+  protectedPathsJson: text("protected_paths_json").notNull().default("[]"),
+  budgetJson: text("budget_json").notNull().default("{}"),
+  snapshotSha256: text("snapshot_sha256").notNull(),
+  authorUserId: integer("author_user_id").notNull().references(() => appUsers.id),
+  confirmedByUserId: integer("confirmed_by_user_id").references(() => appUsers.id),
+  confirmedAt: text("confirmed_at"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("idx_research_task_versions_pk").on(table.taskId, table.version),
+  check("research_task_versions_version", sql`${table.version} >= 1`),
+]);
+
+export const researchTaskEvents = sqliteTable("research_task_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  taskId: text("task_id").notNull().references(() => researchTasks.id),
+  version: integer("version").notNull(),
+  action: text("action").notNull(),
+  actorType: text("actor_type").notNull(),
+  actorUserId: integer("actor_user_id").references(() => appUsers.id),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("research_task_event_action", sql`${table.action} IN ('created', 'revised', 'confirmed', 'closed', 'canceled')`),
+  check("research_task_event_actor", sql`${table.actorType} IN ('user', 'system')`),
+  index("idx_research_task_events_task").on(table.taskId, table.id),
+]);
+
+export const githubInstallations = sqliteTable("github_installations", {
+  installationId: integer("installation_id").primaryKey(),
+  accountLogin: text("account_login").notNull(),
+  accountType: text("account_type").notNull(),
+  repositorySelection: text("repository_selection").notNull().default("selected"),
+  status: text("status").notNull().default("active"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("github_installation_status", sql`${table.status} IN ('active', 'suspended', 'deleted')`),
+  check("github_installation_selection", sql`${table.repositorySelection} IN ('all', 'selected')`),
+]);
+
+// Verified GitHub identity for a student's bound repository. Clients never send
+// repository IDs; the server resolves them from this row.
+export const repositoryLinks = sqliteTable("repository_links", {
+  studentId: text("student_id").primaryKey().references(() => students.id),
+  githubRepositoryId: integer("github_repository_id").notNull(),
+  installationId: integer("installation_id").notNull().references(() => githubInstallations.installationId),
+  fullName: text("full_name").notNull(),
+  defaultBranch: text("default_branch").notNull(),
+  status: text("status").notNull().default("active"),
+  verifiedByUserId: integer("verified_by_user_id").references(() => appUsers.id),
+  verifiedAt: text("verified_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("repository_link_status", sql`${table.status} IN ('active', 'revoked')`),
+  index("idx_repository_links_repository").on(table.githubRepositoryId),
+]);
+
+export const githubWebhookDeliveries = sqliteTable("github_webhook_deliveries", {
+  deliveryId: text("delivery_id").primaryKey(),
+  event: text("event").notNull(),
+  action: text("action").notNull().default(""),
+  installationId: integer("installation_id"),
+  repositoryId: integer("repository_id"),
+  payloadSha256: text("payload_sha256").notNull(),
+  summaryJson: text("summary_json").notNull().default("{}"),
+  origin: text("origin").notNull().default("external"),
+  status: text("status").notNull().default("received"),
+  error: text("error").notNull().default(""),
+  receivedAt: text("received_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  processedAt: text("processed_at"),
+}, (table) => [
+  check("github_webhook_origin", sql`${table.origin} IN ('external', 'platform_echo')`),
+  check("github_webhook_status", sql`${table.status} IN ('received', 'processed', 'ignored', 'failed')`),
+  index("idx_github_webhook_status").on(table.status, table.receivedAt),
+]);
+
+export const labRunners = sqliteTable("lab_runners", {
+  id: text("id").primaryKey(),
+  label: text("label").notNull(),
+  kind: text("kind").notNull(),
+  tokenSha256: text("token_sha256").notNull().unique(),
+  status: text("status").notNull().default("active"),
+  lastSeenAt: text("last_seen_at"),
+  createdByUserId: integer("created_by_user_id").references(() => appUsers.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("lab_runner_kind", sql`${table.kind} IN ('compute', 'agent')`),
+  check("lab_runner_status", sql`${table.status} IN ('active', 'disabled')`),
+]);
+
+// Maps a platform user to a subscription credential profile that exists only on
+// an agent worker. The platform never stores the credential itself.
+export const agentCredentialProfiles = sqliteTable("agent_credential_profiles", {
+  id: text("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => appUsers.id),
+  provider: text("provider").notNull(),
+  workerId: text("worker_id").notNull().references(() => labRunners.id),
+  active: integer("active").notNull().default(1),
+  createdByUserId: integer("created_by_user_id").references(() => appUsers.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("agent_credential_provider", sql`${table.provider} IN ${AGENT_PROVIDERS}`),
+  check("agent_credential_active", sql`${table.active} IN (0, 1)`),
+  uniqueIndex("idx_agent_credential_user_provider").on(table.userId, table.provider),
+]);
+
+export const agentAttempts = sqliteTable("agent_attempts", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull().references(() => researchTasks.id),
+  taskVersion: integer("task_version").notNull(),
+  studentId: text("student_id").notNull().references(() => students.id),
+  provider: text("provider").notNull(),
+  modelId: text("model_id").notNull().default(""),
+  sdkVersion: text("sdk_version").notNull().default(""),
+  credentialProfileId: text("credential_profile_id").notNull().references(() => agentCredentialProfiles.id),
+  githubRepositoryId: integer("github_repository_id").notNull(),
+  baseCommitSha: text("base_commit_sha").notNull(),
+  contextSnapshotSha256: text("context_snapshot_sha256").notNull(),
+  status: text("status").notNull().default("queued"),
+  workerId: text("worker_id").references(() => labRunners.id),
+  leaseEpoch: integer("lease_epoch").notNull().default(0),
+  leaseExpiresAt: text("lease_expires_at"),
+  heartbeatAt: text("heartbeat_at"),
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  diffSha256: text("diff_sha256"),
+  diffR2Key: text("diff_r2_key"),
+  changedPathsJson: text("changed_paths_json").notNull().default("[]"),
+  testsJson: text("tests_json").notNull().default("[]"),
+  usageJson: text("usage_json").notNull().default("{}"),
+  errorCode: text("error_code").notNull().default(""),
+  errorMessage: text("error_message").notNull().default(""),
+  requestedByUserId: integer("requested_by_user_id").notNull().references(() => appUsers.id),
+  cancelRequestedAt: text("cancel_requested_at"),
+  cancelRequestedByUserId: integer("cancel_requested_by_user_id").references(() => appUsers.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  startedAt: text("started_at"),
+  endedAt: text("ended_at"),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("agent_attempt_provider", sql`${table.provider} IN ${AGENT_PROVIDERS}`),
+  check("agent_attempt_status", sql`${table.status} IN ('queued', 'running', 'waiting_approval', 'change_ready', 'failed', 'cancel_requested', 'canceled')`),
+  check("agent_attempt_sha", sql`length(${table.baseCommitSha}) = 40`),
+  index("idx_agent_attempts_task").on(table.taskId, table.createdAt),
+  index("idx_agent_attempts_queue").on(table.status, table.createdAt),
+]);
+
+export const agentAttemptEvents = sqliteTable("agent_attempt_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  attemptId: text("attempt_id").notNull().references(() => agentAttempts.id),
+  sequence: integer("sequence").notNull(),
+  kind: text("kind").notNull(),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("idx_agent_attempt_events_seq").on(table.attemptId, table.sequence),
+]);
+
+export const changeRequests = sqliteTable("change_requests", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull().references(() => researchTasks.id),
+  attemptId: text("attempt_id").notNull().unique().references(() => agentAttempts.id),
+  studentId: text("student_id").notNull().references(() => students.id),
+  githubRepositoryId: integer("github_repository_id").notNull(),
+  baseCommitSha: text("base_commit_sha").notNull(),
+  branchName: text("branch_name").notNull(),
+  headCommitSha: text("head_commit_sha"),
+  prNumber: integer("pr_number"),
+  prUrl: text("pr_url").notNull().default(""),
+  status: text("status").notNull().default("pending_review"),
+  requiresExtraReview: integer("requires_extra_review").notNull().default(0),
+  extraReviewApprovedByUserId: integer("extra_review_approved_by_user_id").references(() => appUsers.id),
+  extraReviewApprovedAt: text("extra_review_approved_at"),
+  publishedByUserId: integer("published_by_user_id").references(() => appUsers.id),
+  version: integer("version").notNull().default(1),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("change_request_status", sql`${table.status} IN ('pending_review', 'publishing', 'open', 'merged', 'closed', 'rejected', 'failed')`),
+  check("change_request_extra_review", sql`${table.requiresExtraReview} IN (0, 1)`),
+  uniqueIndex("idx_change_requests_branch").on(table.githubRepositoryId, table.branchName),
+  index("idx_change_requests_pr").on(table.githubRepositoryId, table.prNumber),
+]);
+
+export const registeredEntrypoints = sqliteTable("registered_entrypoints", {
+  id: text("id").primaryKey(),
+  githubRepositoryId: integer("github_repository_id").notNull(),
+  name: text("name").notNull(),
+  argvJson: text("argv_json").notNull(),
+  paramsSchemaJson: text("params_schema_json").notNull().default("{}"),
+  imageRef: text("image_ref").notNull(),
+  evaluationProtocolSha256: text("evaluation_protocol_sha256").notNull().default(""),
+  active: integer("active").notNull().default(1),
+  createdByUserId: integer("created_by_user_id").notNull().references(() => appUsers.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("registered_entrypoint_active", sql`${table.active} IN (0, 1)`),
+  index("idx_registered_entrypoints_repository").on(table.githubRepositoryId),
+]);
+
+export const datasetVersions = sqliteTable("dataset_versions", {
+  id: text("id").primaryKey(),
+  label: text("label").notNull(),
+  runnerId: text("runner_id").notNull().references(() => labRunners.id),
+  manifestSha256: text("manifest_sha256").notNull(),
+  splitManifestSha256: text("split_manifest_sha256").notNull().default(""),
+  egressPolicyJson: text("egress_policy_json").notNull(),
+  active: integer("active").notNull().default(1),
+  createdByUserId: integer("created_by_user_id").notNull().references(() => appUsers.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("dataset_version_active", sql`${table.active} IN (0, 1)`),
+]);
+
+// Compute permission only: a grant lets a student's approved runs read the
+// dataset on the lab runner. It never grants download, copy, or model egress.
+export const datasetGrants = sqliteTable("dataset_grants", {
+  datasetVersionId: text("dataset_version_id").notNull().references(() => datasetVersions.id),
+  studentId: text("student_id").notNull().references(() => students.id),
+  grantedByUserId: integer("granted_by_user_id").notNull().references(() => appUsers.id),
+  grantedAt: text("granted_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  revokedAt: text("revoked_at"),
+  revokedByUserId: integer("revoked_by_user_id").references(() => appUsers.id),
+}, (table) => [
+  uniqueIndex("idx_dataset_grants_pk").on(table.datasetVersionId, table.studentId),
+]);
+
+export const runSpecs = sqliteTable("run_specs", {
+  sha256: text("sha256").primaryKey(),
+  canonicalJson: text("canonical_json").notNull(),
+  taskId: text("task_id").notNull().references(() => researchTasks.id),
+  taskVersion: integer("task_version").notNull(),
+  studentId: text("student_id").notNull().references(() => students.id),
+  githubRepositoryId: integer("github_repository_id").notNull(),
+  executedCommitSha: text("executed_commit_sha").notNull(),
+  entrypointId: text("entrypoint_id").notNull().references(() => registeredEntrypoints.id),
+  datasetVersionId: text("dataset_version_id").notNull().references(() => datasetVersions.id),
+  changeRequestId: text("change_request_id").references(() => changeRequests.id),
+  createdByUserId: integer("created_by_user_id").notNull().references(() => appUsers.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("run_spec_sha", sql`length(${table.executedCommitSha}) = 40`),
+  index("idx_run_specs_task").on(table.taskId, table.createdAt),
+]);
+
+export const runApprovals = sqliteTable("run_approvals", {
+  id: text("id").primaryKey(),
+  runSpecSha256: text("run_spec_sha256").notNull().references(() => runSpecs.sha256),
+  approvedByUserId: integer("approved_by_user_id").notNull().references(() => appUsers.id),
+  note: text("note").notNull().default(""),
+  approvedAt: text("approved_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  revokedAt: text("revoked_at"),
+  revokedByUserId: integer("revoked_by_user_id").references(() => appUsers.id),
+}, (table) => [
+  index("idx_run_approvals_spec").on(table.runSpecSha256, table.approvedAt),
+]);
+
+export const runs = sqliteTable("runs", {
+  id: text("id").primaryKey(),
+  runSpecSha256: text("run_spec_sha256").notNull().references(() => runSpecs.sha256),
+  attempt: integer("attempt").notNull().default(1),
+  approvalId: text("approval_id").references(() => runApprovals.id),
+  taskId: text("task_id").notNull().references(() => researchTasks.id),
+  studentId: text("student_id").notNull().references(() => students.id),
+  status: text("status").notNull().default("awaiting_approval"),
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  submitTag: text("submit_tag").notNull().unique(),
+  runnerId: text("runner_id").references(() => labRunners.id),
+  leaseEpoch: integer("lease_epoch").notNull().default(0),
+  leaseExpiresAt: text("lease_expires_at"),
+  heartbeatAt: text("heartbeat_at"),
+  schedulerJobId: text("scheduler_job_id"),
+  exitCode: integer("exit_code"),
+  failureReason: text("failure_reason").notNull().default(""),
+  cancelRequestedAt: text("cancel_requested_at"),
+  cancelRequestedByUserId: integer("cancel_requested_by_user_id").references(() => appUsers.id),
+  createdByUserId: integer("created_by_user_id").notNull().references(() => appUsers.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  queuedAt: text("queued_at"),
+  startedAt: text("started_at"),
+  endedAt: text("ended_at"),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("run_status", sql`${table.status} IN ('awaiting_approval', 'queued', 'dispatching', 'running', 'collecting', 'completed', 'failed', 'cancel_requested', 'canceled', 'reconciling')`),
+  check("run_attempt", sql`${table.attempt} >= 1`),
+  uniqueIndex("idx_runs_spec_attempt").on(table.runSpecSha256, table.attempt),
+  index("idx_runs_queue").on(table.status, table.queuedAt),
+  index("idx_runs_task").on(table.taskId, table.createdAt),
+]);
+
+export const runEvents = sqliteTable("run_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  runId: text("run_id").notNull().references(() => runs.id),
+  sequence: integer("sequence").notNull(),
+  fromStatus: text("from_status").notNull().default(""),
+  toStatus: text("to_status").notNull(),
+  actorType: text("actor_type").notNull(),
+  actorId: text("actor_id").notNull().default(""),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("run_event_actor", sql`${table.actorType} IN ('user', 'runner', 'system')`),
+  uniqueIndex("idx_run_events_seq").on(table.runId, table.sequence),
+]);
+
+export const runArtifacts = sqliteTable("run_artifacts", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => runs.id),
+  relativePath: text("relative_path").notNull(),
+  sha256: text("sha256").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  kind: text("kind").notNull(),
+  egressDecision: text("egress_decision").notNull(),
+  egressReason: text("egress_reason").notNull().default(""),
+  r2Key: text("r2_key"),
+  labLocator: text("lab_locator").notNull().default(""),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("run_artifact_kind", sql`${table.kind} IN ('metrics', 'figure', 'table', 'log', 'model', 'other')`),
+  check("run_artifact_egress", sql`${table.egressDecision} IN ('published', 'held', 'rejected')`),
+  check("run_artifact_size", sql`${table.sizeBytes} >= 0`),
+  uniqueIndex("idx_run_artifacts_path").on(table.runId, table.relativePath),
+]);
+
+export const runResults = sqliteTable("run_results", {
+  runId: text("run_id").primaryKey().references(() => runs.id),
+  manifestSha256: text("manifest_sha256").notNull(),
+  manifestJson: text("manifest_json").notNull(),
+  metricsJson: text("metrics_json"),
+  metricsSourceArtifactId: text("metrics_source_artifact_id").references(() => runArtifacts.id),
+  technicalValidity: text("technical_validity").notNull().default("unknown"),
+  validityNotes: text("validity_notes").notNull().default(""),
+  reportCommitSha: text("report_commit_sha"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("run_result_validity", sql`${table.technicalValidity} IN ('valid', 'invalid', 'unknown')`),
+]);
+
+export const resultReviews = sqliteTable("result_reviews", {
+  runId: text("run_id").primaryKey().references(() => runs.id),
+  state: text("state").notNull().default("pending"),
+  hypothesisOutcome: text("hypothesis_outcome").notNull().default("not_assessed"),
+  reviewerUserId: integer("reviewer_user_id").references(() => appUsers.id),
+  note: text("note").notNull().default(""),
+  followupTaskId: text("followup_task_id").references(() => researchTasks.id),
+  version: integer("version").notNull().default(1),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("result_review_state", sql`${table.state} IN ('pending', 'accepted', 'rejected', 'needs_followup')`),
+  check("result_review_hypothesis", sql`${table.hypothesisOutcome} IN ('not_assessed', 'supported', 'not_supported', 'inconclusive', 'not_applicable')`),
+]);
+
+export const resultComments = sqliteTable("result_comments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  runId: text("run_id").notNull().references(() => runs.id),
+  authorUserId: integer("author_user_id").notNull().references(() => appUsers.id),
+  parentCommentId: integer("parent_comment_id"),
+  body: text("body").notNull(),
+  requestId: text("request_id").notNull().unique(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  deletedAt: text("deleted_at"),
+}, (table) => [
+  index("idx_result_comments_run").on(table.runId, table.id),
+]);

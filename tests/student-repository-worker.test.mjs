@@ -98,7 +98,7 @@ test("repository bindings enforce student scope, retain revisions, and stay inde
       });
       assert.ok(data.binding.updatedAt);
       assert.deepEqual(await businessSnapshot(), before);
-      assert.equal((await db.prepare("SELECT version FROM app_schema_meta WHERE id=1").first()).version, 25);
+      assert.equal((await db.prepare("SELECT version FROM app_schema_meta WHERE id=1").first()).version, 26);
       for (let i = 0; i < 3; i += 1) await expectJson(await get("student-010", "owner"));
       assert.equal((await db.prepare("SELECT count(*) AS n FROM student_repository_events WHERE student_id='student-010'").first()).n, 1);
     });
@@ -219,7 +219,7 @@ test("repository tables require deployment migrations and runtime upgrades prese
       const recovered = await mf.dispatchFetch("http://localhost/api/health/ready");
       const readiness = await recovered.json();
       assert.equal(readiness.checks.find((check) => check.id === "schema")?.status, "pass", JSON.stringify(readiness));
-      assert.equal((await db.prepare("SELECT version FROM app_schema_meta WHERE id=1").first()).version, 25);
+      assert.equal((await db.prepare("SELECT version FROM app_schema_meta WHERE id=1").first()).version, 26);
       assert.equal((await db.prepare("SELECT count(*) AS n FROM student_repository_bindings").first()).n, 0);
       assert.deepEqual((await db.prepare("PRAGMA foreign_key_check").all()).results, []);
     } finally { await mf.dispose(); }
