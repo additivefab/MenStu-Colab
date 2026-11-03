@@ -307,7 +307,9 @@ async function main() {
   async function storeChange(attemptId, files, unifiedDiff) {
     const normalized = [];
     for (const file of [...files].sort((a, b) => (a.path < b.path ? -1 : 1))) {
-      normalized.push({ path: file.path, action: "modify", mode: "100644", contentBase64: Buffer.from(file.content).toString("base64"), sha256: await sha256Hex(file.content) });
+      // A file the diff creates from /dev/null is an "add"; everything else a "modify".
+      const action = file.action ?? (unifiedDiff?.includes(`--- /dev/null\n+++ b/${file.path}\n`) ? "add" : "modify");
+      normalized.push({ path: file.path, action, mode: "100644", contentBase64: Buffer.from(file.content).toString("base64"), sha256: await sha256Hex(file.content) });
     }
     const changeJson = canonicalJson({ files: normalized, unifiedDiff });
     const key = `agent-attempts/${attemptId}/change.json`;
