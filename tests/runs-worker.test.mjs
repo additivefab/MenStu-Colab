@@ -75,11 +75,11 @@ test("run registry: approval binding, lab lease protocol, egress and result revi
     await db.prepare(`INSERT INTO repository_links(student_id, github_repository_id, installation_id, full_name, default_branch) VALUES
       ('rs-a', 5001, 77, 'synthetic-lab/a-research', 'main'), ('rs-b', 5002, 77, 'synthetic-lab/b-research', 'main')`).run();
     for (const [taskId, studentId, userId] of [["task_rsa", "rs-a", 1101], ["task_rsb", "rs-b", 1102]]) {
-      await db.prepare(`INSERT INTO research_tasks(id, student_id, title, status, current_version, confirmed_version, created_by_user_id, last_mutation_id)
-        VALUES (?, ?, '合成任务', 'confirmed', 1, 1, ?, ?)`).bind(taskId, studentId, userId, `seed-${taskId}`).run();
-      await db.prepare(`INSERT INTO research_task_versions(task_id, version, research_question, instructions, acceptance_criteria,
+      await db.prepare(`INSERT INTO research_tasks(id, student_id, title, status, current_version, confirmed_version, created_by_user_id, create_mutation_id, last_mutation_id)
+        VALUES (?, ?, '合成任务', 'confirmed', 1, 1, ?, ?, ?)`).bind(taskId, studentId, userId, `seed-${taskId}`, `seed-${taskId}`).run();
+      await db.prepare(`INSERT INTO research_task_versions(task_id, version, title, research_question, instructions, acceptance_criteria,
         budget_json, snapshot_sha256, author_user_id, confirmed_by_user_id, confirmed_at)
-        VALUES (?, 1, '合成问题', '合成说明', '合成标准', '{"maxGpuCount":2,"maxWalltimeMinutes":600}', ?, ?, ?, CURRENT_TIMESTAMP)`)
+        VALUES (?, 1, '合成任务', '合成问题', '合成说明', '合成标准', '{"maxGpuCount":2,"maxWalltimeMinutes":600}', ?, ?, ?, CURRENT_TIMESTAMP)`)
         .bind(taskId, "d".repeat(64), userId, userId).run();
     }
     // A published change request (normally produced by W3 + W2).

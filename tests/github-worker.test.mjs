@@ -258,12 +258,12 @@ test("simulated GitHub: App auth, webhooks, links and the trusted publisher", { 
       const attemptId = `att_${suffix}`;
       const id = `cr_${suffix}`;
       const branch = `tanyan/t${suffix}/a${suffix}`;
-      await db.prepare(`INSERT INTO research_tasks(id, student_id, title, status, current_version, confirmed_version, created_by_user_id, last_mutation_id)
-        VALUES (?, ?, ?, 'confirmed', 1, 1, ?, ?)`).bind(taskId, studentId, `改进训练脚本 ${suffix}`, requester, `mut_${suffix}`).run();
-      await db.prepare(`INSERT INTO research_task_versions(task_id, version, research_question, instructions, acceptance_criteria,
+      await db.prepare(`INSERT INTO research_tasks(id, student_id, title, status, current_version, confirmed_version, created_by_user_id, create_mutation_id, last_mutation_id)
+        VALUES (?, ?, ?, 'confirmed', 1, 1, ?, ?, ?)`).bind(taskId, studentId, `改进训练脚本 ${suffix}`, requester, `mut_${suffix}`, `mut_${suffix}`).run();
+      await db.prepare(`INSERT INTO research_task_versions(task_id, version, title, research_question, instructions, acceptance_criteria,
         allowed_paths_json, protected_paths_json, snapshot_sha256, author_user_id, confirmed_by_user_id, confirmed_at)
-        VALUES (?, 1, '问题', '说明', '验收', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`)
-        .bind(taskId, JSON.stringify(allowed), JSON.stringify([".github/**", "evaluation/**"]), "e".repeat(64), requester, requester).run();
+        VALUES (?, 1, ?, '问题', '说明', '验收', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`)
+        .bind(taskId, `改进训练脚本 ${suffix}`, JSON.stringify(allowed), JSON.stringify([".github/**", "evaluation/**"]), "e".repeat(64), requester, requester).run();
       await db.prepare(`INSERT INTO agent_attempts(id, task_id, task_version, student_id, provider, model_id, credential_profile_id,
         github_repository_id, base_commit_sha, context_snapshot_sha256, status, idempotency_key, requested_by_user_id)
         VALUES (?, ?, 1, ?, 'codex', 'gpt-5-codex', ?, ?, ?, ?, 'change_ready', ?, ?)`)
