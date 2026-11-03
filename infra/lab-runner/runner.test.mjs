@@ -208,7 +208,9 @@ test("source code never uses a shell or exec-style APIs", () => {
 
 test("walltime exceeded: job stopped, run failed with evidence (T16)", async (t) => {
   const env = await setup(t);
-  const spec = makeSpec({ sha: env.repo.sha, dataset: env.dataset, params: { mode: "sleep" }, resources: { gpuCount: 0, walltimeMinutes: 0.02, memoryGb: 1 } });
+  const spec = makeSpec({ sha: env.repo.sha, dataset: env.dataset, params: { mode: "sleep" }, resources: { gpuCount: 0, walltimeMinutes: 0.06, memoryGb: 1 } });
+  // ~3.6 s: long enough for the entry script to start and write its partial
+  // evidence even when the whole suite runs in parallel, short enough to test T16.
   const work = makeWork({ spec });
   env.platform.enqueue(work);
   const started = Date.now();
