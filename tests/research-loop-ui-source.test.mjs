@@ -60,7 +60,7 @@ test("failed attempts and runs stay visible with their reason", () => {
 test("agent events are polled incrementally with afterSequence", () => {
   assert.match(attemptCard, /afterSequence=\$\{after\.current\}/u);
   assert.match(attemptCard, /after\.current = payload\.nextAfterSequence/u);
-  assert.match(attemptCard, /window\.setInterval/u);
+  assert.match(attemptCard, /usePolling\(poll, \{ active: open && live/u);
 });
 
 test("profile, student portal and settings render the research loop", () => {
