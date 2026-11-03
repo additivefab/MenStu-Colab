@@ -1,5 +1,6 @@
 import { canReviewStudent, canViewStudent } from "./authorization";
 import type { AppUser } from "./feishu-auth";
+import { canCodeReviewStudent } from "./review-delegation";
 import {
   taskSnapshotSha256, type ResearchTaskSnapshot, type ResearchTaskStatus, type TaskBudget,
 } from "./research-loop/contracts";
@@ -149,6 +150,19 @@ export async function requireVisibleTask(d1: D1Database, user: AppUser, taskId: 
   return task;
 }
 
+/** Read-only access to a student's research-loop tasks: viewers of the
+ * student, plus delegated peer code reviewers (FB1). Never used for writes. */
+export async function canReadStudentTasks(d1: D1Database, user: AppUser, studentId: string) {
+  return (await canViewStudent(user, studentId)) || canCodeReviewStudent(d1, user, studentId);
+}
+
+/** Like requireVisibleTask but also admits delegated peer reviewers. Reads only. */
+export async function requireReadableTask(d1: D1Database, user: AppUser, taskId: string) {
+  const task = await readTaskRow(d1, taskId);
+  if (!task || !(await canReadStudentTasks(d1, user, task.student_id))) throw notFoundError("研究任务不存在或无权查看");
+  return task;
+}
+
 /** Owner student (student persona) or a reviewer in scope may confirm/close. */
 export async function canDecideTask(user: AppUser, studentId: string) {
   if (user.role === "student" && user.studentId === studentId) return true;
@@ -207,7 +221,9 @@ export async function listResearchTasks(d1: D1Database, studentId: string) {
 }
 
 export async function researchTaskDetail(d1: D1Database, user: AppUser, taskId: string) {
-  const task = await requireVisibleTask(d1, user, taskId);
+  // Delegated peer reviewers may read; every permission below still derives
+  // from canViewStudent / canDecideTask, so they stay false for them.
+  const task = await requireReadableTask(d1, user, taskId);
   const [versions, events, attempts, changeRequests, profiles] = await Promise.all([
     d1.prepare("SELECT * FROM research_task_versions WHERE task_id = ? ORDER BY version").bind(taskId).all<VersionRow>(),
     d1.prepare("SELECT * FROM research_task_events WHERE task_id = ? ORDER BY id").bind(taskId).all<EventRow>(),
