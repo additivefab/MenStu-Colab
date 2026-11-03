@@ -2,15 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MentorOverviewResponse, OverviewState } from "../../lib/dashboard-overview/types";
-import { OverviewFilters, type OverviewDegreeFilter } from "./overview-filters";
+import { OverviewFilters, type OverviewDegreeFilter, type OverviewLoopFilter } from "./overview-filters";
 import { OverviewMetrics } from "./overview-metrics";
 import { OverviewMobileList } from "./overview-mobile-list";
 import { OverviewTable } from "./overview-table";
-import { parseOverviewUrl, sortOverviewStudents } from "./overview-view-model";
+import { matchesOverviewLoopFilter, overviewHasLoopCounts, parseOverviewUrl, sortOverviewStudents } from "./overview-view-model";
 import { StudentOverviewDrawer } from "./student-overview-drawer";
 
 function readOverviewUrl() {
-  if (typeof window === "undefined") return { state: "all" as const, degree: "all" as const, studentId: null as string | null };
+  if (typeof window === "undefined") return { state: "all" as const, degree: "all" as const, loop: "all" as const, studentId: null as string | null };
   return parseOverviewUrl(window.location.href);
 }
 
@@ -22,6 +22,7 @@ export function MentorGroupOverview({ query, onQueryChange, refreshRequest, acti
   const [error, setError] = useState("");
   const [stateFilter, setStateFilter] = useState<OverviewState | "all">(initial.state);
   const [degreeFilter, setDegreeFilter] = useState<OverviewDegreeFilter>(initial.degree);
+  const [loopFilter, setLoopFilter] = useState<OverviewLoopFilter>(initial.loop);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(initial.studentId);
   const hasData = useRef(false);
   const requestSequence = useRef(0);
@@ -70,6 +71,7 @@ export function MentorGroupOverview({ query, onQueryChange, refreshRequest, acti
       const next = readOverviewUrl();
       setStateFilter(next.state);
       setDegreeFilter(next.degree);
+      setLoopFilter(next.loop);
       setSelectedStudentId(next.studentId);
     };
     onPopState();
@@ -92,6 +94,7 @@ export function MentorGroupOverview({ query, onQueryChange, refreshRequest, acti
     return data.students
       .filter((student) => stateFilter === "all" || student.primaryState === stateFilter)
       .filter((student) => degreeFilter === "all" || (degreeFilter === "phd" ? student.degreeLevel === "博士" : student.degreeLevel === "硕士"))
+      .filter((student) => matchesOverviewLoopFilter(student, loopFilter))
       .filter((student) => {
         if (!normalized) return true;
         const searchable = [
@@ -107,7 +110,8 @@ export function MentorGroupOverview({ query, onQueryChange, refreshRequest, acti
         return searchable.includes(normalized);
       })
       .sort(sortOverviewStudents);
-  }, [data, degreeFilter, query, stateFilter]);
+  }, [data, degreeFilter, loopFilter, query, stateFilter]);
+  const hasLoopCounts = useMemo(() => overviewHasLoopCounts(data?.students ?? []), [data]);
 
   const selected = data?.students.find((student) => student.studentId === selectedStudentId) ?? null;
   const openStudent = useCallback((studentId: string) => {
@@ -127,6 +131,7 @@ export function MentorGroupOverview({ query, onQueryChange, refreshRequest, acti
   }, [selectedStudentId, updateUrl]);
   const setState = (state: OverviewState | "all") => { setStateFilter(state); updateUrl({ state }); };
   const setDegree = (degree: OverviewDegreeFilter) => { setDegreeFilter(degree); updateUrl({ degree }); };
+  const setLoop = (loop: OverviewLoopFilter) => { setLoopFilter(loop); updateUrl({ loop }); };
 
   if (loading && !data) return <section className="group-overview-loading" aria-live="polite"><span /><strong>正在读取学生进度</strong><small></small></section>;
   if (error && !data) return <section className="group-overview-error" role="alert"><span>!</span><strong>全组进度暂时没有加载出来</strong><p>{error}</p><button type="button" onClick={() => void load()}>重新读取</button></section>;
@@ -139,19 +144,22 @@ export function MentorGroupOverview({ query, onQueryChange, refreshRequest, acti
         query={query}
         state={stateFilter}
         degree={degreeFilter}
+        loop={loopFilter}
+        showLoopFilter={hasLoopCounts}
         visibleCount={filtered.length}
         total={data.total}
         onQueryChange={onQueryChange}
         onStateChange={setState}
         onDegreeChange={setDegree}
+        onLoopChange={setLoop}
       />
       <span className="group-overview-sync-status" aria-live="polite">{refreshing ? "同步中…" : `更新于 ${new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit" }).format(new Date(data.generatedAt))}`}</span>
     </div>
     {error ? <div className="group-overview-inline-error" role="status">最新同步失败，当前仍显示上一次成功结果。<button type="button" onClick={() => void load(true)}>重试</button></div> : null}
     {data.total === 0 ? <div className="group-overview-empty scope"><span>◎</span><strong>当前没有已分配学生</strong><p>系统没有返回全组数据；请由超级管理员确认导师分配范围。</p></div>
-      : !filtered.length ? <div className="group-overview-empty"><span>⌕</span><strong>没有符合当前筛选的学生</strong><p>可以清空搜索，或再次点击已选状态人数恢复全部。</p><button type="button" onClick={() => { onQueryChange(""); setState("all"); setDegree("all"); }}>清空筛选</button></div>
+      : !filtered.length ? <div className="group-overview-empty"><span>⌕</span><strong>没有符合当前筛选的学生</strong><p>可以清空搜索，或再次点击已选状态人数恢复全部。</p><button type="button" onClick={() => { onQueryChange(""); setState("all"); setDegree("all"); setLoop("all"); }}>清空筛选</button></div>
         : <>
-          <OverviewTable students={filtered} selectedStudentId={selectedStudentId} onOpen={openStudent} />
+          <OverviewTable students={filtered} selectedStudentId={selectedStudentId} showLoop={hasLoopCounts} onOpen={openStudent} />
           <OverviewMobileList students={filtered} onOpen={openStudent} />
         </>}
     <details className="quiet-details group-overview-help"><summary>状态说明</summary><p>进度与问题独立跟踪。学生可继续提交下一次进展，待解决问题单独保留；新提交显示待审核，导师确认后才计入可信进展。日期按北京时间计算。</p></details>

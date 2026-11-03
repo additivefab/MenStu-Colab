@@ -1,0 +1,15 @@
+/* Research-loop pending count (plan FA1): a narrow column, not a ranking. */
+/* Two classes so this outranks the single-class grid in app/globals.css. */
+.grid:global(.group-overview-table-grid) {
+  grid-template-columns: minmax(112px, .85fr) minmax(160px, 1.15fr) minmax(130px, 1fr) minmax(165px, 1.2fr) 72px 84px;
+}
+
+.head { text-align: center; white-space: nowrap; }
+.cell { display: grid; place-items: center; min-height: 44px; }
+.cell > a { min-width: 32px; padding: 4px 8px; border: 1px solid #d6e2ea; border-radius: 8px; color: #23618c; background: #f2f7fa; font-size: 14px; font-weight: 650; line-height: 1.5; text-align: center; text-decoration: none; }
+.cell > a:hover { text-decoration: underline; }
+.cell > a:focus-visible { outline: 3px solid #72a9cb; outline-offset: 2px; }
+
+.drawerLink { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 44px; margin: 12px 14px 0; padding: 10px 14px; border: 1px solid #d6e2ea; border-radius: 10px; color: #23618c; background: #f2f7fa; font-size: 14px; font-weight: 650; text-decoration: none; }
+.drawerLink:hover { text-decoration: underline; }
+.drawerLink small { color: #5d7180; font-size: 12px; font-weight: 500; }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { assembleMentorOverview } from "../lib/dashboard-overview/assemble.ts";
+import { assembleMentorOverview, overviewLoopPending } from "../lib/dashboard-overview/assemble.ts";
 import { assertMentorOverviewResponse, mentorOverviewResponseJsonBytes } from "../lib/dashboard-overview/contract.ts";
 import { overviewActionHref, overviewActionLabel } from "../components/dashboard-overview/overview-actions.ts";
 import { overviewStates } from "../lib/dashboard-overview/types.ts";
@@ -430,4 +430,53 @@ test("an unconfirmed first submission remains awaiting review even with a separa
   assert.equal(response.weeklySubstantiveStudentCount, 0);
   assert.equal(response.students[0].counters.blocked, 1);
   assert.doesNotThrow(() => assertMentorOverviewResponse(response));
+});
+
+test("research-loop pending is absent for students and equals the inbox count for staff", () => {
+  // Stub of countLoopInboxByStudent(d1, viewer): includes a student outside this scope.
+  const inboxCounts = { "student-1": 2, "student-3": 5, "outside-scope": 9 };
+  const input = { ...inputOf(3), loopPendingByStudent: inboxCounts };
+
+  const mentorView = assembleMentorOverview(input, admin, NOW);
+  assert.deepEqual(mentorView.students.map((row) => [row.studentId, row.loopPending]), [
+    ["student-1", 2],
+    ["student-2", 0],
+    ["student-3", 5],
+  ]);
+  assert.ok(!JSON.stringify(mentorView).includes("outside-scope"));
+  assert.doesNotThrow(() => assertMentorOverviewResponse(mentorView));
+  assert.deepEqual(
+    assembleMentorOverview(input, { id: 1, role: "superadmin" }, NOW).students.map((row) => row.loopPending),
+    [2, 0, 5],
+  );
+
+  for (const role of ["student", "pending"]) {
+    const studentView = assembleMentorOverview(input, { id: 30, role }, NOW);
+    assert.ok(studentView.students.every((row) => !Object.hasOwn(row, "loopPending")), role);
+    assert.doesNotThrow(() => assertMentorOverviewResponse(studentView));
+  }
+
+  // Counts unavailable (not loaded or failed): the field is omitted, not faked as 0.
+  for (const loopPendingByStudent of [undefined, null]) {
+    const response = assembleMentorOverview({ ...inputOf(2), loopPendingByStudent }, admin, NOW);
+    assert.ok(response.students.every((row) => !Object.hasOwn(row, "loopPending")));
+  }
+});
+
+test("research-loop pending never changes state, counts, or other student facts", () => {
+  const without = assembleMentorOverview(inputOf(4), admin, NOW);
+  const withCounts = assembleMentorOverview({ ...inputOf(4), loopPendingByStudent: { "student-2": 7 } }, admin, NOW);
+  assert.deepEqual(withCounts.counts, without.counts);
+  assert.deepEqual(
+    withCounts.students.map((row) => {
+      const rest = { ...row };
+      delete rest.loopPending;
+      return rest;
+    }),
+    without.students,
+  );
+  assert.equal(overviewLoopPending(admin, { "student-1": -2 }, "student-1"), 0);
+  assert.equal(overviewLoopPending(admin, { "student-1": Number.NaN }, "student-1"), 0);
+  assert.equal(overviewLoopPending(admin, { "student-1": 3 }, "student-1"), 3);
+  assert.equal(overviewLoopPending({ role: "student" }, { "student-1": 3 }, "student-1"), undefined);
 });
