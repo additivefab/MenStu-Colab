@@ -279,7 +279,7 @@ export function TaskCard({ summary, runs, options, defaultOpen, onChanged }: {
           {task.status !== "confirmed" && task.status !== "closed" && task.status !== "canceled" ? <Blocked>任务确认后才能登记运行。</Blocked> : null}
           {runFormOpen && confirmed ? <RunForm taskId={task.id} budget={confirmed.budget} changeRequests={changeRequests} entrypoints={options.entrypoints} datasets={options.datasets}
             onCreated={() => { setRunFormOpen(false); setNotice("运行已登记，等待导师批准。"); refresh(); }} onCancel={() => setRunFormOpen(false)} /> : null}
-          {runs.map((run) => <RunCard key={run.id} run={run} number={runNumbers.get(run.id) ?? null} taskContent={contentOf(confirmed ?? latest)} onChanged={refresh} />)}
+          {runs.map((run) => <RunCard key={run.id} run={run} number={runNumbers.get(run.id) ?? null} taskContent={contentOf(confirmed ?? latest)} options={options} onChanged={refresh} />)}
           {!runs.length ? <p className={styles.muted}>还没有运行。失败和取消的运行也会保留在这里。</p> : null}
         </StageSection>
       </> : null}
