@@ -8,6 +8,7 @@ import { loadProgressResolutions } from "../../../lib/progress-resolution-servic
 import { acceptedTrackProgressSql } from "../../../lib/dashboard-overview/query-sql";
 import { readMonthlyDeliveries } from "../../../lib/monthly-delivery-service";
 import { loadResearchOutputProblemSummaries, type ResearchOutputProblemSummary } from "../../../lib/problem-records-service";
+import { listLoopInboxItems } from "../../../lib/research-loop-inbox";
 
 type StudentRow = {
   id: string;
@@ -740,6 +741,7 @@ export async function GET(request: Request) {
       });
     }
 
+    const loopTasks = await listLoopInboxItems(d1, viewer);
     const workflowTasks: WorkflowTask[] = [];
     for (let offset = 0; offset < studentIds.length; offset += 100) {
       const chunk = studentIds.slice(offset, offset + 100);
@@ -860,6 +862,8 @@ export async function GET(request: Request) {
       })),
       pending,
       workflowTasks,
+      // Research loop decisions (lib/research-loop-inbox.ts); staff views only.
+      loopTasks,
       metrics: {
         total: students.length,
         doctors: students.filter((student) => student.degree === "博士").length,
@@ -870,6 +874,7 @@ export async function GET(request: Request) {
         resolutionPending: workflowTasks.filter((task) => task.type === "resolution_verification").length,
         guidancePending: workflowTasks.filter((task) => task.type === "guidance_verification").length,
         blocked: workflowTasks.filter((task) => task.type === "blocked_milestone" || task.type === "overdue_milestone").length,
+        loopPending: loopTasks.length,
         outputs: students.reduce((sum, student) => sum + student.outputCount, 0),
         attention: students.filter((student) => student.risk.level !== "正常").length,
         riskCounts,

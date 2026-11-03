@@ -22,6 +22,7 @@ import type { ProblemRecordStudent } from "../lib/problem-records";
 import { clearMutationKey, mutationKeyForForm } from "../lib/client-idempotency";
 import { StudentRepositoryCard } from "./components/student-repository-card";
 import { ResearchLoopPanel } from "../components/research-loop/research-loop-panel";
+import type { LoopInboxItem } from "../lib/research-loop-inbox";
 import { ResearchLoopAdmin } from "../components/research-loop/admin-panel";
 
 declare global {
@@ -408,6 +409,8 @@ type DashboardData = {
   papers: StudentPaper[];
   researchOutputs: ResearchOutput[];
   pending: PendingEntry[];
+  /** Research loop decisions for the viewer (lib/research-loop-inbox.ts, batch 3). */
+  loopTasks?: LoopInboxItem[];
   workflowTasks: Array<{
     id: number;
     type: "proposal_review" | "blocked_milestone" | "overdue_milestone" | "guidance_verification" | "resolution_verification";
@@ -450,6 +453,8 @@ type DashboardData = {
     proposalPending: number;
     guidancePending: number;
     resolutionPending?: number;
+    /** Research loop decisions waiting on the viewer (batch 3). */
+    loopPending?: number;
     blocked: number;
     outputs: number;
     attention: number;
