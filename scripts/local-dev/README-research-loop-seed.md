@@ -30,14 +30,14 @@ npm run dev -- --port 3124    # 打开 /students/synthetic-loop-01
 | S04 | task_synthS04 | 代理 `running`，有心跳和事件 | 代码：代理运行中（代理） |
 | S05 | task_synthS05 | 代理 `failed`，`POLICY_VIOLATION`（改了 data/splits/val.txt） | 代码：代理失败，需调整后重试（学生） |
 | S06 | task_synthS06 | 变更 `pending_review`，触及 `src/requirements.txt`，需额外审查 | 代码：变更待额外审查（导师） |
-| S07 | task_synthS07 | 变更 `pending_review`，只改允许路径 | 代码：变更待审阅（审查人） |
+| S07 | task_synthS07 | 变更 `pending_review`，只改允许路径 | 代码：变更待审阅发布（学生） |
 | S08 | task_synthS08 | PR #8 `open`，没有运行 | 运行：待登记运行（学生） |
 | S09 | task_synthS09 | 运行 #1 `awaiting_approval`，较新的运行 #2 `running` | 运行：运行 #1 待导师批准（导师），优先于运行 #2 运行中（实验室） |
 | S10 | task_synthS10 | 运行 `reconciling`（租约第 2 代） | 运行：对账中（实验室） |
 | S11 | task_synthS11 | 运行 `failed`，退出码 137，内存不足 | 运行：运行 #1 失败，需调整后重跑（学生） |
 | S12 | task_synthS12 | 运行完成，指标有效，评审 `pending`，有一条评论 | 结果：待导师评审（导师） |
 | S13 | task_synthS13 | 运行完成，`technical_validity = invalid`（评价协议不一致） | 结果：技术无效，不能验收，待导师退回或要求跟进（导师） |
-| S14 | task_synthS14 | 评审 `accepted`，任务仍为 confirmed | 下一轮：已采纳，待决定关闭或开启下一轮（导师） |
+| S14 | task_synthS14 | 评审 `accepted`，任务仍为 confirmed | 下一轮：已采纳，待决定关闭或开启下一轮（学生或导师） |
 | S15 | task_synthS15 | 完整谱系链（见下），评审 `needs_followup` | 下一轮：已创建跟进任务【S15b】（无人需处理） |
 | S15b | task_synthS15b | 跟进任务草稿，`source_run_id = run_synthS15a`，`parent_task_id = task_synthS15` | 任务：第 1 版草稿待确认（学生）；来源：S15 运行 #1 的评审 |
 | S16 | task_synthS16 | 运行已采纳，PR 已合并，任务 `closed` | 全部完成：任务已关闭（无人需处理） |
