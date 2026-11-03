@@ -1,8 +1,48 @@
-// Minimal GitHub REST client. Only api.github.com is ever contacted, every
-// request carries an explicit API version, and response bodies are never
-// echoed back to users (they may contain repository content).
+import { env } from "cloudflare:workers";
+
+// Minimal GitHub REST client. Only api.github.com is contacted (or, for the
+// local demo loop, a GitHub double on this machine), every request carries an
+// explicit API version, and response bodies are never echoed back to users
+// (they may contain repository content).
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Cloudflare {
+    interface Env {
+      /** Local development only: a GitHub double such as http://127.0.0.1:4610
+       * (scripts/local-dev/demo-loop.mjs). Accepted only for plain http on
+       * localhost / 127.0.0.1 / [::1]; anything else is refused so the App's
+       * tokens can never be redirected to another host. */
+      GITHUB_API_BASE_URL?: string;
+    }
+  }
+}
 
 export const GITHUB_API_BASE = "https://api.github.com";
+const LOCAL_OVERRIDE_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+export class GithubApiBaseOverrideError extends Error {}
+
+/**
+ * The API origin to call. Unset or blank → api.github.com. A set value must be
+ * a bare http origin on a loopback host name (no credentials, path, query or
+ * fragment); any other value throws instead of silently falling back, so a
+ * misconfiguration is visible and never sends a token to a foreign host.
+ */
+export function resolveGithubApiBase(override: unknown): string {
+  if (override === undefined || override === null) return GITHUB_API_BASE;
+  if (typeof override !== "string") throw new GithubApiBaseOverrideError("GITHUB_API_BASE_URL 无效");
+  const value = override.trim();
+  if (!value) return GITHUB_API_BASE;
+  let url: URL;
+  try { url = new URL(value); } catch { throw new GithubApiBaseOverrideError("GITHUB_API_BASE_URL 无效"); }
+  const bare = !url.username && !url.password && url.pathname === "/" && !url.search && !url.hash
+    && !value.includes("?") && !value.includes("#");
+  if (url.protocol !== "http:" || !LOCAL_OVERRIDE_HOSTS.has(url.hostname) || !bare) {
+    throw new GithubApiBaseOverrideError("GITHUB_API_BASE_URL 只允许本机 http 地址（localhost、127.0.0.1 或 [::1]），仅供本地演示");
+  }
+  return url.origin;
+}
 export const GITHUB_API_VERSION = "2022-11-28";
 const USER_AGENT = "tanyan-research-platform";
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -35,7 +75,7 @@ export function encodePathSegments(value: string) {
 
 export async function githubRequest<T>(path: string, options: GithubRequestOptions): Promise<GithubResponse<T>> {
   if (!path.startsWith("/")) throw new TypeError("GitHub API path must be absolute");
-  const response = await fetch(GITHUB_API_BASE + path, {
+  const response = await fetch(resolveGithubApiBase(env.GITHUB_API_BASE_URL) + path, {
     method: options.method ?? "GET",
     headers: {
       accept: "application/vnd.github+json",
