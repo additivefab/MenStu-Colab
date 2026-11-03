@@ -43,9 +43,59 @@ Result error codes: `CONTEXT_MISMATCH`, `POLICY_VIOLATION`, `BUDGET_EXCEEDED`, `
 (symlink or submodule), `WORKSPACE_ERROR`, `WORKSPACE_TAMPERED`,
 `NO_READ_ACCESS`, `PROFILE_NOT_FOUND`, `PROFILE_INSECURE`, `PROFILE_INVALID`,
 `PROVIDER_UNSUPPORTED`, `AGENT_FAILED`, `AGENT_START_FAILED`, `MAX_TURNS`,
-`WORKER_SHUTDOWN`, `WORKER_ERROR`.
+`WORKER_SHUTDOWN`, `WORKER_ERROR`, and in plan mode `PLAN_MODE_EDITED` and
+`NO_PLAN`.
 
 A platform cancel gives outcome `canceled`.
+
+## Plan-first attempts (FB2)
+
+The claim may carry `work.mode` (`"plan"` or `"edit"`; absent means edit) and
+`work.approvedPlan`. Spec §12; plan `docs/科研闭环_前端优化方案_2026-11-03.md` §四 FB2.
+
+**Plan mode** (`mode: "plan"`): the agent must return a reviewable change plan
+and must not edit anything.
+
+- Prompt (`buildPlanPrompt`, task snapshot only): asks for a concise plan with
+  four sections: files to touch (within the allowed paths), approach, tests
+  to run, and risks and open questions. The prompt says "do not edit", but the
+  worker does not rely on that.
+- Policy: `buildAgentPolicy(task, config, { mode: "plan" })` adds
+  `mode: "plan"`, sets `sandbox: "read-only"` and empties
+  `testCommandPrefixes`. No command is auto-approved or reported as a test.
+- No-edit is enforced mechanically by each adapter:
+  - Codex: `startThread({ sandboxMode: "read-only", … })` with
+    `approvalPolicy: "never"`. The OS sandbox refuses writes, and nobody can
+    approve an escalation. The other thread options are unchanged.
+  - Claude: `--tools Read,Glob,Grep` and `--allowedTools Read,Glob,Grep`, with
+    `Edit,Write,MultiEdit,NotebookEdit,Bash` added to `--disallowedTools`.
+    There is no Bash at all, so no test commands either. If the CLI's
+    `system/init` still lists a write tool, the run is aborted with
+    `POLICY_VIOLATION`.
+- Backstop: after the run, the worker restores the trusted git state and runs
+  `git status --porcelain --untracked-files=all --ignored`. Any change at all
+  (tracked, untracked, ignored or staged) is discarded with
+  `git reset --hard <base>` and `git clean -ffdx`, the checkout is verified
+  clean, and the result is `failed` / `PLAN_MODE_EDITED`. The changed paths go
+  in an `error` event, and no file contents are sent. This takes precedence
+  over budget, shutdown and agent errors, but not over a platform cancel. It
+  is skipped only when the run had to be force-stopped.
+- Plan text: the agent's final message. That is the last `message` event with
+  role `assistant` or `final`, tracked by `BaseAdapter`: Claude's `result`
+  text, or Codex's last `agent_message`. It is redacted and trimmed. Plans
+  longer than 20 000 characters are cut and end with `[truncated]`. The
+  result is `plan_ready` with `plan`, `files: []` and `unifiedDiff: ""`. If
+  there is no final text, the result is `failed` / `NO_PLAN`.
+
+**Edit mode with `approvedPlan`**: the edit prompt gets an
+`## Approved plan (binding scope)` section before `## Scope`. It contains
+"按已批准的计划修改；如需偏离计划，停止并报告" and the plan inside
+`<approved-plan>` tags. The plan cannot widen the allowed or protected paths
+or the rules. Path policy, change collection, tests, budget and cancel are
+unchanged.
+
+**Without `mode`** (or `mode: "edit"` without a plan): the prompt, policy,
+adapter invocation and result are byte-for-byte what they were before FB2.
 
 ## Files
 
@@ -53,8 +103,8 @@ A platform cancel gives outcome `canceled`.
 |---|---|
 | `worker.mjs` | Config, main loop, `runAttempt`, event sink, result |
 | `platform-client.mjs` | `POST /api/lab/agent-attempts` (claim, heartbeat, events, result) and `LeaseLostError` |
-| `workspace.mjs` | Fetch and checkout, credential stripping, binary-safe change collection |
-| `prompt.mjs` | `buildAgentPolicy` and `buildPrompt` (task snapshot + config only) |
+| `workspace.mjs` | Fetch and checkout, credential stripping, binary-safe change collection, plan-mode dirty check and discard |
+| `prompt.mjs` | `buildAgentPolicy`, `buildPrompt` and `buildPlanPrompt` (task snapshot + config only) |
 | `profiles.mjs` | Profile paths, permission checks, per-profile lock |
 | `sanitize.mjs` | Redactor (exact secrets + patterns), payload capping, redacting logger |
 | `adapters/base.mjs` | AgentAdapter contract and `UnsupportedError` |
@@ -81,7 +131,15 @@ It also sets `cli_auth_credentials_store="file"` and `history.persistence="none"
 
 `startThread({ model, sandboxMode: "workspace-write", workingDirectory: <checkout>,
 skipGitRepoCheck: false, networkAccessEnabled: false, webSearchMode: "disabled",
-approvalPolicy: "never" })`, then `runStreamed(prompt, { signal })`.
+approvalPolicy: "never" })`, then `runStreamed(prompt, { signal })`. In plan
+mode, `sandboxMode` is `"read-only"`.
+
+`"read-only"` is assumed from the SDK's `SandboxMode` union
+(`"read-only" | "workspace-write" | "danger-full-access"`), which is passed
+through as `codex exec --sandbox`. The SDK was not installed when plan mode
+was added, so this follows the 0.166.0 typings listed under Sources and the
+existing option mapping. Live validation should confirm that a write attempt
+in a plan run is refused.
 
 The workspace is never marked trusted, so Codex skips the repository's
 `.codex/` config, hooks and rules. Do not add a `[projects]` entry for
@@ -100,6 +158,11 @@ claude -p --output-format stream-json --verbose --safe-mode
 
 The prompt goes in on stdin. With no test prefixes configured, `Bash` is
 dropped from `--tools`.
+
+In plan mode, `--tools` and `--allowedTools` are `Read,Glob,Grep`, and
+`--disallowedTools` is
+`Edit,Write,MultiEdit,NotebookEdit,Bash,WebFetch,WebSearch,mcp__*`. The other
+flags are unchanged.
 
 Child env, an allowlist: `PATH`, `HOME` and `TMPDIR` (per attempt), `LANG`,
 `CLAUDE_CONFIG_DIR=<profile>/claude/config`,
@@ -292,6 +355,10 @@ limits. Claude's `total_cost_usd` is a client-side estimate, not a bill.
   with a `result` message.
 - Both: confirm the egress firewall blocks a test command that tries
   `curl https://example.com`.
+- Plan mode: on each provider, ask a plan attempt to edit a file. Confirm
+  that the write is refused (Codex read-only sandbox; Claude has no write
+  tools and `system/init` lists only Read/Glob/Grep), and that the final
+  message arrives as `plan`.
 
 ## Tests
 

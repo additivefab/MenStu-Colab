@@ -135,6 +135,32 @@ test("codex adapter passes CODEX_HOME, sandbox and options to the SDK and maps e
   assert.deepEqual(adapter.usage(input.attemptId), { inputTokens: 10, cachedInputTokens: 2, cacheWriteInputTokens: 1, outputTokens: 5, reasoningOutputTokens: 3 });
 });
 
+test("FB2: codex plan mode starts a read-only thread and keeps the last agent message as the plan", async (t) => {
+  const planPolicy = buildAgentPolicy(makeTask(), { agent: { maxTurns: 7, testCommandPrefixes: ["pytest"] } }, { mode: "plan" });
+  const input = await adapterInput(t, { policy: planPolicy });
+  const { sdk, calls } = fakeCodexSdk(async function* () {
+    yield { type: "item.completed", item: { id: "m1", type: "agent_message", text: "reading files" } };
+    yield { type: "item.completed", item: { id: "c1", type: "command_execution", command: "bash -lc 'pytest -q'", aggregated_output: "", exit_code: 0, status: "completed" } };
+    yield { type: "item.completed", item: { id: "m2", type: "agent_message", text: "1. Files to touch: src/model.py" } };
+    yield { type: "turn.completed", usage: {} };
+  });
+  const adapter = new CodexAdapter({ loadSdk: async () => sdk });
+  await adapter.start(input);
+  const { events, result } = await drain(adapter, input.attemptId);
+  assert.equal(result.outcome, "completed");
+  assert.deepEqual(calls.startThread, {
+    model: "model-x",
+    sandboxMode: "read-only",
+    workingDirectory: input.workspace.repoDir,
+    skipGitRepoCheck: false,
+    networkAccessEnabled: false,
+    webSearchMode: "disabled",
+    approvalPolicy: "never",
+  });
+  assert.equal(adapter.finalMessage(input.attemptId), "1. Files to touch: src/model.py");
+  assert.ok(!events.some((event) => event.test), "no test records in plan mode");
+});
+
 test("codex adapter cancel aborts the SDK turn; turn.failed is reported as failed", async (t) => {
   const input = await adapterInput(t);
   const { sdk } = fakeCodexSdk(async function* (signal) {
@@ -254,6 +280,52 @@ test("claude adapter runs the documented argv/env through the worker and never l
   const everything = JSON.stringify(platform.requests.map((request) => request.body)) + logs.text();
   assert.ok(!everything.includes(claudeToken), "claude token leaked");
   assert.ok(platform.events().some((event) => event.kind === "message" && /my token is \[REDACTED\]/.test(event.payload.text)));
+});
+
+test("FB2: claude plan mode runs with read-only tools only and returns the result text as the plan", async (t) => {
+  const fake = await fakeClaudeBin(t);
+  const root = await tempDir(t);
+  const repo = await createRepoFixture(root);
+  const platform = await startFakePlatform(t);
+  const config = makeConfig(root, platform.url, { gitReadFallback: { urlTemplate: `${repo.remoteBase}/{fullName}.git` }, agent: { maxTurns: 9, testCommandPrefixes: ["pytest"] } });
+  await provisionProfile(config.profilesDir, "cred_alice");
+  const client = createPlatformClient({ platformUrl: platform.url, workerToken: WORKER_TOKEN });
+  const work = makeWork(repo, { provider: "claude", modelId: "claude-sonnet-test", mode: "plan" });
+  const adapter = new ClaudeAdapter({ claudePath: fake.claudePath, childPath: fake.childPath });
+  await runAttempt(work, { config, client, adapters: { claude: adapter }, baseSecrets: [WORKER_TOKEN], logWrite: captureLogs().write });
+
+  const { argv, prompt } = await fake.invocation();
+  const value = (flag) => argv[argv.indexOf(flag) + 1];
+  assert.equal(value("--tools"), "Read,Glob,Grep");
+  assert.equal(value("--allowedTools"), "Read,Glob,Grep");
+  const granted = [...value("--tools").split(","), ...value("--allowedTools").split(",")];
+  for (const writer of ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"]) {
+    assert.ok(!granted.some((rule) => rule === writer || rule.startsWith(`${writer}(`)), `${writer} must not be granted`);
+  }
+  const denied = value("--disallowedTools").split(",");
+  for (const rule of ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "WebFetch", "WebSearch", "mcp__*"]) assert.ok(denied.includes(rule), rule);
+  for (const flag of ["--safe-mode", "--strict-mcp-config", "--no-session-persistence"]) assert.ok(argv.includes(flag), flag);
+  assert.equal(value("--permission-mode"), "dontAsk");
+  assert.equal(value("--setting-sources"), "user");
+  assert.match(prompt, /planning phase/);
+
+  const [result] = platform.byAction("result");
+  assert.equal(result.outcome, "plan_ready", result.errorMessage);
+  assert.match(result.plan, /^1\. Files to touch: src\/model\.py/);
+  assert.deepEqual(result.files, []);
+  assert.deepEqual(result.tests, []);
+});
+
+test("FB2: claude plan mode aborts with POLICY_VIOLATION when the CLI still offers a write tool", async (t) => {
+  const fake = await fakeClaudeBin(t);
+  const planPolicy = buildAgentPolicy(makeTask(), { agent: { maxTurns: 7 } }, { mode: "plan" });
+  const input = await adapterInput(t, { prompt: "FAKE_MODE=widen", policy: planPolicy });
+  const adapter = new ClaudeAdapter({ claudePath: fake.claudePath, childPath: fake.childPath, cancelGraceMs: 100 });
+  await adapter.start(input);
+  const { events, result } = await drain(adapter, input.attemptId);
+  assert.equal(result.outcome, "failed");
+  assert.equal(result.errorCode, "POLICY_VIOLATION");
+  assert.ok(events.some((event) => event.kind === "error" && /Write/.test(event.payload.message)));
 });
 
 test("claude adapter aborts with POLICY_VIOLATION when the CLI reports MCP servers or web tools", async (t) => {

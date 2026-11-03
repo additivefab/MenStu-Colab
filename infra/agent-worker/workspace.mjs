@@ -191,6 +191,30 @@ export async function collectChanges(workspace, baseCommitSha) {
   return { files, unifiedDiff, totalBytes };
 }
 
+/**
+ * Plan mode (FB2): every path that differs from the base commit, including
+ * untracked and ignored files and index-only changes. Runs on the restored
+ * trusted git state, like collectChanges. Empty means the checkout is clean.
+ * @returns {Promise<string[]>}
+ */
+export async function workspaceChanges(workspace) {
+  await restoreTrustedGitState(workspace);
+  const opts = { cwd: workspace.repoDir, env: gitEnv(workspace.homeDir) };
+  const raw = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--no-renames"], opts);
+  return raw.split("\0").filter(Boolean).map((entry) => entry.slice(3)).sort();
+}
+
+/** Plan mode (FB2): throws away every change (tracked, untracked, ignored)
+ * so the checkout matches the base commit again. */
+export async function discardChanges(workspace, baseCommitSha) {
+  await restoreTrustedGitState(workspace);
+  const opts = { cwd: workspace.repoDir, env: gitEnv(workspace.homeDir) };
+  await runGit(["reset", "-q", "--hard", baseCommitSha], opts);
+  await runGit(["clean", "-q", "-f", "-f", "-d", "-x"], opts);
+  const left = await workspaceChanges(workspace);
+  if (left.length) throw new WorkspaceError("WORKSPACE_TAMPERED", `could not discard plan-mode changes: ${left.slice(0, 20).join(", ")}`);
+}
+
 export async function removeWorkspace(root) {
   await rm(root, { recursive: true, force: true });
 }
