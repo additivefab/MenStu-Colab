@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: typecheck, lint, test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # Wrangler/Miniflare must never try to reach Cloudflare from CI.
+      WRANGLER_SEND_METRICS: "false"
+      CI: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      # git is preinstalled on the runner (the tests use `git init` and the
+      # `git http-backend` CGI from git-core); zsh is not, and without it the
+      # Feishu launcher tests in tests/feishu-bot-config.test.mjs are skipped.
+      - name: Install zsh and show tool versions
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends zsh
+          node --version
+          npm --version
+          git --version
+          test -x "$(git --exec-path)/git-http-backend"
+          zsh --version
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test (includes build)
+        run: npm test
