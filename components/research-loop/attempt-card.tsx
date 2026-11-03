@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getJson, postJson, type AttemptDetail, type AttemptEvent, type AttemptSummary } from "./api";
 import { attemptStatusLabels, dateLabel, label, providerLabels, shortSha } from "./labels";
+import { anchorId, useFocusedCard } from "./navigation";
+import { attemptLabel } from "./numbering";
 import { ConfirmButton, ErrorNote, Pill } from "./ui";
 import styles from "./research-loop.module.css";
 
@@ -28,8 +30,8 @@ function eventText(event: AttemptEvent) {
 /** One agent attempt. While it is live, new worker events are polled with
  * `afterSequence` so only the tail is transferred. */
 export function AttemptCard({ attempt, number, onChanged }: { attempt: AttemptSummary; number?: number | null; onChanged: () => void }) {
-  void number; // batch 1 (A3): shown as "代理 #n"
   const [open, setOpen] = useState(false);
+  const rootRef = useFocusedCard<HTMLElement>("attempt", attempt.id, setOpen);
   const [detail, setDetail] = useState<AttemptDetail["attempt"] | null>(null);
   const [events, setEvents] = useState<AttemptEvent[]>([]);
   const [error, setError] = useState<unknown>(null);
@@ -78,9 +80,9 @@ export function AttemptCard({ attempt, number, onChanged }: { attempt: AttemptSu
   const [text, tone] = label(attemptStatusLabels, status);
   const errorCode = detail?.errorCode ?? attempt.errorCode;
   const errorMessage = detail?.errorMessage ?? attempt.errorMessage;
-  return <article className={styles.item}>
+  return <article className={styles.item} id={anchorId.attempt(attempt.id)} ref={rootRef}>
     <button type="button" className={styles.itemHead} aria-expanded={open} onClick={() => setOpen(!open)}>
-      <span className={styles.itemTitle}>{providerLabels[attempt.provider] ?? attempt.provider} 代理 · 第 {attempt.taskVersion} 版任务</span>
+      <span className={styles.itemTitle}>{attemptLabel(number ?? null)} · {providerLabels[attempt.provider] ?? attempt.provider} · 第 {attempt.taskVersion} 版任务</span>
       <span className={styles.itemMeta}><Pill tone={tone}>{text}</Pill><small>{dateLabel(attempt.createdAt)}</small></span>
     </button>
     {(status === "failed" || status === "canceled") && (errorCode || errorMessage)

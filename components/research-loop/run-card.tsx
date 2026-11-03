@@ -5,8 +5,11 @@ import { getJson, newKey, postJson, type RunDetail, type RunSummary } from "./ap
 import {
   artifactKindLabels, bytesLabel, dateLabel, egressLabels, hypothesisLabels, label, reviewStateLabels, runStatusLabels, shortSha, validityLabels,
 } from "./labels";
+import { NavLink, ResultLineage } from "./lineage";
+import { anchorId, useFocusedCard, useLoopNavigation } from "./navigation";
+import { runLabel } from "./numbering";
 import { TaskForm, type TaskContentDraft } from "./task-form";
-import { Blocked, ConfirmButton, ErrorNote, Field, Notice, Pill } from "./ui";
+import { Blocked, ConfirmButton, CopyButton, ErrorNote, Field, Notice, Pill } from "./ui";
 import styles from "./research-loop.module.css";
 
 const TERMINAL = new Set(["completed", "failed", "canceled"]);
@@ -16,7 +19,7 @@ function SpecSummary({ detail }: { detail: RunDetail }) {
   const params = Object.entries(spec.entrypoint.params);
   const egress = spec.egress;
   return <dl className={styles.fields}>
-    <Field label="运行 ID" value={`${run.id} · 第 ${run.attempt} 次`} mono />
+    <Field label="运行 ID" value={<>{run.id}<small> · 第 {run.attempt} 次执行</small> <CopyButton text={run.id} label="复制 ID" /></>} mono />
     <Field label="规范哈希" value={run.runSpecSha256} mono />
     <Field label="执行提交" value={<>{spec.executedCommitSha}{spec.changeRequestId ? <small> · 来自变更请求 {spec.changeRequestId}</small> : null}</>} mono />
     <Field label="仓库" value={spec.repository.fullName} />
@@ -39,6 +42,7 @@ function ResultSection({ detail, taskContent, onReload, onChanged }: {
   onChanged: () => void;
 }) {
   const { result, review, artifacts, permissions } = detail;
+  const nav = useLoopNavigation();
   const [reviewDraft, setReviewDraft] = useState({ state: "", hypothesisOutcome: review?.hypothesisOutcome ?? "not_assessed", note: "" });
   const [comment, setComment] = useState("");
   const [commentKey, setCommentKey] = useState(newKey);
@@ -115,7 +119,7 @@ function ResultSection({ detail, taskContent, onReload, onChanged }: {
 
     {review ? <>
       {review.note ? <p className={styles.reviewNote}><strong>评审意见：</strong>{review.note}<small> · {dateLabel(review.updatedAt)}</small></p> : null}
-      {review.followupTaskId ? <p className={styles.muted}>已转为下一轮任务：<code>{review.followupTaskId}</code></p> : null}
+      {review.followupTaskId ? <p className={styles.muted}>已转为下一轮任务：<NavLink target={{ kind: "task", taskId: review.followupTaskId }}>{nav.taskTitle(review.followupTaskId) ?? "查看下一轮任务"}</NavLink></p> : null}
       {permissions.canReview ? <form className={styles.form} onSubmit={submitReview}>
         <h4>评审结论</h4>
         <div className={styles.grid2}>
@@ -153,13 +157,20 @@ function ResultSection({ detail, taskContent, onReload, onChanged }: {
       onSubmit={submitFollowup}
       onCancel={() => setFollowupOpen(false)}
     /> : <div className={styles.actions}><button type="button" disabled={busy} onClick={() => setFollowupOpen(true)}>转为下一轮任务</button></div> : null}
+    <ResultLineage task={nav.task?.(detail.run.taskId) ?? null} detail={detail} />
   </section>;
 }
 
 /** Run card: the pinned spec, approval bound to the spec hash, and the result. */
 export function RunCard({ run, number, taskContent, onChanged }: { run: RunSummary; number?: number | null; taskContent: TaskContentDraft | null; onChanged: () => void }) {
-  void number; // batch 1 (A3): shown as "运行 #n"
+  const nav = useLoopNavigation();
+  const runNumber = number ?? nav.runRef(run.id)?.number ?? null;
   const [open, setOpen] = useState(run.status === "awaiting_approval");
+  const rootRef = useFocusedCard<HTMLElement>("run", run.id, setOpen);
+  const otherRunLabel = (runId: string) => {
+    const other = nav.runRef(runId)?.number ?? null;
+    return other ? runLabel(other) : "另一次运行";
+  };
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState("");
@@ -192,9 +203,9 @@ export function RunCard({ run, number, taskContent, onChanged }: { run: RunSumma
   const [text, tone] = label(runStatusLabels, current.status);
   const permissions = detail?.permissions;
   const terminal = TERMINAL.has(current.status);
-  return <article className={styles.item}>
+  return <article className={styles.item} id={anchorId.run(run.id)} ref={rootRef}>
     <button type="button" className={styles.itemHead} aria-expanded={open} onClick={() => setOpen(!open)}>
-      <span className={styles.itemTitle}>运行 {current.id.slice(-8)} · 第 {current.attempt} 次 · 提交 {shortSha(current.executedCommitSha, 8)}</span>
+      <span className={styles.itemTitle}>{runLabel(runNumber)} · 提交 {shortSha(current.executedCommitSha, 7)}{current.attempt > 1 ? ` · 第 ${current.attempt} 次执行` : ""}</span>
       <span className={styles.itemMeta}>
         <Pill tone={tone}>{text}</Pill>
         {current.technicalValidity ? <Pill tone={label(validityLabels, current.technicalValidity)[1]}>{label(validityLabels, current.technicalValidity)[0]}</Pill> : null}
@@ -206,7 +217,7 @@ export function RunCard({ run, number, taskContent, onChanged }: { run: RunSumma
       {detail ? <>
         <SpecSummary detail={detail} />
         {detail.approvals.length ? <ul className={styles.timeline}>{detail.approvals.map((item) => <li key={item.id}>
-          {item.approverName || "导师"} 于 {dateLabel(item.approvedAt)} 批准此规范{item.runId && item.runId !== current.id ? `（用于运行 ${item.runId.slice(-8)}）` : ""}{item.revokedAt ? ` · 已于 ${dateLabel(item.revokedAt)} 撤销` : item.current ? " · 当前生效" : ""}{item.note ? ` · ${item.note}` : ""}
+          {item.approverName || "导师"} 于 {dateLabel(item.approvedAt)} 批准此规范{item.runId && item.runId !== current.id ? `（用于${otherRunLabel(item.runId)}）` : ""}{item.revokedAt ? ` · 已于 ${dateLabel(item.revokedAt)} 撤销` : item.current ? " · 当前生效" : ""}{item.note ? ` · ${item.note}` : ""}
         </li>)}</ul> : null}
         {current.status === "awaiting_approval" ? permissions?.canApprove ? <div className={styles.approve}>
           <p>批准将绑定以下规范哈希；规范如有任何变化，批准会被拒绝。</p>

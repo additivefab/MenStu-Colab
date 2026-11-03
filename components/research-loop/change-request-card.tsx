@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getJson, postJson, type ChangeRequest, type ChangeRequestDetail } from "./api";
 import { changeRequestStatusLabels, dateLabel, label, providerLabels, shortSha } from "./labels";
+import { anchorId, useFocusedCard, useLoopNavigation } from "./navigation";
 import { Blocked, ConfirmButton, ErrorNote, Notice, Pill } from "./ui";
 import styles from "./research-loop.module.css";
 
@@ -26,6 +27,8 @@ export function ChangeRequestCard({ item, onChanged }: { item: ChangeRequest; on
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const rootRef = useFocusedCard<HTMLElement>("changeRequest", item.id, setOpen);
+  const { registerChangeRequest, changeRequestRef } = useLoopNavigation();
 
   const load = useCallback((signal?: AbortSignal) => getJson<ChangeRequestDetail>(
     `/api/change-requests?changeRequestId=${encodeURIComponent(item.id)}`, "变更请求读取失败", signal,
@@ -40,6 +43,15 @@ export function ChangeRequestCard({ item, onChanged }: { item: ChangeRequest; on
 
   const current = detail?.changeRequest ?? item;
   const permissions = detail?.permissions ?? item.permissions;
+  const prNumber = current.prNumber ?? null;
+
+  // Let lineage chains and titles elsewhere in the panel name this change.
+  useEffect(() => {
+    registerChangeRequest?.({ id: item.id, taskId: item.taskId, createdAt: item.createdAt, prNumber });
+  }, [registerChangeRequest, item.id, item.taskId, item.createdAt, prNumber]);
+  const changeNumber = changeRequestRef?.(item.id)?.number ?? null;
+  const provider = providerLabels[current.provider] ?? current.provider;
+  const title = prNumber ? `PR #${prNumber} · ${provider}` : `${changeNumber ? `变更 #${changeNumber}` : "变更请求"} · ${provider} 修改 · ${dateLabel(current.createdAt)}`;
 
   async function act(action: "publish" | "approve_extra_review" | "reject") {
     setBusy(true);
@@ -61,9 +73,9 @@ export function ChangeRequestCard({ item, onChanged }: { item: ChangeRequest; on
   const stats = detail?.change ? diffStats(detail.change.unifiedDiff) : null;
   const reviewPending = current.requiresExtraReview && !current.extraReviewApprovedAt;
   const actionable = ["pending_review", "failed", "publishing"].includes(current.status);
-  return <article className={styles.item}>
+  return <article className={styles.item} id={anchorId.changeRequest(item.id)} ref={rootRef}>
     <button type="button" className={styles.itemHead} aria-expanded={open} onClick={() => setOpen(!open)}>
-      <span className={styles.itemTitle}>变更请求 · {current.branchName}</span>
+      <span className={styles.itemTitle}>{title}</span>
       <span className={styles.itemMeta}>{current.requiresExtraReview ? <Pill tone={reviewPending ? "bad" : "good"}>{reviewPending ? "受保护路径待审查" : "额外审查已通过"}</Pill> : null}<Pill tone={tone}>{text}</Pill></span>
     </button>
     {open ? <div className={styles.itemBody}>
@@ -71,6 +83,7 @@ export function ChangeRequestCard({ item, onChanged }: { item: ChangeRequest; on
         {reviewPending ? "本次修改触及受保护路径（如评价协议、数据划分、依赖或 CI 配置），必须由导师或超级管理员完成额外审查后才能发布。" : `受保护路径的额外审查已于 ${dateLabel(current.extraReviewApprovedAt)} 通过。`}
       </p> : null}
       <dl className={styles.fields}>
+        <div className={styles.field}><dt>分支</dt><dd className={styles.mono}>{current.branchName}</dd></div>
         <div className={styles.field}><dt>代理</dt><dd>{providerLabels[current.provider] ?? current.provider}{current.modelId ? ` · ${current.modelId}` : ""}</dd></div>
         <div className={styles.field}><dt>基准提交</dt><dd className={styles.mono}>{shortSha(current.baseCommitSha, 12)}</dd></div>
         <div className={styles.field}><dt>发布后提交</dt><dd className={styles.mono}>{shortSha(current.headCommitSha, 12)}</dd></div>
