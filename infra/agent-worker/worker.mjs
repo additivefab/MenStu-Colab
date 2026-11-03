@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { agentContextSnapshotSha256, evaluatePathPolicy, LIMITS } from "../../lib/research-loop/contracts.ts";
 import { ClaudeAdapter } from "./adapters/claude.mjs";
 import { CodexAdapter } from "./adapters/codex.mjs";
+import { deliverEntry, Outbox, replayOutbox, resolveOutboxConfig } from "./outbox.mjs";
 import { createPlatformClient, LeaseLostError } from "./platform-client.mjs";
 import { acquireProfileLock, profileDir } from "./profiles.mjs";
 import { attemptMode, buildAgentPolicy, buildPrompt, MAX_PLAN_CHARS } from "./prompt.mjs";
@@ -30,7 +31,8 @@ export async function loadConfig(configPath) {
   const raw = JSON.parse(await readFile(configPath, "utf8"));
   const base = path.dirname(path.resolve(configPath));
   const resolve = (value) => (typeof value === "string" && value ? path.resolve(base, value) : value);
-  const config = { ...raw, workRoot: resolve(raw.workRoot), profilesDir: resolve(raw.profilesDir), tokenFile: resolve(raw.tokenFile) };
+  const config = { ...raw, workRoot: resolve(raw.workRoot), profilesDir: resolve(raw.profilesDir), tokenFile: resolve(raw.tokenFile), stateDir: resolve(raw.stateDir) };
+  if (raw.outbox) config.outbox = { ...raw.outbox, dir: resolve(raw.outbox.dir) };
   for (const key of ["platformUrl", "workRoot", "profilesDir"]) {
     if (!config[key]) throw new Error(`config.${key} is required`);
   }
@@ -49,6 +51,40 @@ export function createAdapters(config) {
   return {
     codex: new CodexAdapter({ codexPath: config.codex?.codexPath ?? undefined, childPath: config.codex?.childPath ?? undefined }),
     claude: new ClaudeAdapter({ claudePath: config.claude?.claudePath ?? "claude", childPath: config.claude?.childPath ?? undefined }),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Result outbox state (R04), one per worker context
+// ---------------------------------------------------------------------------
+
+const workerStates = new WeakMap();
+
+function workerState(ctx) {
+  let state = workerStates.get(ctx);
+  if (!state) {
+    const settings = resolveOutboxConfig(ctx.config);
+    state = { settings, outbox: ctx.outbox ?? new Outbox(settings.dir), activeAttempts: new Set() };
+    workerStates.set(ctx, state);
+  }
+  return state;
+}
+
+/** Removes the workspace an outbox entry kept, unless it is outside workRoot
+ * or its attempt is running again on this worker (plan → edit re-claim). */
+function outboxWorkspaceRemover(ctx, logger) {
+  const { config } = ctx;
+  const { activeAttempts } = workerState(ctx);
+  const workRoot = path.resolve(config.workRoot);
+  return async (entry) => {
+    if (config.keepWorkspaces || typeof entry.workspaceRoot !== "string" || !entry.workspaceRoot) return;
+    const root = path.resolve(entry.workspaceRoot);
+    if (path.dirname(root) !== workRoot || path.basename(root) !== entry.attemptId) {
+      logger.warn("outbox entry names a workspace outside workRoot; not removing it", { attemptId: entry.attemptId });
+      return;
+    }
+    if (activeAttempts.has(entry.attemptId)) return;
+    await removeWorkspace(root).catch(() => {});
   };
 }
 
@@ -146,12 +182,15 @@ export function extractPlan(finalMessage, redactor) {
 }
 
 /**
- * Runs one claimed attempt end to end. Never throws; posts exactly one result
- * unless the lease was lost.
+ * Runs one claimed attempt end to end. Never throws; persists and posts
+ * exactly one result unless the lease was lost. The workspace is removed only
+ * once the platform gave a definitive answer for that result (R04).
  * @param {NonNullable<import("../../lib/research-loop/contracts.ts").AgentClaimResponse["work"]>} work
  */
 export async function runAttempt(work, ctx, { shutdownSignal } = {}) {
   const { config, client, adapters } = ctx;
+  const outboxState = workerState(ctx);
+  outboxState.activeAttempts.add(work.attemptId);
   const redactor = new Redactor();
   for (const secret of ctx.baseSecrets ?? []) redactor.add(secret);
   const logger = createLogger(redactor, ctx.logWrite);
@@ -367,9 +406,10 @@ export async function runAttempt(work, ctx, { shutdownSignal } = {}) {
       : { ...result, outcome: "canceled", errorCode: undefined, errorMessage: undefined };
     logger.error("attempt failed", { attemptId, code, error: error.message });
   } finally {
-    clearInterval(heartbeat);
     shutdownSignal?.removeEventListener("abort", onShutdown);
     if (releaseLock) await releaseLock().catch(() => {});
+    // Kept when the result is not confirmed (pending replay) or dead-lettered.
+    let keepWorkspace = false;
     try {
       if (!state.leaseLost) {
         sink.push("status", { phase: "result", outcome: result.outcome, errorCode: result.errorCode ?? null, tests: tests.length });
@@ -377,15 +417,29 @@ export async function runAttempt(work, ctx, { shutdownSignal } = {}) {
       } else {
         await sink.close().catch(() => {});
       }
-      if (!state.leaseLost) await postResult(work, result, tests, { client, redactor, logger, startedAt, observedModel });
+      if (!state.leaseLost) {
+        // The heartbeat keeps running while the result is retried, so a
+        // transient result failure does not also expire the lease.
+        const delivery = await postResult(work, result, tests, {
+          client, redactor, logger, startedAt, observedModel, workspace, signal: shutdownSignal, ...outboxState,
+        });
+        keepWorkspace = delivery.state !== "delivered" && delivery.state !== "lease_lost";
+      }
     } finally {
+      clearInterval(heartbeat);
       if (adapter && adapterStarted) adapter.release?.(attemptId);
-      if (workspace && !config.keepWorkspaces) await removeWorkspace(workspace.root).catch(() => {});
+      if (workspace && !config.keepWorkspaces && !keepWorkspace) await removeWorkspace(workspace.root).catch(() => {});
+      if (workspace && keepWorkspace) logger.warn("workspace kept until the result is confirmed", { attemptId, workspace: workspace.root });
+      outboxState.activeAttempts.delete(work.attemptId);
     }
   }
 }
 
-async function postResult(work, result, tests, { client, redactor, logger, startedAt, observedModel }) {
+/**
+ * Builds the normalized result request, persists it to the outbox, then sends
+ * it with bounded retries. Returns the delivery state (see deliverEntry).
+ */
+async function postResult(work, result, tests, { client, redactor, logger, startedAt, observedModel, workspace, signal, outbox, settings }) {
   /** @type {import("../../lib/research-loop/contracts.ts").AgentResultRequest} */
   const request = {
     action: "result",
@@ -402,13 +456,31 @@ async function postResult(work, result, tests, { client, redactor, logger, start
   if (result.outcome === "plan_ready") request.plan = result.plan;
   if (result.errorCode) request.errorCode = result.errorCode;
   if (result.errorMessage) request.errorMessage = truncate(redactor.redact(String(result.errorMessage)), 1000);
+  const workspaceRoot = workspace?.root ?? null;
+  let entry;
   try {
-    await client.result(request);
-    logger.info("result posted", { attemptId: work.attemptId, outcome: request.outcome, errorCode: request.errorCode ?? null, files: request.files.length, ...(request.plan ? { planChars: request.plan.length } : {}) });
+    entry = await outbox.put({ attemptId: work.attemptId, leaseEpoch: work.leaseEpoch, payload: request, workspaceRoot });
   } catch (error) {
-    if (error instanceof LeaseLostError) logger.warn("lease lost before result; dropping it", { attemptId: work.attemptId });
-    else logger.error("posting result failed", { attemptId: work.attemptId, error: error.message });
+    // Still try to deliver; without a durable copy only this process can.
+    logger.error("could not persist the result to the outbox; sending without a durable copy", { attemptId: work.attemptId, error: error.message });
+    entry = { attemptId: work.attemptId, leaseEpoch: work.leaseEpoch, createdAt: new Date().toISOString(), payload: request, workspaceRoot, file: null };
   }
+  const delivery = await deliverEntry(entry, { outbox, client, logger, retry: settings, signal });
+  if (delivery.state === "pending" && !entry.file) {
+    logger.error("result was neither delivered nor persisted; workspace kept for manual recovery", { attemptId: work.attemptId, workspace: workspaceRoot });
+  }
+  return delivery;
+}
+
+/** Replays pending outbox entries (and applies retention) once. */
+export async function replayPendingResults(ctx, { signal, logger } = {}) {
+  const { outbox, settings } = workerState(ctx);
+  const log = logger ?? createLogger(new Redactor().add(ctx.baseSecrets?.[0]), ctx.logWrite);
+  return replayOutbox({
+    // One try per entry per pass; the pass itself repeats every replaySeconds.
+    outbox, client: ctx.client, logger: log, retry: { ...settings, attempts: 1 }, retentionDays: settings.retentionDays,
+    removeWorkspace: outboxWorkspaceRemover(ctx, log), signal,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -422,9 +494,35 @@ export async function runWorker(ctx, { signal } = {}) {
   const maxConcurrent = Math.max(1, config.maxConcurrentAttempts ?? 1);
   const running = new Set();
   const sleep = (ms) => delay(ms, undefined, { signal }).catch(() => {});
+  // R04: results that were persisted but not confirmed are replayed at
+  // startup and every replaySeconds, before new work is claimed.
+  const { outbox, settings } = workerState(ctx);
+  await outbox.init();
+  const dead = await outbox.list("dead");
+  if (dead.entries.length || dead.corrupt.length) {
+    logger.warn("outbox has dead-lettered results waiting for an operator", {
+      count: dead.entries.length + dead.corrupt.length,
+      attempts: dead.entries.slice(0, 20).map((entry) => `${entry.attemptId}.${entry.leaseEpoch}`),
+      dir: outbox.deadDir,
+    });
+  }
+  const replayMs = Math.max(0, settings.replaySeconds * 1000);
+  let nextReplayAt = 0;
   while (!signal?.aborted) {
+    if (Date.now() >= nextReplayAt) {
+      try {
+        const summary = await replayPendingResults(ctx, { signal, logger });
+        if (summary.delivered || summary.leaseLost || summary.dead || summary.pending || summary.pruned || summary.quarantined) {
+          logger.info("outbox replay", summary);
+        }
+      } catch (error) {
+        logger.error("outbox replay failed", { error: error.message });
+      }
+      nextReplayAt = Date.now() + replayMs;
+      if (signal?.aborted) break;
+    }
     if (running.size >= maxConcurrent) {
-      await Promise.race([...running]);
+      await Promise.race([...running, sleep(Math.max(1, nextReplayAt - Date.now()))]);
       continue;
     }
     let claim;

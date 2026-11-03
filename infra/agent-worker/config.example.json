@@ -4,6 +4,15 @@
   "tokenFile": "/etc/tanyan-agent-worker/worker.token",
   "workRoot": "/var/lib/tanyan-agent-worker/work",
   "profilesDir": "/var/lib/tanyan-agent-worker/profiles",
+  "stateDir": "/var/lib/tanyan-agent-worker",
+  "outbox": {
+    "dir": null,
+    "retentionDays": 14,
+    "replaySeconds": 60,
+    "resultAttempts": 5,
+    "retryBaseMs": 1000,
+    "retryMaxMs": 30000
+  },
   "githubBaseUrl": "https://github.com",
   "gitReadFallback": {
     "urlTemplate": "git@github.com:{fullName}.git",

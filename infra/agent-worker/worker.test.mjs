@@ -2,14 +2,15 @@
 // These are simulations; no real Codex/Claude account or GitHub is involved.
 
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
 import { buildClaudeArgs } from "./adapters/claude.mjs";
 import { FakeAdapter } from "./adapters/fake.mjs";
+import { Outbox } from "./outbox.mjs";
 import { createPlatformClient } from "./platform-client.mjs";
 import { buildAgentPolicy, buildPrompt } from "./prompt.mjs";
 import {
@@ -548,4 +549,292 @@ test("FB2: attempts without mode (or with mode edit and no plan) are unchanged",
     assert.equal(result.outcome, "change_ready", result.errorMessage);
     assert.ok(!("plan" in result));
   }
+});
+
+// ---------------------------------------------------------------------------
+// R04: durable result outbox. The fake platform below records results with the
+// real platform's semantics (lib/agent-attempts-service.ts submitAgentResult):
+// a same-epoch replay after a recorded result answers 200 {replayed: true}
+// with what was stored; another epoch answers 409 LEASE_LOST.
+// ---------------------------------------------------------------------------
+
+const ATTEMPT = "att_0123456789abcdef";
+const FAST_OUTBOX = { resultAttempts: 4, retryBaseMs: 5, retryMaxMs: 20, replaySeconds: 0.05, retentionDays: 14 };
+
+function resultLedger({ currentEpoch = 3 } = {}) {
+  const ledger = {
+    currentEpoch,
+    recorded: new Map(),
+    replies: [],
+    override: null,
+    handler: (body) => {
+      let reply = ledger.override?.(body);
+      if (!reply) {
+        const prior = ledger.recorded.get(body.attemptId);
+        if (body.leaseEpoch !== ledger.currentEpoch) reply = { status: 409, json: { code: "LEASE_LOST", error: "lease lost" } };
+        else if (prior) reply = { status: 200, json: { status: prior.outcome, errorCode: prior.errorCode ?? "", replayed: true } };
+        else {
+          ledger.recorded.set(body.attemptId, body);
+          reply = { status: 200, json: { status: body.outcome, errorCode: body.errorCode ?? "", replayed: false } };
+        }
+      }
+      ledger.replies.push(reply);
+      return reply;
+    },
+  };
+  return ledger;
+}
+
+/** fetch wrapper: `failBefore` result calls never reach the platform;
+ * `loseAfter` result calls reach it (it commits) but the response is lost. */
+function flakyFetch(faults) {
+  const networkError = (code) => new TypeError("fetch failed", { cause: Object.assign(new Error(code), { code }) });
+  return async (url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.action === "result" && faults.failBefore > 0) {
+      faults.failBefore -= 1;
+      throw networkError("ECONNREFUSED");
+    }
+    if (body.action === "result" && faults.loseAfter > 0) {
+      faults.loseAfter -= 1;
+      const response = await fetch(url, init);
+      await response.text();
+      throw networkError("ECONNRESET");
+    }
+    return fetch(url, init);
+  };
+}
+
+async function setupOutbox(t, { ledger = resultLedger(), faults = {} } = {}) {
+  const hooks = { onClaim: null };
+  const env = await setup(t, {
+    handlers: {
+      result: (body) => ledger.handler(body),
+      claim: () => {
+        hooks.onClaim?.();
+        return { status: 200, json: { work: null } };
+      },
+    },
+    config: { outbox: FAST_OUTBOX },
+  });
+  const client = createPlatformClient({ platformUrl: env.platform.url, workerToken: WORKER_TOKEN, fetchImpl: flakyFetch(faults) });
+  const ctx = (adapters) => ({ config: env.config, client, adapters, baseSecrets: [WORKER_TOKEN], logWrite: env.logs.write });
+  const outbox = new Outbox(path.join(env.root, "outbox"));
+  const workspaceDir = path.join(env.config.workRoot, ATTEMPT);
+  const exists = (target) => stat(target).then(() => true, () => false);
+  return { ...env, ledger, faults, hooks, ctx, outbox, workspaceDir, exists };
+}
+
+const editingAgent = () => new FakeAdapter({
+  script: async (ctx) => {
+    await writeFile(path.join(ctx.workspaceDir, "src/model.py"), "def f(x, scale=1):\n    return x * scale\n");
+  },
+});
+
+/** Runs the worker loop until its n-th claim (the first claim comes after the startup replay pass). */
+async function restartWorker(env, { claims = 1, onClaim } = {}) {
+  const controller = new AbortController();
+  let seen = 0;
+  env.hooks.onClaim = () => {
+    seen += 1;
+    if (onClaim?.(seen) === "stop" || seen >= claims) controller.abort();
+  };
+  await runWorker(env.ctx({ codex: editingAgent() }), { signal: controller.signal });
+  env.hooks.onClaim = null;
+  return seen;
+}
+
+test("R04: a network failure before the result is sent is retried; exactly one result is recorded", async (t) => {
+  const env = await setupOutbox(t, { faults: { failBefore: 2 } });
+  await runAttempt(makeWork(env.repo), env.ctx({ codex: editingAgent() }));
+  assert.equal(env.faults.failBefore, 0);
+  assert.equal(env.ledger.recorded.size, 1);
+  assert.equal(env.ledger.recorded.get(ATTEMPT).outcome, "change_ready");
+  assert.equal(env.platform.byAction("result").length, 1);
+  assert.match(env.logs.text(), /result delivery failed; retrying/);
+  assert.deepEqual((await env.outbox.list("pending")).entries, []);
+  assert.equal(await env.exists(env.workspaceDir), false, "workspace removed after confirmation");
+});
+
+test("R04: the platform commits but the response is lost; the replay is accepted with no second result", async (t) => {
+  const env = await setupOutbox(t, { faults: { loseAfter: 1 } });
+  await runAttempt(makeWork(env.repo), env.ctx({ codex: editingAgent() }));
+  assert.equal(env.ledger.recorded.size, 1);
+  const results = env.platform.byAction("result");
+  assert.equal(results.length, 2, "one commit + one replay");
+  assert.deepEqual(results[1], results[0], "the replay sends the identical request");
+  assert.equal(env.ledger.replies[1].json.replayed, true);
+  assert.deepEqual((await env.outbox.list("pending")).entries, []);
+  assert.equal(await env.exists(env.workspaceDir), false);
+  assert.match(env.logs.text(), /"message":"result posted".*"replayed":true/);
+});
+
+/** Runs one attempt in a child process whose client.result() SIGKILLs the
+ * process before ("before-send") or after ("after-send") the request. */
+async function crashingAttempt(env, mode) {
+  const child = path.join(env.root, "crash-child.mjs");
+  const href = (file) => new URL(file, import.meta.url).href;
+  await writeFile(child, `
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { FakeAdapter } from ${JSON.stringify(href("./adapters/fake.mjs"))};
+import { createPlatformClient } from ${JSON.stringify(href("./platform-client.mjs"))};
+import { runAttempt } from ${JSON.stringify(href("./worker.mjs"))};
+const { config, work, mode, token } = JSON.parse(process.argv[2]);
+const real = createPlatformClient({ platformUrl: config.platformUrl, workerToken: token });
+const client = { ...real, result: async (request) => {
+  if (mode === "after-send") await real.result(request);
+  process.kill(process.pid, "SIGKILL");
+  await new Promise(() => {});
+} };
+const adapter = new FakeAdapter({ script: async (ctx) => {
+  await writeFile(path.join(ctx.workspaceDir, "src/model.py"), "def f(x, scale=1):\\n    return x * scale\\n");
+} });
+await runAttempt(work, { config, client, adapters: { codex: adapter }, baseSecrets: [token], logWrite: () => {} });
+`);
+  const args = JSON.stringify({ config: env.config, work: makeWork(env.repo), mode, token: WORKER_TOKEN });
+  const outcome = await new Promise((resolve) => {
+    execFile(process.execPath, ["--experimental-strip-types", "--no-warnings", child, args], (error) => resolve(error));
+  });
+  assert.equal(outcome?.signal, "SIGKILL", `child should crash: ${outcome?.message}`);
+}
+
+test("R04: the worker crashes after persisting and before sending; on restart the replay delivers it", async (t) => {
+  const env = await setupOutbox(t);
+  await crashingAttempt(env, "before-send");
+  assert.equal(env.ledger.recorded.size, 0, "nothing reached the platform");
+  const [entry] = (await env.outbox.list("pending")).entries;
+  assert.equal(entry.attemptId, ATTEMPT);
+  assert.equal(entry.leaseEpoch, 3);
+  assert.equal(entry.payload.outcome, "change_ready");
+  assert.match(entry.sha256, /^[0-9a-f]{64}$/);
+  assert.equal(entry.workspaceRoot, env.workspaceDir);
+  assert.equal((await stat(entry.file)).mode & 0o777, 0o600);
+  assert.equal((await stat(env.outbox.pendingDir)).mode & 0o777, 0o700);
+  assert.equal((await stat(env.outbox.dir)).mode & 0o777, 0o700);
+  assert.ok(!JSON.stringify(entry).includes(WORKER_TOKEN), "no worker token in the outbox");
+  assert.equal(await env.exists(path.join(env.workspaceDir, "repo", "src", "model.py")), true, "workspace survived the crash");
+
+  await restartWorker(env);
+  assert.equal(env.ledger.recorded.size, 1);
+  assert.deepEqual(env.ledger.recorded.get(ATTEMPT), entry.payload, "the persisted request is what was delivered");
+  assert.ok(env.platform.requests.findIndex((request) => request.body.action === "result")
+    < env.platform.requests.findIndex((request) => request.body.action === "claim"), "replay runs before claiming new work");
+  assert.deepEqual((await env.outbox.list("pending")).entries, []);
+  assert.equal(await env.exists(env.workspaceDir), false, "workspace removed after confirmation");
+});
+
+test("R04: the worker crashes after sending and before deleting the entry; the replay is idempotent", async (t) => {
+  const env = await setupOutbox(t);
+  await crashingAttempt(env, "after-send");
+  assert.equal(env.ledger.recorded.size, 1);
+  assert.equal((await env.outbox.list("pending")).entries.length, 1);
+
+  await restartWorker(env);
+  assert.equal(env.ledger.recorded.size, 1, "no second result");
+  assert.equal(env.platform.byAction("result").length, 2);
+  assert.equal(env.ledger.replies[1].json.replayed, true);
+  assert.deepEqual((await env.outbox.list("pending")).entries, []);
+  assert.equal(await env.exists(env.workspaceDir), false);
+});
+
+test("R04: 409 LEASE_LOST on the result drops it and never resends the stale epoch", async (t) => {
+  const env = await setupOutbox(t, { ledger: resultLedger({ currentEpoch: 4 }) });
+  await runAttempt(makeWork(env.repo), env.ctx({ codex: editingAgent() }));
+  assert.equal(env.platform.byAction("result").length, 1, "no retry after a definitive 409");
+  assert.equal(env.ledger.recorded.size, 0);
+  assert.match(env.logs.text(), /lease lost before result; dropping it/);
+  assert.deepEqual((await env.outbox.list("pending")).entries, []);
+  assert.deepEqual((await env.outbox.list("dead")).entries, []);
+  assert.equal(await env.exists(env.workspaceDir), false);
+
+  await restartWorker(env);
+  assert.equal(env.platform.byAction("result").length, 1, "never resent");
+});
+
+test("R04: a replay answered with an already-expired lease is dropped like LEASE_LOST", async (t) => {
+  const env = await setupOutbox(t, { faults: { failBefore: 10 } });
+  await runAttempt(makeWork(env.repo), env.ctx({ codex: editingAgent() }));
+  assert.equal((await env.outbox.list("pending")).entries.length, 1);
+  env.faults.failBefore = 0;
+  env.ledger.override = () => ({ status: 200, json: { status: "failed", errorCode: "LEASE_EXPIRED", replayed: true } });
+  await restartWorker(env);
+  assert.match(env.logs.text(), /lease expired on the platform before the result arrived/);
+  assert.deepEqual((await env.outbox.list("pending")).entries, []);
+  assert.equal(await env.exists(env.workspaceDir), false);
+});
+
+test("R04: a 4xx validation error dead-letters the result; entry and workspace are kept and not resent", async (t) => {
+  const env = await setupOutbox(t);
+  env.ledger.override = () => ({ status: 400, json: { code: "INVALID_RESULT", error: "outcome 无效" } });
+  await runAttempt(makeWork(env.repo), env.ctx({ codex: editingAgent() }));
+  assert.equal(env.platform.byAction("result").length, 1, "no retry after a definitive 4xx");
+  assert.deepEqual((await env.outbox.list("pending")).entries, []);
+  const [dead] = (await env.outbox.list("dead")).entries;
+  assert.equal(dead.attemptId, ATTEMPT);
+  assert.equal(dead.payload.outcome, "change_ready");
+  assert.deepEqual({ status: dead.deadLetter.status, code: dead.deadLetter.code }, { status: 400, code: "INVALID_RESULT" });
+  assert.equal((await stat(dead.file)).mode & 0o777, 0o600);
+  assert.equal(await env.exists(path.join(env.workspaceDir, "repo", "src", "model.py")), true, "workspace kept for an operator");
+  assert.match(env.logs.text(), /dead-lettered for an operator/);
+
+  await restartWorker(env);
+  assert.equal(env.platform.byAction("result").length, 1, "dead letters are not resent");
+  assert.match(env.logs.text(), /outbox has dead-lettered results waiting for an operator/);
+});
+
+test("R04: the workspace is retained while the result is unconfirmed and removed once it is confirmed", async (t) => {
+  const env = await setupOutbox(t);
+  env.ledger.override = () => ({ status: 503, json: { code: "INTERNAL", error: "busy" } });
+  await runAttempt(makeWork(env.repo), env.ctx({ codex: editingAgent() }));
+  assert.equal(env.platform.byAction("result").length, FAST_OUTBOX.resultAttempts, "bounded retries");
+  assert.equal(env.ledger.recorded.size, 0);
+  assert.equal((await env.outbox.list("pending")).entries.length, 1);
+  assert.equal(await readFile(path.join(env.workspaceDir, "repo", "src", "model.py"), "utf8"), "def f(x, scale=1):\n    return x * scale\n");
+  assert.match(env.logs.text(), /workspace kept until the result is confirmed/);
+
+  // Still failing: a restart's replay pass keeps both.
+  await restartWorker(env);
+  assert.equal((await env.outbox.list("pending")).entries.length, 1);
+  assert.equal(await env.exists(env.workspaceDir), true);
+
+  // The platform recovers while the worker runs: a periodic pass (not the
+  // startup one) confirms the result and cleans up.
+  const claims = await restartWorker(env, {
+    claims: 200,
+    onClaim: (seen) => {
+      if (seen === 1) env.ledger.override = null;
+      return env.ledger.recorded.size ? "stop" : undefined;
+    },
+  });
+  assert.ok(claims >= 2 && claims < 200, "delivered by a periodic pass");
+  assert.equal(env.ledger.recorded.size, 1);
+  assert.deepEqual((await env.outbox.list("pending")).entries, []);
+  assert.equal(await env.exists(env.workspaceDir), false);
+});
+
+test("R04: entries past retention are reported and pruned with their workspace; nothing is sent", async (t) => {
+  const env = await setupOutbox(t);
+  const old = new Date(Date.now() - 15 * 86_400_000);
+  const payload = (attemptId, leaseEpoch) => ({ action: "result", attemptId, leaseEpoch, outcome: "failed" });
+  const oldWorkspace = path.join(env.config.workRoot, "att_old");
+  await mkdir(path.join(oldWorkspace, "repo"), { recursive: true });
+  await env.outbox.put({ attemptId: "att_old", leaseEpoch: 2, payload: payload("att_old", 2), workspaceRoot: oldWorkspace, now: old });
+  const deadOld = await env.outbox.put({ attemptId: "att_dead", leaseEpoch: 1, payload: payload("att_dead", 1), now: old });
+  await env.outbox.deadLetter(deadOld, { status: 400, code: "INVALID_RESULT" });
+  const outside = path.join(env.root, "not-a-workspace");
+  await mkdir(outside);
+  await env.outbox.put({ attemptId: "att_evil", leaseEpoch: 1, payload: payload("att_evil", 1), workspaceRoot: outside, now: old });
+  const fresh = await env.outbox.put({ attemptId: "att_fresh", leaseEpoch: 1, payload: payload("att_fresh", 1), now: new Date(Date.now() - 13 * 86_400_000) });
+  await env.outbox.deadLetter(fresh, { status: 400, code: "INVALID_RESULT" });
+
+  await restartWorker(env);
+  assert.equal(env.platform.byAction("result").length, 0);
+  assert.deepEqual(await readdir(env.outbox.pendingDir), []);
+  assert.deepEqual(await readdir(env.outbox.deadDir), ["att_fresh.1.json"], "entries inside retention are kept");
+  assert.equal(await env.exists(oldWorkspace), false, "pruned entry's workspace removed");
+  assert.equal(await env.exists(outside), true, "never removes a path outside workRoot");
+  const pruned = env.logs.lines.filter((line) => line.includes("outbox entry is past retention; pruning it")).map((line) => JSON.parse(line));
+  assert.deepEqual(pruned.map((line) => line.attemptId).sort(), ["att_dead", "att_evil", "att_old"]);
+  assert.ok(pruned.every((line) => line.level === "error" && line.ageDays === 15 && line.retentionDays === 14));
 });
