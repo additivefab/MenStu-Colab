@@ -17,7 +17,7 @@
 import { mkdirSync } from "node:fs";
 
 import {
-  DEFAULT_GITHUB_PORT, DEFAULT_PLATFORM_URL, ENTRYPOINT_NAME, DATASET_LABEL, FULL_NAME, ORG, REPO_NAME, STATE_DIR, STUDENT_ID,
+  DEFAULT_GITHUB_PORT, DEFAULT_PLATFORM_URL, ENTRYPOINT_NAME, DATASET_LABEL, FULL_NAME, STATE_DIR, STUDENT_ID,
 } from "./demo/constants.mjs";
 import { ensureDataset, ensureRepository } from "./demo/demo-repo.mjs";
 import { conflictingUserKeys, devVarsConflict, ensureDemoEnv, removeDemoEnv } from "./demo/env-file.mjs";

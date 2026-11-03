@@ -145,8 +145,8 @@ export const ACCEPTANCE = [
   {
     id: "T22", mode: "real-only",
     scenario: "在干净环境复现获准任务",
-    simulated: "无",
-    realCheck: "干净环境独立复现报告；平台侧“同一规范多次执行的复现对比与容差判断”在本提交尚未实现（第 6 批 G3）",
+    simulated: "平台侧复现对比（同一规范多次执行、容差判断）为纯平台逻辑；执行环境为替身",
+    realCheck: "干净环境（真实执行器 + 容器）独立复现获准任务，提交复现报告；平台侧复现对比与容差判断已有自动化测试（第 6 批 G3），只作支撑证据",
   },
   {
     id: "T23", mode: "automatable",
@@ -169,8 +169,8 @@ export const ACCEPTANCE = [
   {
     id: "T26", mode: "automatable",
     scenario: "数据库 / 存储备份恢复",
-    simulated: "—",
-    realCheck: "恢复演练记录（数据库、产物、密钥分开备份并恢复到全新库）",
+    simulated: "D1 / R2 为 Miniflare 本地模拟；生产 wrangler --remote 导出与 R2 同步未演练",
+    realCheck: "在托管环境做一次真实演练：wrangler d1 export --remote + R2 同步，恢复到全新库并留存记录（见 docs/ops/备份与恢复.md）",
   },
 ];
 
@@ -281,6 +281,14 @@ export const EXPLICIT_EVIDENCE = [
   // T25: follow-up tasks link back to the discussion
   { ids: ["T25"], file: E2E, title: "2. student turns a mentor guidance note into a confirmed task" },
   { ids: ["T25"], file: "tests/research-tasks-worker.test.mjs", title: "create validates scope, origin, content and guidance-note ownership" },
+  // T22 (platform side, batch 6 G3/G8): repeated executions of one spec compared within tolerance.
+  { ids: ["T22"], file: "tests/runs-evaluation-budget-worker.test.mjs", title: "reproduction: compares with the latest earlier completed execution within the task tolerance" },
+  { ids: ["T22"], file: "tests/runs-evaluation-budget-worker.test.mjs", title: "reproduction: default tolerance is 0.01 absolute" },
+  { ids: ["T22"], file: "tests/research-loop-batch6-rules-worker.test.mjs", title: "reproduction compares with the previous completed execution of the same spec" },
+  { ids: ["T22"], file: "tests/research-loop-batch6-rules-worker.test.mjs", title: "reproduction uses the task's reproTolerance when set" },
+  // T23 (batch 6 G2): failures and lost runners are recovered by compensating reconciliation.
+  { ids: ["T23"], file: "tests/loop-maintenance-worker.test.mjs", title: "cron run applies each sweep at its threshold and writes audit rows" },
+  { ids: ["T23"], file: "tests/research-loop-batch6-rules-worker.test.mjs", title: "run finalizes stale cancel requests and expired agent leases with system audit rows only" },
 ];
 
 const ID_PATTERN = /(?<![A-Za-z0-9])T(\d{2})(?![0-9])/g;

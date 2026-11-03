@@ -213,7 +213,7 @@ test("T26 drill: backup a research loop, restore into a fresh instance, verify, 
     backup = await createBackup({ db: sourceDb, bucket: sourceBucket, outDir: work, source: { kind: "drill" } });
     const { manifest } = backup;
     assert.match(backup.dir, /backup-\d{8}T\d{6}Z$/);
-    assert.equal(manifest.schema.appSchemaVersion, 27);
+    assert.equal(manifest.schema.appSchemaVersion, 28);
     for (const table of await listUserTables(sourceDb)) {
       const n = Number((await sourceDb.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).first()).n);
       assert.equal(manifest.d1.tables[table]?.rows, n, table);
@@ -290,7 +290,7 @@ test("T26 drill: backup a research loop, restore into a fresh instance, verify, 
     const ready = await (await restored.dispatchFetch(`${origin}/api/health/ready`)).json();
     const schema = ready.checks.find((item) => item.id === "schema");
     assert.equal(schema.status, "pass", JSON.stringify(ready));
-    assert.match(schema.detail, /v27/);
+    assert.match(schema.detail, /v28/);
   });
 
   await t.test("after re-login and token re-issue the restored data serves the same results and bytes", async () => {
