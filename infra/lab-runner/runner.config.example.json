@@ -1,0 +1,53 @@
+{
+  "platformUrl": "https://progress.tz-ndt.com",
+  "runnerId": "rnr_REPLACE_WITH_REGISTERED_ID",
+  "tokenFile": "/etc/tanyan/lab-runner.token",
+  "workRoot": "/srv/tanyan-lab-runner/work",
+  "nodePath": "/usr/local/bin/node",
+  "git": "git",
+  "githubBaseUrl": "https://github.com",
+  "nvidiaSmi": "nvidia-smi",
+  "scheduler": {
+    "type": "slurm",
+    "passEnv": ["PATH", "HOME", "USER", "LANG", "SLURM_CONF"],
+    "slurm": {
+      "sbatch": "/usr/bin/sbatch",
+      "squeue": "/usr/bin/squeue",
+      "sacct": "/usr/bin/sacct",
+      "scancel": "/usr/bin/scancel",
+      "extraArgs": ["--partition=gpu"],
+      "sacctLookbackDays": 14
+    }
+  },
+  "apptainer": {
+    "binary": "/usr/bin/apptainer",
+    "isolationFlags": ["--containall", "--cleanenv", "--no-home", "--net", "--network", "none"],
+    "extraFlags": [],
+    "cwdFlag": "--cwd",
+    "applyMemoryLimit": false,
+    "allowPullByDigest": false,
+    "images": {
+      "registry.example.org/lab/train@sha256:0000000000000000000000000000000000000000000000000000000000000000": "/srv/tanyan-lab-runner/images/train-0000.sif"
+    },
+    "hostEnv": ["PATH", "HOME", "USER", "LANG", "APPTAINER_CACHEDIR", "APPTAINER_TMPDIR", "XDG_RUNTIME_DIR"],
+    "forwardIntoContainer": ["CUDA_VISIBLE_DEVICES"]
+  },
+  "datasets": [
+    {
+      "versionId": "ds_REPLACE_WITH_DATASET_VERSION_ID",
+      "dataPath": "/data/projects/student-a/dataset-v3",
+      "manifestPath": "/data/projects/student-a/dataset-v3.manifest.json",
+      "splitManifestPath": "/data/projects/student-a/dataset-v3.splits.json"
+    }
+  ],
+  "gitReadFallback": null,
+  "limits": {
+    "maxConcurrentRuns": 1,
+    "heartbeatSeconds": 30,
+    "pollSeconds": 15,
+    "claimIntervalSeconds": 20,
+    "killGraceSeconds": 30,
+    "maxArtifacts": 500,
+    "requestTimeoutSeconds": 60
+  }
+}
