@@ -1,8 +1,7 @@
-import { canViewStudent } from "../../../lib/authorization";
 import { getD1 } from "../../../lib/database";
 import { assertSameOrigin, requireAppUser } from "../../../lib/feishu-auth";
 import {
-  confirmTask, createTask, endTask, forbiddenError, inputError, listResearchTasks, parseEntityId, privateJson,
+  canReadStudentTasks, confirmTask, createTask, endTask, forbiddenError, inputError, listResearchTasks, parseEntityId, privateJson,
   privateResponse, readJsonBody, researchLoopFailure, researchTaskDetail, reviseTask,
 } from "../../../lib/research-tasks-service";
 
@@ -19,7 +18,7 @@ export async function GET(request: Request) {
     }
     if (!params.get("studentId")) throw inputError("请提供 studentId 或 taskId");
     const studentId = parseEntityId(params.get("studentId"), "学生");
-    if (!(await canViewStudent(auth.user, studentId))) throw forbiddenError("无权查看该学生的研究任务");
+    if (!(await canReadStudentTasks(d1, auth.user, studentId))) throw forbiddenError("无权查看该学生的研究任务");
     return privateJson({ tasks: await listResearchTasks(d1, studentId) });
   } catch (error) { return researchLoopFailure(error, FALLBACK); }
 }

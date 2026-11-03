@@ -2,8 +2,12 @@
 // spec §5: viewers need canViewStudent; publishing is allowed to the student
 // owner or a reviewer in scope (canReviewStudent); extra review of protected
 // paths needs a reviewer who did not start the agent attempt.
+// FB1: a delegated peer reviewer (canCodeReviewStudent) may read the student's
+// change requests and publish or reject those with requires_extra_review = 0
+// whose attempt they did not request; never extra review.
 import { canReviewStudent, canViewStudent } from "../authorization";
 import type { AppUser } from "../feishu-auth";
+import { canCodeReviewStudent } from "../review-delegation";
 import { LIMITS } from "../research-loop/contracts.ts";
 import { changeObjectKey } from "./publisher.ts";
 
@@ -54,16 +58,23 @@ function isOwner(user: AppUser, studentId: string) {
   return user.role === "student" && user.studentId === studentId;
 }
 
-async function permissions(user: AppUser, row: ChangeRequestRow): Promise<ChangeRequestPermissions> {
+/** Delegated peer review applies only to non-protected changes the delegate
+ * did not request themself. Returns false for owners and full reviewers. */
+function peerReviewable(user: AppUser, row: ChangeRequestRow) {
+  return !Number(row.requires_extra_review) && Number(row.attempt_requested_by_user_id) !== user.id;
+}
+
+async function permissions(d1: D1Database, user: AppUser, row: ChangeRequestRow): Promise<ChangeRequestPermissions> {
   const reviewer = await canReviewStudent(user, row.student_id);
   const owner = isOwner(user, row.student_id);
+  const peer = !owner && !reviewer && peerReviewable(user, row) && await canCodeReviewStudent(d1, user, row.student_id);
   const actionable = ["pending_review", "failed"].includes(row.status);
   const reviewDone = !row.requires_extra_review || Boolean(row.extra_review_approved_at);
   return {
-    canPublish: (owner || reviewer) && reviewDone && (actionable || row.status === "publishing"),
+    canPublish: (owner || reviewer || peer) && reviewDone && (actionable || row.status === "publishing"),
     canApproveExtraReview: reviewer && actionable && Boolean(row.requires_extra_review) && !row.extra_review_approved_at
       && Number(row.attempt_requested_by_user_id) !== user.id,
-    canReject: (owner || reviewer) && actionable,
+    canReject: (owner || reviewer || peer) && actionable,
   };
 }
 
@@ -106,12 +117,32 @@ export function parseExpectedVersion(body: Record<string, unknown>) {
   return value;
 }
 
-/** Loads a row the user may view. Out-of-scope rows look exactly like missing
- * rows so IDs from another student never confirm existence (T01/T03). */
+async function canReadStudentChanges(d1: D1Database, user: AppUser, studentId: string) {
+  return (await canViewStudent(user, studentId)) || canCodeReviewStudent(d1, user, studentId);
+}
+
+/** Loads a row the user may view (viewers of the student and delegated peer
+ * reviewers). Out-of-scope rows look exactly like missing rows so IDs from
+ * another student never confirm existence (T01/T03). */
 export async function loadVisibleChangeRequest(d1: D1Database, user: AppUser, id: string) {
   const row = await d1.prepare(`${SELECT} WHERE cr.id = ?`).bind(id).first<ChangeRequestRow>();
-  if (!row || !(await canViewStudent(user, row.student_id))) throw new ChangeRequestNotFoundError("变更请求不存在或无权查看");
+  if (!row || !(await canReadStudentChanges(d1, user, row.student_id))) throw new ChangeRequestNotFoundError("变更请求不存在或无权查看");
   return row;
+}
+
+type ActorKind = "owner" | "reviewer" | "peer";
+
+/** Who may publish or reject: the owner student, a reviewer in scope, or a
+ * delegated peer reviewer for non-protected changes they did not request. */
+async function requireDecider(d1: D1Database, user: AppUser, row: ChangeRequestRow, verb: string): Promise<ActorKind> {
+  if (isOwner(user, row.student_id)) return "owner";
+  if (await canReviewStudent(user, row.student_id)) return "reviewer";
+  if (await canCodeReviewStudent(d1, user, row.student_id)) {
+    if (Number(row.requires_extra_review)) throw new ChangeRequestForbiddenError("修改涉及受保护路径，只能由导师审查");
+    if (Number(row.attempt_requested_by_user_id) === user.id) throw new ChangeRequestForbiddenError("不能审查自己发起的代理修改");
+    return "peer";
+  }
+  throw new ChangeRequestForbiddenError(`只有学生本人或有审核权限的导师可以${verb}`);
 }
 
 export async function readChangeRequestDetail(d1: D1Database, files: R2Bucket, user: AppUser, id: string) {
@@ -130,15 +161,15 @@ export async function readChangeRequestDetail(d1: D1Database, files: R2Bucket, u
       };
     } catch { change = null; }
   }
-  return { changeRequest: present(row), change, permissions: await permissions(user, row) };
+  return { changeRequest: present(row), change, permissions: await permissions(d1, user, row) };
 }
 
 export async function listTaskChangeRequests(d1: D1Database, user: AppUser, taskId: string) {
   const task = await d1.prepare("SELECT student_id FROM research_tasks WHERE id = ?").bind(taskId).first<{ student_id: string }>();
-  if (!task || !(await canViewStudent(user, task.student_id))) throw new ChangeRequestNotFoundError("任务不存在或无权查看");
+  if (!task || !(await canReadStudentChanges(d1, user, task.student_id))) throw new ChangeRequestNotFoundError("任务不存在或无权查看");
   const { results } = await d1.prepare(`${SELECT} WHERE cr.task_id = ? ORDER BY cr.created_at DESC, cr.id`).bind(taskId).all<ChangeRequestRow>();
   return {
-    changeRequests: await Promise.all(results.map(async (row) => ({ ...present(row), permissions: await permissions(user, row) }))),
+    changeRequests: await Promise.all(results.map(async (row) => ({ ...present(row), permissions: await permissions(d1, user, row) }))),
   };
 }
 
@@ -155,15 +186,25 @@ async function explainCasFailure(d1: D1Database, id: string, expectedVersion: nu
 /** Moves the row to `publishing` (CAS). The caller then runs the publisher. */
 export async function claimPublish(d1: D1Database, user: AppUser, id: string, expectedVersion: number) {
   const row = await loadVisibleChangeRequest(d1, user, id);
-  if (!isOwner(user, row.student_id) && !(await canReviewStudent(user, row.student_id))) {
-    throw new ChangeRequestForbiddenError("只有学生本人或有审核权限的导师可以发布");
-  }
+  const actor = await requireDecider(d1, user, row, "发布");
+  // A peer reviewer's claim additionally requires a non-protected change at the
+  // moment of the CAS, so a concurrent protected-path flag cannot slip through.
   const claimed = await d1.prepare(`UPDATE change_requests SET status = 'publishing', published_by_user_id = ?,
       version = version + 1, updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND version = ? AND status IN ('pending_review', 'failed', 'publishing')
       AND (requires_extra_review = 0 OR extra_review_approved_at IS NOT NULL)
+      ${actor === "peer" ? "AND requires_extra_review = 0" : ""}
     RETURNING id`).bind(user.id, id, expectedVersion).first();
-  if (!claimed) await explainCasFailure(d1, id, expectedVersion);
+  if (!claimed) {
+    if (actor === "peer") {
+      const current = await d1.prepare("SELECT version, requires_extra_review FROM change_requests WHERE id = ?").bind(id)
+        .first<{ version: number; requires_extra_review: number }>();
+      if (current && Number(current.version) === expectedVersion && Number(current.requires_extra_review)) {
+        throw new ChangeRequestForbiddenError("修改涉及受保护路径，只能由导师审查");
+      }
+    }
+    await explainCasFailure(d1, id, expectedVersion);
+  }
 }
 
 export async function approveExtraReview(d1: D1Database, user: AppUser, id: string, expectedVersion: number) {
@@ -186,11 +227,10 @@ export async function approveExtraReview(d1: D1Database, user: AppUser, id: stri
 
 export async function rejectChangeRequest(d1: D1Database, user: AppUser, id: string, expectedVersion: number) {
   const row = await loadVisibleChangeRequest(d1, user, id);
-  if (!isOwner(user, row.student_id) && !(await canReviewStudent(user, row.student_id))) {
-    throw new ChangeRequestForbiddenError("只有学生本人或有审核权限的导师可以驳回");
-  }
+  const actor = await requireDecider(d1, user, row, "驳回");
   const updated = await d1.prepare(`UPDATE change_requests SET status = 'rejected', version = version + 1, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND version = ? AND status IN ('pending_review', 'failed') RETURNING id`).bind(id, expectedVersion).first();
+    WHERE id = ? AND version = ? AND status IN ('pending_review', 'failed')
+      ${actor === "peer" ? "AND requires_extra_review = 0" : ""} RETURNING id`).bind(id, expectedVersion).first();
   if (!updated) {
     const current = await d1.prepare("SELECT version FROM change_requests WHERE id = ?").bind(id).first<{ version: number }>();
     if (!current || Number(current.version) !== expectedVersion) throw new ChangeRequestConflictError("变更请求已被更新，请重新载入");
