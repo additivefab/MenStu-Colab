@@ -1,5 +1,5 @@
 import {
-  agentAttemptDetail, cancelAgentAttempt, listTaskAttempts, startAgentAttempt,
+  agentAttemptDetail, cancelAgentAttempt, decideAgentPlan, listTaskAttempts, startAgentAttempt,
 } from "../../../lib/agent-attempts-service";
 import { getD1 } from "../../../lib/database";
 import { assertSameOrigin, requireAppUser } from "../../../lib/feishu-auth";
@@ -35,6 +35,7 @@ export async function POST(request: Request) {
     switch (body.action) {
       case "start": return privateJson(await startAgentAttempt(d1, auth.user, body));
       case "cancel": return privateJson(await cancelAgentAttempt(d1, auth.user, body));
+      case "decide_plan": return privateJson(await decideAgentPlan(d1, auth.user, body));
       default: throw inputError("不支持的操作");
     }
   } catch (error) { return researchLoopFailure(error, FALLBACK); }
