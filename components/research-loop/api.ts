@@ -2,6 +2,8 @@
 // (docs/科研闭环_实施规格_v1.md §6). The shapes mirror the route/service
 // files; authorization always comes from the server's `permissions` objects.
 
+import type { BaselineCandidate, ResultInterpretationView, RunBaselineView } from "../../lib/research-loop/results-contract.ts";
+
 export type TaskStatus = "draft" | "confirmed" | "closed" | "canceled";
 export type TaskBudget = { maxAgentMinutes?: number; maxGpuCount?: number; maxWalltimeMinutes?: number };
 
@@ -231,6 +233,16 @@ export type RunDetail = {
     updatedAt: string;
   } | null;
   comments: { id: number; authorName: string; parentCommentId: number | null; body: string; createdAt: string }[];
+  // Batch 4 (lib/research-loop/results-contract.ts). Optional so the card
+  // still renders against a server that does not return them yet.
+  /** Comparison run chosen for this run; null = no baseline set. */
+  baseline?: RunBaselineView | null;
+  /** Runs this viewer may pick as baseline (only meaningful with canSetBaseline). */
+  baselineCandidates?: BaselineCandidate[];
+  /** Latest student interpretation; null = none yet. */
+  interpretation?: ResultInterpretationView | null;
+  /** Number of saved interpretation versions. */
+  interpretationVersions?: number;
   permissions: {
     canApprove: boolean;
     canRevokeApproval: boolean;
@@ -238,6 +250,9 @@ export type RunDetail = {
     canRerun: boolean;
     canReview: boolean;
     canComment: boolean;
+    canSetBaseline?: boolean;
+    canInterpret?: boolean;
+    canDraftProgress?: boolean;
   };
 };
 

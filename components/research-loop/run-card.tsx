@@ -8,6 +8,7 @@ import {
 import { NavLink, ResultLineage } from "./lineage";
 import { anchorId, useFocusedCard, useLoopNavigation } from "./navigation";
 import { runLabel } from "./numbering";
+import { BaselinePanel, InterpretationSection, MetricsWithBaseline, ProgressDraftAction } from "./result-insights";
 import { describeRunSpec } from "./spec-summary";
 import { TaskForm, type TaskContentDraft } from "./task-form";
 import { Blocked, ConfirmButton, CopyButton, ErrorNote, Field, Notice, Pill } from "./ui";
@@ -78,7 +79,9 @@ function SpecFacts({ detail, options }: { detail: RunDetail; options?: RunOption
     <Field label="参数" value={params.length ? params.map(([key, value]) => `${key}=${String(value)}`).join("，") : "无"} mono />
     <Field label="资源" value={`${spec.resources.gpuCount} GPU · ${spec.resources.memoryGb} GB 内存 · 最长 ${spec.resources.walltimeMinutes} 分钟`} />
     <Field label="网络与外发" value={`${spec.network === "deny" ? "禁止联网" : spec.network}；外发白名单 ${egress.allowedExtensions.join(" ") || "无"}，单文件 ≤ ${bytesLabel(egress.maxFileBytes)}，图片${egress.allowImages ? "可" : "不"}外发`} />
-    <Field label="基线" value="未登记（本期运行规范不含基线字段）" />
+    <Field label="基线" value={detail.baseline
+      ? <>{detail.baseline.taskTitle || "任务"} · {runLabel(detail.baseline.number)}<small> · {detail.baseline.protocolMatches ? "评价协议相同" : "评价协议不同"} · 仅作比较，不属于运行规范</small></>
+      : <>未设基线<small> · 基线只是比较对象，不属于运行规范</small></>} />
     <Field label="任务版本" value={`第 ${spec.taskVersion} 版`} />
   </dl>;
 }
@@ -129,6 +132,10 @@ function ResultSection({ detail, taskContent, onReload, onChanged }: {
   const source = artifacts.find((item) => item.id === result?.metricsSourceArtifactId);
   const metricsProtocol = result?.metrics?.evaluationProtocolSha256 ?? null;
   const protocolMatches = metricsProtocol ? metricsProtocol === detail.spec.evaluationProtocolSha256 : null;
+  // Interpretations exist for completed or failed runs (contract); show the
+  // section there, or wherever one exists or the server allows writing one.
+  const showInterpretation = Boolean(detail.interpretation) || permissions.canInterpret === true
+    || detail.run.status === "completed" || detail.run.status === "failed";
 
   async function submitReview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -184,14 +191,10 @@ function ResultSection({ detail, taskContent, onReload, onChanged }: {
           <span>划分：{result.metrics.split ?? "未注明"}</span>
           <span>来源：{source ? <>{metricsHref ? <a href={metricsHref}>{source.relativePath}</a> : source.relativePath}<small className={styles.mono}> · sha256 {shortSha(source.sha256, 12)}</small></> : "未记录"}</span>
           <span>评价协议：{protocolMatches === null ? "指标未声明" : protocolMatches ? <Pill tone="good">与运行规范一致</Pill> : <Pill tone="bad">与运行规范不一致</Pill>}</span>
-          <span>基线对比：未登记</span>
         </p>
-        <div className={styles.tableWrap}><table className={`${styles.table} ${rc.stackTable}`}>
-          <caption>指标（{result.metrics.split ?? "未注明划分"}）</caption>
-          <thead><tr><th scope="col">指标</th><th scope="col">数值</th></tr></thead>
-          <tbody>{Object.entries(result.metrics.values).map(([name, value]) => <tr key={name}><td data-label="指标">{name}</td><td data-label="数值" className={styles.mono}>{value}</td></tr>)}</tbody>
-        </table></div>
+        <MetricsWithBaseline values={result.metrics.values} split={result.metrics.split} baseline={detail.baseline} />
       </> : result ? <p className={styles.muted}>没有通过校验的机器指标文件，不能作为正式指标。</p> : null}
+      {result ? <BaselinePanel detail={detail} onReload={onReload} /> : null}
       {artifacts.length ? <div className={styles.tableWrap}><table className={`${styles.table} ${styles.wideTable} ${rc.stackTable}`}>
         <caption>产物 {artifacts.length} 个</caption>
         <thead><tr><th scope="col">文件</th><th scope="col">类型</th><th scope="col">大小</th><th scope="col">去向</th></tr></thead>
@@ -207,12 +210,16 @@ function ResultSection({ detail, taskContent, onReload, onChanged }: {
       </table></div> : null}
     </div> : null}
 
+    {/* FA3: the student's interpretation comes before the mentor review. */}
+    {showInterpretation ? <InterpretationSection detail={detail} onReload={onReload} /> : null}
+
     {review ? <>
       {review.note ? <p className={styles.reviewNote}><strong>评审意见：</strong>{review.note}<small> · {dateLabel(review.updatedAt)}</small></p> : null}
       {review.followupTaskId ? <p className={styles.muted}>已转为下一轮任务：<NavLink target={{ kind: "task", taskId: review.followupTaskId }}>{nav.taskTitle(review.followupTaskId) ?? "查看下一轮任务"}</NavLink></p> : null}
       {permissions.canReview ? <form className={styles.form} onSubmit={submitReview}>
         <h4>评审结论</h4>
         <p className={styles.muted}>技术有效性、假设结论和导师评审分别记录：验收只表示导师认可这次结果，不改变技术有效性。</p>
+        <p className={styles.muted}>{detail.interpretation ? `已有学生解读（第 ${detail.interpretation.version} 版），见上方。` : "学生尚未解读；可以先评审，也可以提醒学生补充。"}</p>
         <div className={styles.grid2}>
           <label>评审结论<select required value={reviewDraft.state} disabled={busy} onChange={(event) => setReviewDraft({ ...reviewDraft, state: event.target.value })}>
             <option value="">请选择</option>
@@ -240,6 +247,7 @@ function ResultSection({ detail, taskContent, onReload, onChanged }: {
     </div>
     <ErrorNote error={error} />
     <Notice>{notice}</Notice>
+    {TERMINAL.has(detail.run.status) ? <ProgressDraftAction detail={detail} /> : null}
     {TERMINAL.has(detail.run.status) ? followupOpen ? <TaskForm
       title="转为下一轮任务"
       submitLabel="创建下一轮任务"
