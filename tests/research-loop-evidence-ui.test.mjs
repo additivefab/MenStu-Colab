@@ -50,6 +50,8 @@ test("evidence periods: presets, custom validation and the 62-day limit", () => 
 test("loop card links: profile URL from the dashboard, in-page hash on the profile", () => {
   assert.equal(loopCardHref("stu_1", { kind: "task", id: "task_1" }, false), "/students/stu_1#research-task-task_1");
   assert.equal(loopCardHref("stu_1", { kind: "run", id: "run_3" }, true), "#research-run-run_3");
+  // Students cannot open /students/<id> (redirect drops the hash): use their research view.
+  assert.equal(loopCardHref("stu_1", { kind: "run", id: "run_3" }, false, true), "/?studentView=research#research-run-run_3");
 });
 
 test("runs: interpretation prompt only for terminal, uninterpreted runs; neutral metrics text", () => {

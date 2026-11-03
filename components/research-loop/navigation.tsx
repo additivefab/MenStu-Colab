@@ -70,6 +70,27 @@ export const anchorId = {
   run: (id: string) => `research-run-${id}`,
 };
 
+/** Scrolls an element into view and re-checks a few times while cards above it
+ * are still loading and growing; stops as soon as the user scrolls or types. */
+export function settleScroll(getElement: () => Element | null) {
+  let userMoved = false;
+  const stop = () => { userMoved = true; };
+  const events = ["wheel", "touchstart", "keydown", "mousedown"] as const;
+  for (const name of events) window.addEventListener(name, stop, { once: true, passive: true });
+  const attempt = (last: boolean) => {
+    if (!userMoved) {
+      const element = getElement();
+      if (element) {
+        const top = element.getBoundingClientRect().top;
+        if (top < 0 || top > window.innerHeight * 0.4) element.scrollIntoView({ block: "start" });
+      }
+    }
+    if (last) for (const name of events) window.removeEventListener(name, stop);
+  };
+  // Cards above load lazily; slow pages keep growing for a few seconds.
+  [50, 400, 1000, 2000, 3500, 6000].forEach((delay, index, all) => window.setTimeout(() => attempt(index === all.length - 1), delay));
+}
+
 type LeafKind = "attempt" | "changeRequest" | "run";
 
 function targetId(target: StageTarget): string {
@@ -92,7 +113,7 @@ export function useFocusedCard<T extends HTMLElement>(kind: LeafKind, id: string
     const timer = window.setTimeout(() => {
       if (claimFocus && !claimFocus(key)) return;
       setOpen(true);
-      window.requestAnimationFrame(() => ref.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      settleScroll(() => ref.current);
     }, 0);
     return () => window.clearTimeout(timer);
   }, [key, claimFocus, setOpen]);

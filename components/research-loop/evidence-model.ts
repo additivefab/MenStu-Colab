@@ -45,10 +45,13 @@ export function evidenceUrl(studentId: string, period: EvidencePeriod) {
   return `/api/research-loop/evidence?${params.toString()}`;
 }
 
-/** Link to a loop card: an in-page hash on the student profile, otherwise the profile URL. */
-export function loopCardHref(studentId: string, target: { kind: "task" | "run"; id: string }, inPage: boolean) {
+/** Link to a loop card: an in-page hash on the student profile; for a student
+ * viewer their own research view (students cannot open /students/<id>, which
+ * redirects and drops the hash); otherwise the profile URL. */
+export function loopCardHref(studentId: string, target: { kind: "task" | "run"; id: string }, inPage: boolean, studentWorkspace = false) {
   const hash = `#research-${target.kind}-${target.id}`;
-  return inPage ? hash : `/students/${encodeURIComponent(studentId)}${hash}`;
+  if (inPage) return hash;
+  return studentWorkspace ? `/?studentView=research${hash}` : `/students/${encodeURIComponent(studentId)}${hash}`;
 }
 
 /** Runs whose result the student can still explain (terminal and not interpreted). */

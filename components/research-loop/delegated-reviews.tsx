@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { getJson, type ChangeRequest, type TaskSummary } from "./api";
+import { ChangeRequestCard } from "./change-request-card";
 import { DELEGATION_SCOPE, normalizeDelegatedStudents, type DelegatedStudent } from "./delegations";
 import { dateLabel, providerLabels } from "./labels";
 import { ErrorNote, Pill } from "./ui";
@@ -14,8 +15,6 @@ import styles from "./research-loop.module.css";
 
 type PendingItem = { task: TaskSummary; changeRequest: ChangeRequest };
 type StudentReviews = DelegatedStudent & { pending: PendingItem[] | null; error: unknown };
-
-const reviewHref = (studentId: string, taskId: string) => `/students/${encodeURIComponent(studentId)}#research-task-${taskId}`;
 
 async function loadStudent(student: DelegatedStudent, signal: AbortSignal): Promise<StudentReviews> {
   try {
@@ -91,8 +90,9 @@ export function DelegatedReviews() {
           </span>
           <span className={local.right}>
             {changeRequest.requiresExtraReview ? <Pill tone="warn">涉及受保护路径，由导师处理</Pill> : actionable ? <Pill tone="info">待你审阅</Pill> : <Pill tone="neutral">仅可查看</Pill>}
-            <a className={local.open} href={reviewHref(student.studentId, task.id)}>去审阅</a>
           </span>
+          {/* Reviewed in place: a delegate may be a student, who cannot open another student's profile page. */}
+          <ChangeRequestCard item={changeRequest} onChanged={() => void load()} />
         </li>;
       })}</ul> : null}
     </div>)}

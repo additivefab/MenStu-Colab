@@ -84,7 +84,7 @@ export function EvidenceList({ studentId, mode, inPage = false }: {
 
   const titles = new Map(report?.tasks.map((task) => [task.taskId, task.title]) ?? []);
   const taskName = (taskId: string) => titles.get(taskId) ?? "研究任务";
-  const href = (kind: "task" | "run", id: string) => loopCardHref(studentId, { kind, id }, inPage);
+  const href = (kind: "task" | "run", id: string) => loopCardHref(studentId, { kind, id }, inPage, !staff);
   const toExplain = !staff && report ? report.runs.filter(needsInterpretation) : [];
 
   const body = <div className={ev.body}>

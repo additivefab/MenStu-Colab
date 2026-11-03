@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { getJson, newKey, postJson, type RunList, type TaskSummary } from "./api";
-import { anchorId, LoopNavigationContext, type ChangeRequestRef, type LoopNavigation } from "./navigation";
+import { anchorId, LoopNavigationContext, settleScroll, type ChangeRequestRef, type LoopNavigation } from "./navigation";
 import { sequenceNumbers } from "./numbering";
 import { Delegations } from "./delegations";
 import { Readiness } from "./readiness";
@@ -105,9 +105,7 @@ function PanelContent({ studentId, mode, prefill, guidanceHref }: {
     if (!isOpenTask(task)) setFilter("all");
     setHighlight(target.taskId);
     setFocus({ ...target, key: Date.now() });
-    if (target.kind === "task") {
-      window.setTimeout(() => document.getElementById(anchorId.task(target.taskId))?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
-    }
+    if (target.kind === "task") settleScroll(() => document.getElementById(anchorId.task(target.taskId)));
   }, [data]);
 
   // Deep links (#research-task-<id> / #research-run-<id>) open the card once the
