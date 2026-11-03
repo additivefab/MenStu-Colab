@@ -1,0 +1,13 @@
+/* Mentor inbox: research-loop decision items (frontend plan FA1).
+   Palette follows the mentor inbox in app/globals.css (light theme). */
+
+/* Queue row marker for technically invalid results. */
+.invalidTag { grid-column: 1 / -1; justify-self: start; padding: 2px 7px; border-radius: 99px; color: #a3434d; background: #ffeaec; font-size: 11px; font-weight: 800; font-style: normal; }
+
+.invalidNotice { margin: 16px 0 0; padding: 11px 13px; display: grid; gap: 4px; border: 1px solid #f0c9ce; border-radius: 10px; color: #8d3540; background: #fff4f5; font-size: 12px; line-height: 1.55; }
+.invalidNotice b { font-size: 12px; }
+
+.facts { margin: 16px 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; overflow: hidden; border: 1px solid #e5e9e6; border-radius: 10px; background: #e5e9e6; }
+.facts > div { min-width: 0; padding: 12px; background: #fafbf9; }
+.facts dt { color: #849087; font-size: 11px; font-weight: 800; }
+.facts dd { margin: 7px 0 0; color: #29312d; font-size: 13px; font-weight: 700; line-height: 1.5; overflow-wrap: anywhere; }

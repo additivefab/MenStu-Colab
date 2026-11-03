@@ -22,7 +22,8 @@ import type { ProblemRecordStudent } from "../lib/problem-records";
 import { clearMutationKey, mutationKeyForForm } from "../lib/client-idempotency";
 import { StudentRepositoryCard } from "./components/student-repository-card";
 import { ResearchLoopPanel } from "../components/research-loop/research-loop-panel";
-import type { LoopInboxItem } from "../lib/research-loop-inbox";
+import type { LoopInboxItem, LoopInboxKind } from "../lib/research-loop-inbox";
+import loopStyles from "./components/loop-inbox.module.css";
 import { ResearchLoopAdmin } from "../components/research-loop/admin-panel";
 
 declare global {
@@ -907,8 +908,8 @@ export default function Dashboard() {
             <div className="nav-entry" key={item.id}>
               <button className={`nav-item ${activeView === item.id ? "active" : ""}`} onClick={() => navigateMentor(item.id)}>
                 <span>{item.icon}</span>{item.label}
-                {item.id === "inbox" && data && data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + data.metrics.blocked + meetingPendingCount > 0
-                  ? <b>{data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + data.metrics.blocked + meetingPendingCount}</b> : null}
+                {item.id === "inbox" && data && data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + (data.metrics.loopPending ?? 0) + data.metrics.blocked + meetingPendingCount > 0
+                  ? <b>{data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + (data.metrics.loopPending ?? 0) + data.metrics.blocked + meetingPendingCount}</b> : null}
               </button>
             </div>
           ))}
@@ -1015,7 +1016,51 @@ type MentorTaskCategory = "decision" | "coordination" | "followup" | "waiting";
 type MentorInboxTask =
   | { key: string; category: MentorTaskCategory; kind: "progress"; entry: PendingEntry }
   | { key: string; category: MentorTaskCategory; kind: "workflow"; task: DashboardData["workflowTasks"][number] }
-  | { key: string; category: MentorTaskCategory; kind: "meeting"; request: MeetingRequest };
+  | { key: string; category: MentorTaskCategory; kind: "meeting"; request: MeetingRequest }
+  | { key: string; category: MentorTaskCategory; kind: "loop"; item: LoopInboxItem };
+
+const loopKindLabels: Record<LoopInboxKind, string> = {
+  task_confirmation: "确认任务",
+  change_extra_review: "额外审查",
+  run_approval: "批准运行",
+  result_review: "评审结果",
+};
+
+const loopNextStep: Record<LoopInboxKind, string> = {
+  task_confirmation: "打开任务卡片，核对研究问题、范围和验收标准后确认，或退回学生修改。",
+  change_extra_review: "打开变更卡片，查看触发额外审查的原因和具体改动后通过或退回。",
+  run_approval: "打开运行卡片，核对“本次批准的内容”后批准或取消。",
+  result_review: "打开运行卡片，先看技术有效性和指标来源，再给出评审结论。",
+};
+
+function loopDecisionText(item: LoopInboxItem) {
+  const run = item.runNumber != null ? `运行 #${item.runNumber}` : "这次运行";
+  if (item.kind === "task_confirmation") return `是否确认任务定义${item.taskVersion != null ? `（V${item.taskVersion}）` : ""}`;
+  if (item.kind === "change_extra_review") return "是否通过这次代码变更的额外审查";
+  if (item.kind === "run_approval") return `是否批准${run}`;
+  return `如何评审${run}的结果`;
+}
+
+function loopWaitingText(since: string) {
+  const elapsed = Date.now() - instantTimestamp(since);
+  if (!Number.isFinite(elapsed)) return "等待时间未知";
+  const hours = Math.floor(Math.max(0, elapsed) / 3_600_000);
+  if (hours < 1) return "等待不到 1 小时";
+  if (hours < 24) return `已等待 ${hours} 小时`;
+  return `已等待 ${Math.floor(hours / 24)} 天`;
+}
+
+function loopSinceText(since: string) {
+  const timestamp = instantTimestamp(since);
+  if (!Number.isFinite(timestamp)) return "未知";
+  return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(timestamp));
+}
+
+function mentorTaskWaitingSince(task: MentorInboxTask) {
+  if (task.kind === "loop") return instantTimestamp(task.item.waitingSince);
+  if (task.kind === "progress") return instantTimestamp(task.entry.revisions.find((revision) => revision.revision_number === task.entry.current_revision)?.created_at ?? task.entry.submitted_at);
+  return Number.NaN;
+}
 
 const mentorTaskLabels: Record<MentorTaskCategory, string> = {
   decision: "需要判断",
@@ -1078,11 +1123,27 @@ function MentorDecisionInbox({ data, reviewBusy, receipt, onDismissReceipt, onPl
       kind: "meeting",
       request,
     })),
-  ], [data.pending, data.workflowTasks, meetingRequests]);
+    ...(data.loopTasks ?? []).map((item): MentorInboxTask => ({
+      key: `loop-${item.id}`,
+      category: "decision",
+      kind: "loop",
+      item,
+    })),
+  ], [data.pending, data.workflowTasks, data.loopTasks, meetingRequests]);
   const categoryPriority: Record<MentorTaskCategory, number> = { decision: 0, coordination: 1, followup: 2, waiting: 3 };
   const filtered = tasks
     .filter((task) => filter === "all" || task.category === filter)
-    .sort((left, right) => categoryPriority[left.category] - categoryPriority[right.category]);
+    .sort((left, right) => {
+      const byCategory = categoryPriority[left.category] - categoryPriority[right.category];
+      if (byCategory || left.category !== "decision") return byCategory;
+      // Decision items wait longest first; items without a timestamp keep their order after them.
+      const leftSince = mentorTaskWaitingSince(left);
+      const rightSince = mentorTaskWaitingSince(right);
+      const leftKnown = Number.isFinite(leftSince);
+      const rightKnown = Number.isFinite(rightSince);
+      if (leftKnown && rightKnown) return leftSince - rightSince;
+      return leftKnown === rightKnown ? 0 : leftKnown ? -1 : 1;
+    });
   const selected = filtered.find((task) => task.key === selectedKey) ?? filtered[0];
 
   async function handleMeeting(request: MeetingRequest, action: "confirm" | "decline") {
@@ -1164,9 +1225,9 @@ function MentorDecisionInbox({ data, reviewBusy, receipt, onDismissReceipt, onPl
       <div className="mentor-task-queue" aria-label="待办队列">
         {meetingLoadError ? <div className="mentor-task-load-error" role="alert"><strong>预约暂未同步</strong><small>{meetingLoadError}</small><button type="button" onClick={() => void onRefresh()}>重新读取</button></div> : null}
         {filtered.map((task) => {
-          const student = task.kind === "progress" ? task.entry.display_name : task.kind === "workflow" ? task.task.studentName : task.request.student_name;
-          const title = task.kind === "progress" ? task.entry.paper?.title || task.entry.title : task.kind === "workflow" ? task.task.title : task.request.topic;
-          const meta = task.kind === "progress" ? `${isAiSummaryCandidate(task.entry) ? "AI 纪要候选" : task.entry.kind} · V${task.entry.current_revision}` : task.kind === "workflow" ? task.task.detail : `${task.request.preferred_date} ${task.request.preferred_time}`;
+          const student = task.kind === "progress" ? task.entry.display_name : task.kind === "workflow" ? task.task.studentName : task.kind === "loop" ? task.item.studentName : task.request.student_name;
+          const title = task.kind === "progress" ? task.entry.paper?.title || task.entry.title : task.kind === "workflow" ? task.task.title : task.kind === "loop" ? `${loopKindLabels[task.item.kind]}：${task.item.taskTitle}` : task.request.topic;
+          const meta = task.kind === "progress" ? `${isAiSummaryCandidate(task.entry) ? "AI 纪要候选" : task.entry.kind} · V${task.entry.current_revision}` : task.kind === "workflow" ? task.task.detail : task.kind === "loop" ? `${task.item.title} · ${loopWaitingText(task.item.waitingSince)}` : `${task.request.preferred_date} ${task.request.preferred_time}`;
           return <button key={task.key} className={selected?.key === task.key ? "active" : ""} onClick={() => {
             setSelectedKey(task.key);
             if (window.matchMedia("(max-width: 780px)").matches) window.requestAnimationFrame(() => {
@@ -1176,6 +1237,7 @@ function MentorDecisionInbox({ data, reviewBusy, receipt, onDismissReceipt, onPl
           }}>
             <span className={`mentor-task-category ${task.category}`}>{mentorTaskLabels[task.category]}</span>
             <strong>{student}</strong><b>{title}</b><small>{meta}</small>
+            {task.kind === "loop" && task.item.technicalValidity === "invalid" ? <em className={loopStyles.invalidTag}>技术无效</em> : null}
           </button>;
         })}
         {!filtered.length && !meetingLoadError ? <div className="mentor-task-empty"><span>✓</span><strong>这个队列已清空</strong><small>切换类型可查看其他事项。</small></div> : null}
@@ -1208,6 +1270,19 @@ function MentorDecisionInbox({ data, reviewBusy, receipt, onDismissReceipt, onPl
           {selected.request.note ? <div className="mentor-decision-fact"><span>学生备注</span><strong>{selected.request.note}</strong></div> : null}
           <label className="review-note-field">回复说明<textarea rows={3} value={meetingNotes[selected.request.id] || ""} onChange={(event) => setMeetingNotes((current) => ({ ...current, [selected.request.id]: event.target.value }))} placeholder="确认时可留空；拒绝时必须给出可行动的原因" /></label>
           <div className="mentor-detail-actions"><button disabled={meetingBusy === selected.request.id} onClick={() => void handleMeeting(selected.request, "decline")}>拒绝并说明</button><button className="primary" disabled={meetingBusy === selected.request.id} onClick={() => void handleMeeting(selected.request, "confirm")}>确认预约</button></div>
+        </article> : null}
+        {selected?.kind === "loop" ? <article className="mentor-workflow-detail">
+          <span className={`mentor-task-category ${selected.category}`}>{mentorTaskLabels[selected.category]}</span>
+          <h2>{selected.item.title}</h2><p>{selected.item.studentName} · {loopKindLabels[selected.item.kind]} · {loopWaitingText(selected.item.waitingSince)}</p>
+          {selected.item.technicalValidity === "invalid" ? <div className={loopStyles.invalidNotice} role="note"><b>技术无效</b><span>这次运行的结果在技术上无效；仍需要你给出评审结论。</span></div> : null}
+          <dl className={loopStyles.facts}>
+            <div><dt>学生</dt><dd>{selected.item.studentName}</dd></div>
+            <div><dt>研究任务</dt><dd>{selected.item.taskTitle}</dd></div>
+            <div><dt>需要决定</dt><dd>{loopDecisionText(selected.item)}</dd></div>
+            <div><dt>等待自</dt><dd>{loopSinceText(selected.item.waitingSince)}</dd></div>
+          </dl>
+          <div className="mentor-decision-effect"><b>下一步</b><span>{loopNextStep[selected.item.kind]}</span></div>
+          <div className="mentor-detail-actions"><a className="primary button-link" href={selected.item.href}>{selected.item.kind === "task_confirmation" ? "打开任务卡片" : selected.item.kind === "change_extra_review" ? "打开变更卡片" : "打开运行卡片"}</a></div>
         </article> : null}
         {!selected ? <div className="mentor-task-detail-empty"><span>✓</span><h2>没有需要处理的事项</h2><p>新进展、方案、阻塞或预约到达后会进入这里。</p></div> : null}
       </div>
@@ -2558,7 +2633,7 @@ function OverviewMetrics({ data }: { data: DashboardData }) {
   return <section className="metric-grid" aria-label="课题组概况">
     <article className="metric"><span>{data.viewer.role === "admin" ? "负责学生" : "在组学生"}</span><strong>{data.metrics.total}</strong><small>{data.metrics.doctors} 博士 · {data.metrics.masters} 硕士</small></article>
     <article className="metric"><span>科研成果与资产</span><strong>{data.metrics.outputs}</strong><small className="positive">论文、数据、软件、专利与交付物</small></article>
-    <article className="metric"><span>待我处理</span><strong>{data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + data.metrics.blocked}</strong><small>证据 {data.metrics.pending} · 方案 {data.metrics.proposalPending} · 验收 {data.metrics.guidancePending} · 节点 {data.metrics.blocked}</small></article>
+    <article className="metric"><span>待我处理</span><strong>{data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + (data.metrics.loopPending ?? 0) + data.metrics.blocked}</strong><small>证据 {data.metrics.pending} · 方案 {data.metrics.proposalPending} · 验收 {data.metrics.guidancePending} · 节点 {data.metrics.blocked} · 闭环 {data.metrics.loopPending ?? 0}</small></article>
     <article className="metric attention"><span>需要关注</span><strong>{data.metrics.attention}</strong><small>黄 {data.metrics.riskCounts.黄色 ?? 0} · 橙 {data.metrics.riskCounts.橙色 ?? 0} · 红 {data.metrics.riskCounts.红色 ?? 0}</small></article>
   </section>;
 }
