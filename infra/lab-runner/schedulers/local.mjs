@@ -2,6 +2,9 @@
 // Jobs are recorded in <workRoot>/.local-scheduler/<submitTag>.json BEFORE the
 // process is spawned, so a crash between spawn and the runner persisting the
 // job id still leaves a record findByTag() can adopt (T11).
+// submit() is idempotent per submitTag (R05): the record is published
+// exclusively (link(2), EEXIST like O_EXCL), and a second submit for the same
+// tag returns the recorded job id instead of spawning a second process.
 //
 // Limitations (documented in README): no queueing or GPU arbitration between
 // concurrent runs, memory limits only via Apptainer cgroups, PID liveness is
@@ -12,6 +15,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import { readJsonIfExists, writeJsonAtomic } from "../lib/fsutil.mjs";
+import { SubmitOutcomeUnknownError, SubmitRejectedError, writeJsonExclusive } from "./submit-outcome.mjs";
 
 function alive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -28,6 +32,7 @@ export function createLocalScheduler({ workRoot, nodePath = process.execPath, st
   const recordPath = (submitTag) => join(registry, `${submitTag}.json`);
 
   async function stateOf(record) {
+    if (record.spawnError) return { state: "failed", exitCode: null, reason: `launcher could not be started: ${record.spawnError}` };
     const status = await readJsonIfExists(join(record.runDir, "status.json"));
     if (status) {
       if (status.state === "finished") return { state: "finished", exitCode: status.exitCode, reason: null };
@@ -67,8 +72,6 @@ export function createLocalScheduler({ workRoot, nodePath = process.execPath, st
     kind: "local",
 
     async submit(job, submitTag) {
-      const existing = await readJsonIfExists(recordPath(submitTag));
-      if (existing) throw new Error(`local job already recorded for ${submitTag}; refusing duplicate submit`);
       const record = {
         jobId: `local-${randomUUID()}`,
         submitTag,
@@ -76,7 +79,11 @@ export function createLocalScheduler({ workRoot, nodePath = process.execPath, st
         pid: null,
         submittedAt: new Date().toISOString(),
       };
-      await writeJsonAtomic(recordPath(submitTag), record);
+      if (!(await writeJsonExclusive(recordPath(submitTag), record))) {
+        const existing = await readJsonIfExists(recordPath(submitTag)).catch(() => null);
+        if (typeof existing?.jobId === "string") return { jobId: existing.jobId, reused: true };
+        throw new SubmitOutcomeUnknownError(`local job record for ${submitTag} exists without a job id`);
+      }
       const child = spawn(nodePath, [job.jobScript], {
         cwd: job.runDir,
         env,
@@ -84,10 +91,17 @@ export function createLocalScheduler({ workRoot, nodePath = process.execPath, st
         detached: true,
         stdio: "ignore",
       });
-      await new Promise((resolve, reject) => {
-        child.once("spawn", resolve);
-        child.once("error", reject);
-      });
+      try {
+        await new Promise((resolve, reject) => {
+          child.once("spawn", resolve);
+          child.once("error", reject);
+        });
+      } catch (error) {
+        // The launcher never started, so no job exists: a definitive rejection.
+        record.spawnError = String(error?.message ?? error).slice(0, 300);
+        await writeJsonAtomic(recordPath(submitTag), record);
+        throw new SubmitRejectedError(`local launcher could not be started: ${record.spawnError}`, { cause: error });
+      }
       child.unref();
       record.pid = child.pid;
       await writeJsonAtomic(recordPath(submitTag), record);

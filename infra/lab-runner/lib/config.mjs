@@ -92,6 +92,9 @@ export function validateConfig(raw) {
       killGraceSeconds: positiveNumber(limits.killGraceSeconds, 30, "limits.killGraceSeconds"),
       maxArtifacts: Math.floor(positiveNumber(limits.maxArtifacts, 500, "limits.maxArtifacts")),
       requestTimeoutSeconds: positiveNumber(limits.requestTimeoutSeconds, 60, "limits.requestTimeoutSeconds"),
+      // R05: window for reconciling a submit with an unknown outcome, and its poll interval.
+      submitVisibilitySeconds: positiveNumber(limits.submitVisibilitySeconds, 300, "limits.submitVisibilitySeconds"),
+      submitVisibilityPollSeconds: positiveNumber(limits.submitVisibilityPollSeconds, 10, "limits.submitVisibilityPollSeconds"),
     },
   };
 }

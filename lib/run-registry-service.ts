@@ -1163,6 +1163,9 @@ export async function reconcileRun(d1: D1Database, runner: LabRunner, body: Reco
     throw conflict("运行不在对账状态", "NOT_RECONCILING");
   }
   if (typeof body.found !== "boolean") throw bad("found 无效");
+  // R05: a submit whose outcome the runner could not settle is never "proven absent".
+  const submitUnknown = body.submitOutcome === "unknown";
+  if (body.submitOutcome !== undefined && !(submitUnknown && body.found === false)) throw bad("submitOutcome 无效");
   const jobId = schedulerJobId(body.schedulerJobId);
   const state = body.schedulerState ?? "unknown";
   if (!["pending", "running", "finished", "failed", "canceled", "unknown"].includes(state as string)) throw bad("schedulerState 无效");
@@ -1171,7 +1174,8 @@ export async function reconcileRun(d1: D1Database, runner: LabRunner, body: Reco
   const now = new Date(nowMs).toISOString();
   const cancel = Boolean(run.cancel_requested_at) || problems.length > 0;
   let to: RunStatus | null;
-  if (!body.found) to = cancel ? "canceled" : "dispatching";
+  if (submitUnknown) to = "failed";
+  else if (!body.found) to = cancel ? "canceled" : "dispatching";
   else if (state === "pending" || state === "running") to = cancel ? "cancel_requested" : "running";
   else if (state === "finished") to = "collecting";
   else if (state === "failed") to = "failed";
@@ -1183,11 +1187,15 @@ export async function reconcileRun(d1: D1Database, runner: LabRunner, body: Reco
   if (jobId !== undefined) set.scheduler_job_id = jobId;
   if (cancel && !run.cancel_requested_at) set.cancel_requested_at = now;
   if (terminal) set.ended_at = now;
-  if (to === "failed") set.failure_reason = "调度器报告作业失败（对账）";
+  if (to === "failed") {
+    set.failure_reason = submitUnknown
+      ? "SUBMIT_OUTCOME_UNKNOWN: 提交结果未知，可见窗口内调度器中没有带该 submitTag 的作业，可能仍有作业在运行；请人工核对调度器后再决定是否重新运行"
+      : "调度器报告作业失败（对账）";
+  }
   if (to === "canceled") set.failure_reason = body.found ? "调度器报告作业已取消（对账）" : "已请求取消，调度器中没有对应作业";
   const ok = await commitGuarded(d1, transitionStatements(d1, run, {
     path: to ? [to] : [], audit: !to, set, actor: { type: "runner", id: runner.id },
-    payload: { action: "reconcile", found: body.found, schedulerState: state as string, schedulerJobId: jobId ?? null, ...(problems.length ? { reasons: problems } : {}) },
+    payload: { action: "reconcile", found: body.found, schedulerState: state as string, schedulerJobId: jobId ?? null, ...(submitUnknown ? { submitOutcome: "unknown" } : {}), ...(problems.length ? { reasons: problems } : {}) },
   }));
   if (!ok) throw leaseLost();
   // A terminal status ends the lease now (contracts: ComputeReconcileResponse).

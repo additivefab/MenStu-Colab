@@ -9,7 +9,16 @@
 //              sacct -n -X -P --name=<tag> -S <date> -o JobID,State,ExitCode  (finished jobs)
 //   query      squeue -h -j <id> -o %i|%T, then sacct -n -X -P -j <id> -o JobID,State,ExitCode
 //   cancel     scancel <id>
+//
+// Submit uniqueness (R05): a job name is not unique on the Slurm side, so the
+// adapter creates <runDir>/submit-receipt.json with O_EXCL before sbatch runs
+// and records the job id in it afterwards. A second submit for the same runDir
+// returns the recorded job id, or throws SubmitOutcomeUnknownError when the
+// receipt has none: sbatch may have been accepted, and only findByTag may
+// settle it. sbatch failures are "rejected" only for messages that prove the
+// controller refused the job (classifySbatchFailure); everything else is unknown.
 import { runCommand } from "../lib/process.mjs";
+import { createSubmitReceipt, SubmitOutcomeUnknownError, SubmitRejectedError, updateSubmitReceipt } from "./submit-outcome.mjs";
 
 const JOB_ID = /^[0-9]+(?:_[0-9]+)?$/;
 
@@ -40,6 +49,33 @@ function parseExitCode(value) {
   const code = Number(match[1]);
   const signal = Number(match[2]);
   return signal ? 128 + signal : code;
+}
+
+// sbatch messages that prove slurmctld (or sbatch's own option parsing) refused
+// the job, so no job exists. Matched only when no transport-ish wording appears.
+const SBATCH_DEFINITIVE = [
+  /invalid account/i,
+  /invalid partition/i,
+  /invalid qos/i,
+  /invalid generic resource/i,
+  /invalid feature specification/i,
+  /invalid job array specification/i,
+  /requested node configuration is not available/i,
+  /requested time limit is invalid/i,
+  /memory required by task is not available/i,
+  /job violates accounting\/qos policy/i,
+  /unrecognized option|invalid option/i,
+  /unable to open file/i,
+  /batch script contains dos line breaks/i,
+];
+const SBATCH_AMBIGUOUS = /time(d)? ?out|socket|connect|communication|unable to contact|try again|temporar|zero bytes|slurmctld|protocol|interrupted|i\/o error/i;
+
+/** "rejected" when an sbatch result proves no job was created; otherwise "unknown". */
+export function classifySbatchFailure({ code, signal, stderr = "" }) {
+  if (!Number.isInteger(code) || code === 0 || signal) return "unknown";
+  const text = String(stderr);
+  if (SBATCH_AMBIGUOUS.test(text)) return "unknown";
+  return SBATCH_DEFINITIVE.some((pattern) => pattern.test(text)) ? "rejected" : "unknown";
 }
 
 function formatDate(date) {
@@ -101,10 +137,34 @@ export function createSlurmScheduler({
         ...extraArgs,
         job.jobScript,
       ];
-      const result = await run(sbatch, args);
-      if (result.code !== 0) throw new Error(`sbatch failed (${result.code}): ${result.stderr.trim().slice(0, 300)}`);
+      const receipt = await createSubmitReceipt(job.runDir, submitTag);
+      if (!receipt.created) {
+        const existing = receipt.receipt;
+        if (existing?.submitTag === submitTag && typeof existing.jobId === "string" && JOB_ID.test(existing.jobId)) return { jobId: existing.jobId, reused: true };
+        throw new SubmitOutcomeUnknownError(`submit receipt for ${submitTag} exists without a job id; sbatch may already have been accepted`);
+      }
+      let result;
+      try {
+        result = await run(sbatch, args);
+      } catch (error) {
+        // sbatch could not be started at all: nothing reached the controller.
+        if (error?.code === "ENOENT" || error?.code === "EACCES") {
+          await updateSubmitReceipt(job.runDir, { outcome: "rejected" });
+          throw new SubmitRejectedError(`sbatch could not be started: ${error.message}`, { cause: error });
+        }
+        throw new SubmitOutcomeUnknownError(`sbatch outcome unknown: ${error?.message ?? error}`, { cause: error });
+      }
+      if (result.code !== 0) {
+        const message = `sbatch failed (${result.code ?? result.signal}): ${result.stderr.trim().slice(0, 300)}`;
+        if (classifySbatchFailure(result) === "rejected") {
+          await updateSubmitReceipt(job.runDir, { outcome: "rejected" });
+          throw new SubmitRejectedError(message);
+        }
+        throw new SubmitOutcomeUnknownError(message);
+      }
       const jobId = result.stdout.trim().split("\n").pop().split(";")[0].trim();
-      if (!JOB_ID.test(jobId)) throw new Error(`sbatch returned an unexpected job id: ${JSON.stringify(jobId)}`);
+      if (!JOB_ID.test(jobId)) throw new SubmitOutcomeUnknownError(`sbatch returned an unexpected job id: ${JSON.stringify(jobId)}`);
+      await updateSubmitReceipt(job.runDir, { jobId });
       return { jobId };
     },
 

@@ -347,6 +347,22 @@ test("run registry: approval binding, lab lease protocol, egress and result revi
       assert.equal(notFound.status, "dispatching");
       await lab(runnerToken, { action: "complete", runId: second.runId, leaseEpoch: recon.leaseEpoch, outcome: "failed", exitCode: 2, manifest: null });
       await lab(runnerToken, { action: "complete", runId: work.runId, leaseEpoch: again.leaseEpoch, outcome: "failed", exitCode: 2, manifest: null });
+      // R05: a submit with an unknown outcome is never "proven absent": the run fails for an operator.
+      const unsure = await claimed();
+      await expireLease(unsure.runId);
+      const unsureRecon = (await claim()).work;
+      const unknownBody = { action: "reconcile", runId: unsure.runId, leaseEpoch: unsureRecon.leaseEpoch };
+      assert.equal((await lab(runnerToken, { ...unknownBody, found: true, schedulerJobId: "5", schedulerState: "running", submitOutcome: "unknown" }, 400)).error, "submitOutcome 无效");
+      assert.equal((await lab(runnerToken, { ...unknownBody, found: false, submitOutcome: "lost" }, 400)).error, "submitOutcome 无效");
+      const failed = await lab(runnerToken, { ...unknownBody, found: false, submitOutcome: "unknown" });
+      assert.equal(failed.status, "failed");
+      assert.equal(failed.repository, undefined, "no read token: nothing may be submitted");
+      const unsureRow = await db.prepare("SELECT status, failure_reason, lease_expires_at FROM runs WHERE id = ?").bind(unsure.runId).first();
+      assert.equal(unsureRow.status, "failed");
+      assert.match(unsureRow.failure_reason, /^SUBMIT_OUTCOME_UNKNOWN: /);
+      assert.equal(unsureRow.lease_expires_at, null);
+      assert.ok(!(await events(unsure.runId)).some((event) => event.from_status === "reconciling" && event.to_status === "dispatching"));
+      assert.deepEqual(await claim(), { work: null }, "never re-dispatched");
     });
 
     await t.test("cancel before dispatch, in flight, and after disconnect never revives a run (T13)", async () => {
