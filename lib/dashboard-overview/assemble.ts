@@ -120,7 +120,20 @@ export type MentorOverviewAssemblyInput = {
   resolutions?: ProgressResolutionRow[];
   problemRecords?: ProblemRecord[];
   monthlyDeliveries?: ReadonlyMap<string, MonthlyDeliverySummary>;
+  /** studentId → open research-loop decisions for the viewer (countLoopInboxByStudent). */
+  loopPendingByStudent?: Readonly<Record<string, number>> | null;
 };
+
+/** Research-loop pending count for one student; undefined unless the viewer is staff and counts were loaded. */
+export function overviewLoopPending(
+  viewer: Pick<AppUser, "role">,
+  counts: Readonly<Record<string, number>> | null | undefined,
+  studentId: string,
+): number | undefined {
+  if (!counts || (viewer.role !== "superadmin" && viewer.role !== "admin")) return undefined;
+  const count = Object.hasOwn(counts, studentId) ? Number(counts[studentId]) : 0;
+  return Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
+}
 
 function earliestAction(rows: OverviewTrackProgressRow[], waits: OverviewGuidanceRow[]) {
   const candidates = [
@@ -139,6 +152,10 @@ function earliestAction(rows: OverviewTrackProgressRow[], waits: OverviewGuidanc
     (left.dueDate === right.dueDate ? 0 : left.dueDate === null ? 1 : right.dueDate === null ? -1 : left.dueDate.localeCompare(right.dueDate))
     || right.occurredAt.localeCompare(left.occurredAt)
   ))[0] ?? null;
+}
+
+function loopPendingField(value: number | undefined): { loopPending?: number } {
+  return value === undefined ? {} : { loopPending: value };
 }
 
 export function assembleMentorOverview(
@@ -288,6 +305,7 @@ export function assembleMentorOverview(
       currentFocus: student.current_focus,
       cadenceDays: student.cadence_days,
       monthlyDelivery: input.monthlyDeliveries?.get(student.id) ?? summarizeMonthlyDelivery([], now),
+      ...loopPendingField(overviewLoopPending(viewer, input.loopPendingByStudent, student.id)),
       latestSubstantiveTitle: latestSubstantive?.title ?? null,
       latestSubstantiveAt: latestSubstantive?.confirmed_at ?? null,
       latestSubmittedAt: latestSubmitted?.current_revision_created_at ?? null,

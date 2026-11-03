@@ -144,6 +144,22 @@ test("monthly delivery remains optional for old clients but validates exact coun
   }
 });
 
+test("research-loop pending count is optional and must be a non-negative integer when present", () => {
+  const response = responseOf(2);
+  assert.doesNotThrow(() => assertMentorOverviewResponse(response), "absent for viewers without loop counts");
+  response.students[0].loopPending = 3;
+  response.students[1].loopPending = 0;
+  assert.doesNotThrow(() => assertMentorOverviewResponse(response));
+  for (const value of [-1, 1.5, "3", null]) {
+    const malformed = clone(response);
+    malformed.students[0].loopPending = value;
+    assert.throws(() => assertMentorOverviewResponse(malformed), /loopPending/, String(value));
+  }
+  const renamed = clone(response);
+  renamed.students[0].loopCommitCount = 3;
+  assert.throws(() => assertMentorOverviewResponse(renamed), /不是响应契约允许的字段/);
+});
+
 test("structure and mutually exclusive counts must agree with students", () => {
   const missingField = clone(responseOf(1));
   delete missingField.students[0].stage;

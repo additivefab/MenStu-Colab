@@ -167,6 +167,12 @@ export type MentorOverviewStudent = DerivedStudentOverview & {
   cadenceDays: number | null;
   latestSubstantiveTitle: string | null;
   monthlyDelivery?: MonthlyDeliverySummary;
+  /**
+   * Research-loop decisions waiting on the viewer for this student (plan FA1).
+   * Staff viewers only; absent for anyone else. A pending-work count, never an
+   * activity metric — it must not be used for ranking or sorting.
+   */
+  loopPending?: number;
   latestSubstantiveAt: string | null;
   latestSubmittedAt: string | null;
   nextAction: string | null;

@@ -2,7 +2,8 @@ import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { overviewStateMeta, type MentorOverviewStudent } from "../../lib/dashboard-overview/types";
 import { overviewActionHref, overviewActionLabel, overviewDate, overviewOwnerLabels } from "./overview-actions";
-import { earliestOverviewDueDate } from "./overview-view-model";
+import { earliestOverviewDueDate, overviewLoopHref, overviewLoopPending } from "./overview-view-model";
+import loopStyles from "./overview-loop.module.css";
 import { MonthlyDeliveryProgress } from "../monthly-delivery-progress";
 import deliveryStyles from "../monthly-delivery-progress.module.css";
 
@@ -13,6 +14,7 @@ export function StudentOverviewDrawer({ student, onClose }: { student: MentorOve
   const meta = overviewStateMeta[student.primaryState];
   const progressIssues = student.issues.filter((issue) => issue.state !== "follow_up");
   const problems = student.issues.filter((issue) => issue.state === "follow_up");
+  const loopPending = overviewLoopPending(student);
 
   useEffect(() => {
     const drawer = drawerRef.current;
@@ -69,6 +71,7 @@ export function StudentOverviewDrawer({ student, onClose }: { student: MentorOve
         <p>{student.primaryReasonLabel}</p>
         <dl><div><dt>下一责任人</dt><dd>{overviewOwnerLabels[student.nextOwner]}</dd></div><div><dt>最早期限</dt><dd>{earliestOverviewDueDate(student) ? overviewDate(earliestOverviewDueDate(student), true) : "暂无硬期限"}</dd></div></dl>
       </section>
+      {loopPending > 0 ? <a className={loopStyles.drawerLink} href={overviewLoopHref(student.studentId)}><span>闭环待处理 {loopPending}</span><small>打开科研闭环 →</small></a> : null}
 
       <section className="group-overview-drawer-section">
         <header><div><h3>进度事项</h3></div><strong>{progressIssues.length}</strong></header>
