@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local tooling state (agent worktrees, launch config); never project source.
+    ".claude/**",
   ]),
   eslint.configs.recommended,
   ...tseslint.configs.recommended,

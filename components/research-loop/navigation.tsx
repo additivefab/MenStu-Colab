@@ -44,6 +44,9 @@ export type LoopNavigation = {
    * focus; true only for the first claim of a focus key, so a card that
    * remounts later does not re-open or re-scroll for an old focus. */
   claimFocus?: (key: number) => boolean;
+  /** runId → follow-up task created from that run's review (tasks whose
+   * sourceRunId is the run), for the stage model's next stage. */
+  followupTaskIdByRun?: Readonly<Record<string, string>>;
 };
 
 const noop: LoopNavigation = {

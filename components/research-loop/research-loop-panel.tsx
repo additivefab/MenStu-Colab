@@ -136,9 +136,12 @@ function PanelContent({ studentId, mode, prefill, guidanceHref }: {
       const numbers = sequenceNumbers(items);
       for (const item of items) crRefs.set(item.id, { taskId, number: numbers.get(item.id) ?? null, prNumber: item.prNumber });
     }
+    const followupTaskIdByRun: Record<string, string> = {};
+    for (const task of taskList) if (task.sourceRunId) followupTaskIdByRun[task.sourceRunId] ??= task.id;
     return {
       focus,
       navigate,
+      followupTaskIdByRun,
       taskTitle: (taskId) => taskList.find((task) => task.id === taskId)?.title ?? null,
       runRef: (runId) => runRefs.get(runId) ?? null,
       guidanceHref: (noteId) => guidanceHref?.(noteId) ?? null,

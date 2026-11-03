@@ -125,7 +125,7 @@ export function TaskCard({ summary, runs, options, defaultOpen, onChanged }: {
   defaultOpen: boolean;
   onChanged: () => void;
 }) {
-  const { focus } = useLoopNavigation();
+  const { focus, followupTaskIdByRun } = useLoopNavigation();
   const [open, setOpen] = useState(defaultOpen);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [changeRequests, setChangeRequests] = useState<ChangeRequest[]>([]);
@@ -202,8 +202,8 @@ export function TaskCard({ summary, runs, options, defaultOpen, onChanged }: {
 
   const task = detail?.task ?? summary;
   const stages = useMemo(() => computeTaskStages({
-    task, attempts: detail?.attempts ?? null, changeRequests: detail ? changeRequests : null, runs,
-  }), [task, detail, changeRequests, runs]);
+    task, attempts: detail?.attempts ?? null, changeRequests: detail ? changeRequests : null, runs, followupTaskIdByRun,
+  }), [task, detail, changeRequests, runs, followupTaskIdByRun]);
   const lineOf = (...keys: StageKey[]) => stages.stages
     .filter((stage) => keys.includes(stage.key) && (stage.summary || stage.state !== "idle"))
     .map(stageLine).join("；");
