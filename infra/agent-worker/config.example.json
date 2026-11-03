@@ -1,0 +1,36 @@
+{
+  "platformUrl": "https://tanyan.example.edu",
+  "workerId": "agent-worker-lab01",
+  "tokenFile": "/etc/tanyan-agent-worker/worker.token",
+  "workRoot": "/var/lib/tanyan-agent-worker/work",
+  "profilesDir": "/var/lib/tanyan-agent-worker/profiles",
+  "githubBaseUrl": "https://github.com",
+  "gitReadFallback": {
+    "urlTemplate": "git@github.com:{fullName}.git",
+    "sshKeyFile": "/etc/tanyan-agent-worker/deploy_key_readonly",
+    "knownHostsFile": "/etc/tanyan-agent-worker/github_known_hosts"
+  },
+  "pollSeconds": 15,
+  "heartbeatSeconds": 30,
+  "eventFlushMs": 1000,
+  "maxConcurrentAttempts": 2,
+  "keepWorkspaces": false,
+  "limits": {
+    "defaultAgentMinutes": 30,
+    "maxAgentMinutes": 120,
+    "maxEventsPerAttempt": 2000,
+    "cancelGraceSeconds": 20
+  },
+  "agent": {
+    "maxTurns": 60,
+    "testCommandPrefixes": ["pytest", "python -m pytest", "python3 -m pytest", "python -m unittest", "python3 -m unittest", "npm test", "npm run test", "node --test", "ruff check", "flake8"]
+  },
+  "codex": {
+    "codexPath": null,
+    "childPath": "/usr/local/bin:/usr/bin:/bin"
+  },
+  "claude": {
+    "claudePath": "/usr/local/bin/claude",
+    "childPath": "/usr/local/bin:/usr/bin:/bin"
+  }
+}
