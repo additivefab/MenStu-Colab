@@ -10,9 +10,10 @@ import {
   type AgentProvider, type ChangedFile, type JsonValue, type RepositoryReadAccess, type ResearchTaskSnapshot,
 } from "./research-loop/contracts";
 import {
-  ResearchLoopHttpError, TaskSnapshotMismatchError, conflictError, inputError, isConstraintError,
-  loadTaskVersionSnapshot, notFoundError, parseEntityId, requireVisibleTask,
+  ResearchLoopHttpError, TaskSnapshotMismatchError, canDecideTask, conflictError, forbiddenError, inputError, isConstraintError,
+  loadTaskVersionSnapshot, notFoundError, parseEntityId, readTaskRow,
 } from "./research-tasks-service";
+import { canCodeReviewStudent } from "./review-delegation";
 
 // Agent attempts (docs/科研闭环_实施规格_v1.md §6.1): user start/cancel, the
 // agent-worker lab protocol (claim/heartbeat/events/result) and the superadmin
@@ -27,6 +28,9 @@ const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{8,128}$/;
 const GIT_REF = /^[A-Za-z0-9._/-]{1,255}$/;
 const ERROR_CODE = /^[A-Z0-9_]{1,64}$/;
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+/** FB2: upper bound for an agent's plan text (characters). */
+export const MAX_AGENT_PLAN_CHARS = 20_000;
+const MAX_PLAN_NOTE_CHARS = 2000;
 
 const leaseLost = () => new ResearchLoopHttpError(409, "LEASE_LOST", "租约已失效，请停止当前工作");
 const tooLarge = (message: string) => new ResearchLoopHttpError(413, "PAYLOAD_TOO_LARGE", message);
@@ -186,6 +190,72 @@ async function readChangeRequest(d1: D1Database, attemptId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Plan-first attempts (FB2)
+// ---------------------------------------------------------------------------
+
+// A row in agent_attempt_plans marks the attempt as plan-first (spec §12):
+//   awaiting_plan --plan_ready--> pending --approved--> approved (edit phase)
+//                                         \--rejected--> rejected (attempt canceled)
+// The attempt meanwhile goes queued → running (plan mode) → waiting_approval
+// (lease released) → queued → running (edit mode) → change_ready, or ends as
+// canceled with PLAN_REJECTED.
+
+type PlanDecision = "awaiting_plan" | "pending" | "approved" | "rejected";
+
+type PlanRow = {
+  attempt_id: string;
+  plan_text: string;
+  plan_sha256: string;
+  decision: PlanDecision;
+  submitted_at: string | null;
+  decided_by_user_id: number | null;
+  decided_at: string | null;
+  note: string;
+  version: number;
+  decided_by_display_name: string | null;
+};
+
+async function readPlan(d1: D1Database, attemptId: string) {
+  return d1.prepare(`SELECT pl.*, u.display_name AS decided_by_display_name FROM agent_attempt_plans pl
+    LEFT JOIN app_users u ON u.id = pl.decided_by_user_id WHERE pl.attempt_id = ?`).bind(attemptId).first<PlanRow>();
+}
+
+function planView(row: PlanRow | null) {
+  if (!row) return null;
+  return {
+    text: row.plan_text,
+    decision: row.decision,
+    submittedAt: row.submitted_at,
+    decidedBy: row.decided_by_user_id === null ? null : { id: Number(row.decided_by_user_id), displayName: row.decided_by_display_name ?? "" },
+    decidedAt: row.decided_at,
+    note: row.note,
+    version: Number(row.version),
+  };
+}
+
+/** Platform audit entries share agent_attempt_events with worker events but use
+ * negative sequences (-1, -2, …), so they never collide with worker sequences
+ * (always ≥ 1), never count toward the worker event cap and never appear in the
+ * `afterSequence` event stream. */
+function auditStatement(d1: D1Database, attemptId: string, payload: Record<string, string | number | null>,
+  guard?: { sql: string; binds: unknown[] }) {
+  return d1.prepare(`INSERT INTO agent_attempt_events (attempt_id, sequence, kind, payload_json)
+    SELECT ?, COALESCE((SELECT MIN(sequence) FROM agent_attempt_events WHERE attempt_id = ? AND sequence < 0), 0) - 1, 'status', ?
+    ${guard ? `WHERE ${guard.sql}` : ""}`)
+    .bind(attemptId, attemptId, JSON.stringify({ source: "platform", ...payload }), ...(guard?.binds ?? []));
+}
+
+/** Workers number events per lease from 1, so the edit phase of a plan-first
+ * attempt would collide with the plan phase. Edit-phase sequences are stored
+ * shifted by the plan phase's last sequence (recorded when the plan arrived). */
+async function editPhaseSequenceOffset(d1: D1Database, attemptId: string) {
+  const row = await d1.prepare(`SELECT json_extract(payload_json, '$.lastWorkerSequence') AS s FROM agent_attempt_events
+    WHERE attempt_id = ? AND sequence < 0 AND json_extract(payload_json, '$.action') = 'plan_submitted'
+    ORDER BY sequence DESC LIMIT 1`).bind(attemptId).first<{ s: number | null }>();
+  return Number(row?.s ?? 0);
+}
+
+// ---------------------------------------------------------------------------
 // Lease expiry (lazy) and revocation
 // ---------------------------------------------------------------------------
 
@@ -209,6 +279,14 @@ export async function expireAgentLeases(d1: D1Database, scope: { attemptId?: str
       ended_at = ?, updated_at = CURRENT_TIMESTAMP
       WHERE status = 'cancel_requested' AND lease_expires_at IS NOT NULL AND lease_expires_at < ?${where}`)
       .bind(now, now, ...bindings),
+    // A plan awaiting approval holds no lease; a cancel request on it (e.g. the
+    // task was canceled) has no worker to report back, so it ends here.
+    d1.prepare(`UPDATE agent_attempts SET status = 'canceled',
+      error_code = CASE WHEN error_code = '' THEN 'CANCELED' ELSE error_code END,
+      ended_at = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE status = 'cancel_requested' AND lease_expires_at IS NULL
+        AND EXISTS (SELECT 1 FROM agent_attempt_plans pl WHERE pl.attempt_id = agent_attempts.id AND pl.decision = 'pending')${where}`)
+      .bind(now, ...bindings),
   ]);
 }
 
@@ -282,15 +360,20 @@ export async function startAgentAttempt(d1: D1Database, user: AppUser, body: Rec
     }
     baseRef = body.baseRef;
   }
-  const task = await requireVisibleTask(d1, user, taskId);
+  if (body.planFirst !== undefined && body.planFirst !== null && typeof body.planFirst !== "boolean") throw inputError("planFirst 必须是布尔值");
+  const planFirst = body.planFirst === true;
+  const task = await readTaskRow(d1, taskId);
+  if (!task || !(await canViewStudent(user, task.student_id))) throw notFoundError("研究任务不存在或无权查看");
 
   const replay = async () => {
-    const existing = await d1.prepare("SELECT * FROM agent_attempts WHERE idempotency_key = ?").bind(idempotencyKey).first<AttemptRow>();
+    const existing = await d1.prepare(`SELECT a.*, EXISTS (SELECT 1 FROM agent_attempt_plans pl WHERE pl.attempt_id = a.id) AS plan_first
+      FROM agent_attempts a WHERE a.idempotency_key = ?`).bind(idempotencyKey).first<AttemptRow & { plan_first: number }>();
     if (!existing) return null;
-    if (existing.task_id !== taskId || existing.requested_by_user_id !== user.id || existing.provider !== provider) {
+    if (existing.task_id !== taskId || existing.requested_by_user_id !== user.id || existing.provider !== provider
+      || Boolean(existing.plan_first) !== planFirst) {
       throw conflictError("该提交标识已被使用，请刷新页面后重试");
     }
-    return { attempt: attemptView(existing), replayed: true };
+    return { attempt: attemptView(existing), planFirst, replayed: true };
   };
   const replayed = await replay();
   if (replayed) return replayed;
@@ -330,14 +413,26 @@ export async function startAgentAttempt(d1: D1Database, user: AppUser, body: Rec
   if (!isCommitSha(baseCommitSha)) throw new ResearchLoopHttpError(502, "GITHUB_UNAVAILABLE", "GitHub 返回的提交无效");
   const contextSnapshotSha256 = await agentContextSnapshotSha256(snapshot, baseCommitSha);
   const attemptId = newId("att");
-  try {
-    await d1.prepare(`INSERT INTO agent_attempts
+  const insertAttempt = d1.prepare(`INSERT INTO agent_attempts
       (id, task_id, task_version, student_id, provider, credential_profile_id, github_repository_id, base_commit_sha,
        context_snapshot_sha256, status, idempotency_key, requested_by_user_id)
       SELECT ?, id, confirmed_version, student_id, ?, ?, ?, ?, ?, 'queued', ?, ?
       FROM research_tasks WHERE id = ? AND status = 'confirmed' AND confirmed_version = ?`)
-      .bind(attemptId, provider, profile.id, Number(link.github_repository_id), baseCommitSha, contextSnapshotSha256,
-        idempotencyKey, user.id, taskId, Number(task.confirmed_version)).run();
+    .bind(attemptId, provider, profile.id, Number(link.github_repository_id), baseCommitSha, contextSnapshotSha256,
+      idempotencyKey, user.id, taskId, Number(task.confirmed_version));
+  try {
+    if (planFirst) {
+      // Same batch (one transaction): the plan row exists iff the attempt does.
+      const inserted = { sql: "EXISTS (SELECT 1 FROM agent_attempts WHERE id = ?)", binds: [attemptId] };
+      await d1.batch([
+        insertAttempt,
+        d1.prepare(`INSERT INTO agent_attempt_plans (attempt_id, decision) SELECT ?, 'awaiting_plan' WHERE ${inserted.sql}`)
+          .bind(attemptId, ...inserted.binds),
+        auditStatement(d1, attemptId, { action: "plan_requested", userId: user.id }, inserted),
+      ]);
+    } else {
+      await insertAttempt.run();
+    }
   } catch (error) {
     if (!isConstraintError(error)) throw error;
     const raced = await replay();
@@ -346,13 +441,19 @@ export async function startAgentAttempt(d1: D1Database, user: AppUser, body: Rec
   }
   const row = await readAttempt(d1, attemptId);
   if (!row) throw conflictError("任务已被修改，请重新确认后再启动代理", "TASK_NOT_CONFIRMED");
-  return { attempt: attemptView(row), replayed: false };
+  return { attempt: attemptView(row), planFirst, replayed: false };
 }
 
+/** Write access: the student's normal scope (canViewStudent). */
 async function requireVisibleAttempt(d1: D1Database, user: AppUser, attemptId: string) {
   const attempt = await readAttempt(d1, attemptId);
   if (!attempt || !(await canViewStudent(user, attempt.student_id))) throw notFoundError("代理尝试不存在或无权查看");
   return attempt;
+}
+
+/** Read access: the student's scope, or a delegated code reviewer (FB1). */
+async function canReadStudentAttempts(d1: D1Database, user: AppUser, studentId: string) {
+  return (await canViewStudent(user, studentId)) || canCodeReviewStudent(d1, user, studentId);
 }
 
 export async function cancelAgentAttempt(d1: D1Database, user: AppUser, body: Record<string, unknown>) {
@@ -362,7 +463,9 @@ export async function cancelAgentAttempt(d1: D1Database, user: AppUser, body: Re
   const attempt = await readAttempt(d1, attemptId) as AttemptRow;
   if (attempt.status === "cancel_requested" || attempt.status === "canceled") return { attempt: attemptView(attempt), replayed: true };
   if (TERMINAL_ATTEMPT_STATUSES.includes(attempt.status)) throw conflictError("代理尝试已结束，不能取消");
-  const target: AgentAttemptStatus = attempt.status === "queued" ? "canceled" : "cancel_requested";
+  // No worker holds a queued attempt or a plan awaiting approval (lease released).
+  const unleased = attempt.status === "queued" || (attempt.status === "waiting_approval" && !attempt.lease_expires_at);
+  const target: AgentAttemptStatus = unleased ? "canceled" : "cancel_requested";
   transitionOrConflict(attempt.status, target);
   const now = nowIso();
   const row = await d1.prepare(`UPDATE agent_attempts SET status = ?, cancel_requested_at = ?, cancel_requested_by_user_id = ?,
@@ -374,7 +477,8 @@ export async function cancelAgentAttempt(d1: D1Database, user: AppUser, body: Re
 }
 
 export async function listTaskAttempts(d1: D1Database, user: AppUser, taskId: string) {
-  await requireVisibleTask(d1, user, taskId);
+  const task = await readTaskRow(d1, taskId);
+  if (!task || !(await canReadStudentAttempts(d1, user, task.student_id))) throw notFoundError("研究任务不存在或无权查看");
   await expireAgentLeases(d1, { taskId });
   const { results } = await d1.prepare("SELECT * FROM agent_attempts WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 100")
     .bind(taskId).all<AttemptRow>();
@@ -382,24 +486,92 @@ export async function listTaskAttempts(d1: D1Database, user: AppUser, taskId: st
 }
 
 export async function agentAttemptDetail(d1: D1Database, user: AppUser, attemptId: string, afterSequence: number) {
-  await requireVisibleAttempt(d1, user, attemptId);
+  const visible = await readAttempt(d1, attemptId);
+  if (!visible || !(await canReadStudentAttempts(d1, user, visible.student_id))) throw notFoundError("代理尝试不存在或无权查看");
   await expireAgentLeases(d1, { attemptId });
-  const [attempt, events, changeRequest] = await Promise.all([
+  const [attempt, events, changeRequest, plan] = await Promise.all([
     readAttempt(d1, attemptId),
     d1.prepare(`SELECT sequence, kind, payload_json, created_at FROM agent_attempt_events
       WHERE attempt_id = ? AND sequence > ? ORDER BY sequence LIMIT 500`).bind(attemptId, afterSequence)
       .all<{ sequence: number; kind: string; payload_json: string; created_at: string }>(),
     readChangeRequest(d1, attemptId),
+    readPlan(d1, attemptId),
   ]);
+  const current = attempt as AttemptRow;
   const items = events.results.map((row) => ({
     sequence: Number(row.sequence), kind: row.kind, payload: parseJson<Record<string, unknown>>(row.payload_json, {}), createdAt: row.created_at,
   }));
+  const canDecidePlan = Boolean(plan && plan.decision === "pending" && current.status === "waiting_approval")
+    && await canDecidePlanFor(user, current);
   return {
-    attempt: attemptView(attempt as AttemptRow),
+    attempt: attemptView(current),
     events: items,
     nextAfterSequence: items.length ? items[items.length - 1].sequence : afterSequence,
     changeRequest: changeRequestView(changeRequest),
+    plan: planView(plan),
+    permissions: { canDecidePlan },
   };
+}
+
+/** Owning student or a reviewer in scope, never the requester (no self-approval,
+ * as for runs; superadmins included). Delegated code reviewers cannot decide. */
+async function canDecidePlanFor(user: AppUser, attempt: AttemptRow) {
+  if (user.id === Number(attempt.requested_by_user_id)) return false;
+  return (await canViewStudent(user, attempt.student_id)) && canDecideTask(user, attempt.student_id);
+}
+
+export async function decideAgentPlan(d1: D1Database, user: AppUser, body: Record<string, unknown>) {
+  const attemptId = parseEntityId(body.attemptId, "代理尝试");
+  const decision = body.decision;
+  if (decision !== "approved" && decision !== "rejected") throw inputError("decision 只能是 approved 或 rejected");
+  if (body.note !== undefined && body.note !== null && typeof body.note !== "string") throw inputError("说明格式无效");
+  const note = typeof body.note === "string" ? body.note.trim() : "";
+  if (note.length > MAX_PLAN_NOTE_CHARS) throw inputError(`说明不能超过 ${MAX_PLAN_NOTE_CHARS} 字`);
+  if (typeof body.expectedVersion !== "number" || !Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 1) {
+    throw inputError("expectedVersion 无效");
+  }
+  const expectedVersion = body.expectedVersion;
+  const attempt = await requireVisibleAttempt(d1, user, attemptId);
+  const plan = await readPlan(d1, attemptId);
+  if (!plan) throw conflictError("该代理尝试不是先出计划模式", "NOT_PLAN_FIRST");
+  if (user.id === Number(attempt.requested_by_user_id)) throw forbiddenError("不能批准或退回自己发起的代理计划");
+  if (!(await canDecideTask(user, attempt.student_id))) throw forbiddenError("只有学生本人或可审核该学生的导师可以决定代理计划");
+  if (Number(plan.version) !== expectedVersion) throw conflictError("计划已被更新，请刷新后重试", "VERSION_CONFLICT");
+  if (plan.decision !== "pending" || attempt.status !== "waiting_approval") throw conflictError("该计划当前不在待批准状态", "PLAN_NOT_PENDING");
+  const target: AgentAttemptStatus = decision === "approved" ? "queued" : "canceled";
+  transitionOrConflict(attempt.status, target);
+
+  const now = nowIso();
+  const decided = {
+    // decided_at identifies this request's write, so a concurrent duplicate that
+    // lost the CAS neither moves the attempt nor writes a second audit entry.
+    sql: `EXISTS (SELECT 1 FROM agent_attempt_plans
+      WHERE attempt_id = ? AND version = ? AND decision = ? AND decided_by_user_id = ? AND decided_at = ?)`,
+    binds: [attemptId, expectedVersion + 1, decision, user.id, now],
+  };
+  const attemptUpdate = decision === "approved"
+    ? d1.prepare(`UPDATE agent_attempts SET status = 'queued', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'waiting_approval' AND ${decided.sql}`).bind(attemptId, ...decided.binds)
+    : d1.prepare(`UPDATE agent_attempts SET status = 'canceled', error_code = 'PLAN_REJECTED', error_message = ?, ended_at = ?,
+        updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'waiting_approval' AND ${decided.sql}`)
+      .bind((note ? `计划被退回：${note}` : "计划被退回").slice(0, 2000), now, attemptId, ...decided.binds);
+  const results = await d1.batch([
+    // CAS on the plan row version; the attempt only moves if this row moved.
+    d1.prepare(`UPDATE agent_attempt_plans SET decision = ?, decided_by_user_id = ?, decided_at = ?, note = ?, version = version + 1
+      WHERE attempt_id = ? AND version = ? AND decision = 'pending'
+        AND EXISTS (SELECT 1 FROM agent_attempts WHERE id = ? AND status = 'waiting_approval')`)
+      .bind(decision, user.id, now, note, attemptId, expectedVersion, attemptId),
+    attemptUpdate,
+    auditStatement(d1, attemptId, {
+      action: decision === "approved" ? "plan_approved" : "plan_rejected", userId: user.id, planVersion: expectedVersion + 1,
+      planSha256: plan.plan_sha256,
+    }, decided),
+  ]);
+  if (!Number(results[0].meta.changes ?? 0) || !Number(results[1].meta.changes ?? 0)) {
+    throw conflictError("计划已被更新，请刷新后重试", "VERSION_CONFLICT");
+  }
+  const [row, updated] = await Promise.all([readAttempt(d1, attemptId), readPlan(d1, attemptId)]);
+  return { attempt: attemptView(row as AttemptRow), plan: planView(updated) };
 }
 
 // ---------------------------------------------------------------------------
@@ -409,10 +581,11 @@ export async function agentAttemptDetail(d1: D1Database, user: AppUser, attemptI
 export async function claimAgentAttempt(d1: D1Database, runner: LabRunner): Promise<AgentClaimResponse> {
   await expireAgentLeases(d1, { workerId: runner.id });
   for (let round = 0; round < 5; round += 1) {
-    const { results } = await d1.prepare(`SELECT a.* FROM agent_attempts a
+    const { results } = await d1.prepare(`SELECT a.*, pl.decision AS plan_decision, pl.plan_text AS plan_text FROM agent_attempts a
       JOIN agent_credential_profiles p ON p.id = a.credential_profile_id
+      LEFT JOIN agent_attempt_plans pl ON pl.attempt_id = a.id
       WHERE a.status = 'queued' AND p.worker_id = ?
-      ORDER BY a.created_at, a.rowid LIMIT 10`).bind(runner.id).all<AttemptRow>();
+      ORDER BY a.created_at, a.rowid LIMIT 10`).bind(runner.id).all<AttemptRow & { plan_decision: PlanDecision | null; plan_text: string | null }>();
     if (!results.length) return { work: null };
     for (const candidate of results) {
       const eligibility = await readEligibility(d1, candidate.id);
@@ -423,6 +596,16 @@ export async function claimAgentAttempt(d1: D1Database, runner: LabRunner): Prom
           .bind(revoked.code, revoked.message, nowIso(), candidate.id).run();
         continue;
       }
+      // FB2: a plan-first attempt is first claimed to plan, then (once approved)
+      // to edit following the approved plan. Ordinary attempts always edit.
+      if (candidate.plan_decision === "pending" || candidate.plan_decision === "rejected") {
+        await d1.prepare(`UPDATE agent_attempts SET status = 'failed', error_code = 'PLAN_STATE_INVALID',
+          error_message = '计划状态与尝试状态不一致，未派发', ended_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued'`)
+          .bind(nowIso(), candidate.id).run();
+        continue;
+      }
+      const mode: "plan" | "edit" = candidate.plan_decision === "awaiting_plan" ? "plan" : "edit";
+      const approvedPlan = candidate.plan_decision === "approved" ? candidate.plan_text ?? "" : null;
       let snapshot: ResearchTaskSnapshot;
       try {
         snapshot = (await loadTaskVersionSnapshot(d1, candidate.task_id, Number(candidate.task_version))).snapshot;
@@ -444,6 +627,11 @@ export async function claimAgentAttempt(d1: D1Database, runner: LabRunner): Prom
         WHERE id = ? AND status = 'queued' RETURNING lease_epoch`)
         .bind(runner.id, leaseExpiresAt, now, now, candidate.id).first<{ lease_epoch: number }>();
       if (!claimed) continue;
+      if (candidate.plan_decision) {
+        await auditStatement(d1, candidate.id, {
+          action: mode === "plan" ? "plan_phase_claimed" : "edit_phase_claimed", workerId: runner.id, leaseEpoch: Number(claimed.lease_epoch),
+        }).run();
+      }
       let repository: RepositoryReadAccess | null = null;
       if (eligibility?.installation_id && eligibility.full_name) {
         try {
@@ -468,6 +656,8 @@ export async function claimAgentAttempt(d1: D1Database, runner: LabRunner): Prom
           modelId: candidate.model_id,
           credentialProfileId: candidate.credential_profile_id,
           baseCommitSha: candidate.base_commit_sha,
+          mode,
+          approvedPlan,
           task: snapshot,
           contextSnapshotSha256: candidate.context_snapshot_sha256,
           repository,
@@ -495,6 +685,8 @@ async function requireLease(d1: D1Database, runner: LabRunner, attemptId: string
   if (!attempt) throw new ResearchLoopHttpError(404, "NOT_FOUND", "代理尝试不存在");
   if (attempt.worker_id !== runner.id || Number(attempt.lease_epoch) !== leaseEpoch) throw leaseLost();
   if (!["running", "waiting_approval", "cancel_requested"].includes(attempt.status)) return { attempt, active: false } as const;
+  // FB2: a submitted plan releases the lease while it waits for a human.
+  if (attempt.status === "waiting_approval" && !attempt.lease_expires_at) return { attempt, active: false } as const;
   if (!attempt.lease_expires_at || attempt.lease_expires_at < nowIso()) {
     await expireAgentLeases(d1, { attemptId });
     throw leaseLost();
@@ -551,19 +743,22 @@ export async function recordAgentEvents(d1: D1Database, runner: LabRunner, body:
   }
   const lease = await requireLease(d1, runner, attemptId, leaseEpoch);
   if (!lease.active) throw leaseLost();
-  const stored = await d1.prepare("SELECT count(*) AS n FROM agent_attempt_events WHERE attempt_id = ?").bind(attemptId).first<{ n: number }>();
+  const offset = await editPhaseSequenceOffset(d1, attemptId);
+  const stored = await d1.prepare("SELECT count(*) AS n FROM agent_attempt_events WHERE attempt_id = ? AND sequence > 0").bind(attemptId).first<{ n: number }>();
   if (Number(stored?.n ?? 0) + events.length > MAX_AGENT_EVENTS_PER_ATTEMPT) {
     throw tooLarge(`单个代理尝试最多保存 ${MAX_AGENT_EVENTS_PER_ATTEMPT} 条事件`);
   }
   const results = await d1.batch(events.map((event) => d1.prepare(`INSERT INTO agent_attempt_events
     (attempt_id, sequence, kind, payload_json) VALUES (?, ?, ?, ?)
-    ON CONFLICT(attempt_id, sequence) DO NOTHING`).bind(attemptId, event.sequence, event.kind, event.payloadJson)));
+    ON CONFLICT(attempt_id, sequence) DO NOTHING`).bind(attemptId, event.sequence + offset, event.kind, event.payloadJson)));
   const accepted = results.reduce((sum, result) => sum + Number(result.meta.changes ?? 0), 0);
-  const last = await d1.prepare("SELECT max(sequence) AS s FROM agent_attempt_events WHERE attempt_id = ?").bind(attemptId).first<{ s: number | null }>();
+  const last = await d1.prepare("SELECT max(sequence) AS s FROM agent_attempt_events WHERE attempt_id = ? AND sequence > ?")
+    .bind(attemptId, offset).first<{ s: number | null }>();
   return {
     accepted,
     duplicates: events.length - accepted,
-    lastSequence: Number(last?.s ?? 0),
+    // In the worker's own numbering (edit phase: relative to the plan phase).
+    lastSequence: last?.s === null || last?.s === undefined ? 0 : Number(last.s) - offset,
     cancelRequested: lease.attempt.status === "cancel_requested",
   };
 }
@@ -653,7 +848,19 @@ async function resultResponse(d1: D1Database, attempt: AttemptRow, replayed: boo
 export async function submitAgentResult(d1: D1Database, bucket: R2Bucket | undefined, runner: LabRunner, body: Record<string, unknown>) {
   const { attemptId, leaseEpoch } = parseLeaseRequest(body);
   const outcome = body.outcome;
-  if (outcome !== "change_ready" && outcome !== "failed" && outcome !== "canceled") throw invalidResult("outcome 无效");
+  if (outcome !== "change_ready" && outcome !== "failed" && outcome !== "canceled" && outcome !== "plan_ready") throw invalidResult("outcome 无效");
+  let plan = "";
+  if (outcome === "plan_ready") {
+    if (typeof body.plan !== "string" || !body.plan.trim()) throw invalidResult("plan_ready 结果必须包含非空的 plan");
+    if (body.plan.length > MAX_AGENT_PLAN_CHARS) throw tooLarge(`计划不能超过 ${MAX_AGENT_PLAN_CHARS} 字`);
+    if (body.files !== undefined && body.files !== null && !(Array.isArray(body.files) && body.files.length === 0)) {
+      throw invalidResult("plan_ready 结果不能包含改动文件");
+    }
+    if (body.unifiedDiff !== undefined && body.unifiedDiff !== null && body.unifiedDiff !== "") throw invalidResult("plan_ready 结果不能包含 diff");
+    plan = body.plan;
+  } else if (body.plan !== undefined && body.plan !== null && body.plan !== "") {
+    throw invalidResult("只有 plan_ready 结果可以携带 plan");
+  }
   const modelId = shortText(body.modelId, "modelId", 200);
   const sdkVersion = shortText(body.sdkVersion, "sdkVersion", 200);
   const tests = parseTests(body.tests);
@@ -667,6 +874,11 @@ export async function submitAgentResult(d1: D1Database, bucket: R2Bucket | undef
   if (!lease.active) return resultResponse(d1, lease.attempt, true);
   const attempt = lease.attempt;
   const now = nowIso();
+  // FB2: plan mode = plan-first attempt whose plan has not been submitted yet.
+  const planRow = await d1.prepare("SELECT decision FROM agent_attempt_plans WHERE attempt_id = ?").bind(attemptId).first<{ decision: PlanDecision }>();
+  const planMode = planRow?.decision === "awaiting_plan";
+  if (outcome === "plan_ready" && !planMode) throw invalidResult("plan_ready 只能在计划模式下提交");
+  if (outcome === "change_ready" && planMode) throw invalidResult("计划模式下不能提交代码改动，请先提交 plan_ready 等待批准");
 
   const finish = async (status: AgentAttemptStatus, errorCode: string, errorMessage: string, changedPaths: string[] = [],
     policy?: { outsideAllowed: string[]; protectedTouched: string[] }) => {
@@ -694,6 +906,7 @@ export async function submitAgentResult(d1: D1Database, bucket: R2Bucket | undef
       ? finish("canceled", workerErrorCode || attempt.error_code || "CANCELED", workerErrorMessage || attempt.error_message || "代理执行已取消")
       : finish("failed", workerErrorCode || "CANCELED", workerErrorMessage || "代理工作进程中止了执行");
   }
+  if (outcome === "plan_ready") return submitPlan(d1, runner, attempt, { plan, modelId, sdkVersion, tests, usageJson, finish });
 
   transitionOrConflict(attempt.status, "change_ready");
   const { files, rawPaths } = await parseChangedFiles(body.files);
@@ -764,6 +977,43 @@ export async function submitAgentResult(d1: D1Database, bucket: R2Bucket | undef
   const row = batch[0].results[0];
   if (!row) throw leaseLost();
   return resultResponse(d1, row, false, pathPolicy);
+}
+
+/** plan_ready: store the plan, move to waiting_approval and release the lease,
+ * atomically. A pending cancel ends the attempt instead of asking for approval. */
+async function submitPlan(d1: D1Database, runner: LabRunner, attempt: AttemptRow, input: {
+  plan: string; modelId: string; sdkVersion: string; tests: unknown[]; usageJson: string;
+  finish: (status: AgentAttemptStatus, errorCode: string, errorMessage: string) => Promise<Awaited<ReturnType<typeof resultResponse>>>;
+}) {
+  if (attempt.status === "cancel_requested") {
+    return input.finish("canceled", attempt.error_code || "CANCELED", attempt.error_message || "代理执行已取消");
+  }
+  transitionOrConflict(attempt.status, "waiting_approval");
+  const leaseEpoch = Number(attempt.lease_epoch);
+  const planSha256 = await sha256Hex(input.plan);
+  const submittedAt = nowIso();
+  const results = await d1.batch<AttemptRow>([
+    d1.prepare(`UPDATE agent_attempts SET status = 'waiting_approval', model_id = ?, sdk_version = ?, tests_json = ?, usage_json = ?,
+      lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND worker_id = ? AND lease_epoch = ? AND status = ?
+        AND EXISTS (SELECT 1 FROM agent_attempt_plans WHERE attempt_id = ? AND decision = 'awaiting_plan') RETURNING *`)
+      .bind(input.modelId, input.sdkVersion, JSON.stringify(input.tests), input.usageJson, attempt.id, runner.id, leaseEpoch, attempt.status,
+        attempt.id),
+    d1.prepare(`UPDATE agent_attempt_plans SET plan_text = ?, plan_sha256 = ?, submitted_at = ?, decision = 'pending', version = version + 1
+      WHERE attempt_id = ? AND decision = 'awaiting_plan'
+        AND EXISTS (SELECT 1 FROM agent_attempts WHERE id = ? AND status = 'waiting_approval' AND lease_epoch = ? AND lease_expires_at IS NULL)`)
+      .bind(input.plan, planSha256, submittedAt, attempt.id, attempt.id, leaseEpoch),
+    // The plan phase's last worker sequence is kept for the edit-phase offset.
+    d1.prepare(`INSERT INTO agent_attempt_events (attempt_id, sequence, kind, payload_json)
+      SELECT ?, COALESCE((SELECT MIN(sequence) FROM agent_attempt_events WHERE attempt_id = ? AND sequence < 0), 0) - 1, 'status',
+        json_set(?, '$.lastWorkerSequence', (SELECT COALESCE(MAX(sequence), 0) FROM agent_attempt_events WHERE attempt_id = ? AND sequence > 0))
+      WHERE EXISTS (SELECT 1 FROM agent_attempt_plans WHERE attempt_id = ? AND decision = 'pending' AND submitted_at = ?)`)
+      .bind(attempt.id, attempt.id, JSON.stringify({ source: "platform", action: "plan_submitted", workerId: runner.id, leaseEpoch, planSha256 }),
+        attempt.id, attempt.id, submittedAt),
+  ]);
+  const row = results[0].results[0];
+  if (!row) throw leaseLost();
+  return resultResponse(d1, row, false);
 }
 
 // ---------------------------------------------------------------------------
