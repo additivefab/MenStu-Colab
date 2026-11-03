@@ -100,7 +100,7 @@ export async function createResearchTask(d1: D1Database, input: {
   sourceRunId?: string | null;
   parentTaskId?: string | null;
 }) {
-  const existing = await d1.prepare("SELECT id, current_version FROM research_tasks WHERE last_mutation_id = ?")
+  const existing = await d1.prepare("SELECT id, current_version FROM research_tasks WHERE create_mutation_id = ?")
     .bind(input.mutationId).first<{ id: string; current_version: number }>();
   if (existing) return { taskId: existing.id, version: existing.current_version, replayed: true };
   const taskId = newId("task");
@@ -109,15 +109,16 @@ export async function createResearchTask(d1: D1Database, input: {
   const { content } = input;
   await d1.batch([
     d1.prepare(`INSERT INTO research_tasks
-      (id, student_id, source_guidance_note_id, source_run_id, parent_task_id, title, status, current_version, created_by_user_id, last_mutation_id)
-      VALUES (?, ?, ?, ?, ?, ?, 'draft', 1, ?, ?)`)
+      (id, student_id, source_guidance_note_id, source_run_id, parent_task_id, title, status, current_version,
+       created_by_user_id, create_mutation_id, last_mutation_id)
+      VALUES (?, ?, ?, ?, ?, ?, 'draft', 1, ?, ?, ?)`)
       .bind(taskId, input.studentId, input.sourceGuidanceNoteId ?? null, input.sourceRunId ?? null,
-        input.parentTaskId ?? null, content.title, input.authorUserId, input.mutationId),
+        input.parentTaskId ?? null, content.title, input.authorUserId, input.mutationId, input.mutationId),
     d1.prepare(`INSERT INTO research_task_versions
-      (task_id, version, research_question, hypothesis, instructions, acceptance_criteria,
+      (task_id, version, title, research_question, hypothesis, instructions, acceptance_criteria,
        allowed_paths_json, protected_paths_json, budget_json, snapshot_sha256, author_user_id)
-      VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(taskId, content.researchQuestion, content.hypothesis, content.instructions, content.acceptanceCriteria,
+      VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(taskId, content.title, content.researchQuestion, content.hypothesis, content.instructions, content.acceptanceCriteria,
         JSON.stringify(content.allowedPaths), JSON.stringify(content.protectedPaths), JSON.stringify(content.budget),
         snapshotSha256, input.authorUserId),
     d1.prepare(`INSERT INTO research_task_events (task_id, version, action, actor_type, actor_user_id, payload_json)

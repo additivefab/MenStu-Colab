@@ -122,6 +122,17 @@ type RepositoryChange = {
   };
 };
 
+// A student may repoint their own binding, so a superadmin-verified GitHub
+// identity (repository_links) must not survive a change to another repository.
+// Runs in the same batch, only after this mutation's CAS succeeded.
+function revokeVerifiedLink(d1: D1Database, studentId: string, mutationId: string, keepFullName: string | null) {
+  return d1.prepare(`UPDATE repository_links SET status = 'revoked', updated_at = CURRENT_TIMESTAMP
+    WHERE student_id = ? AND status = 'active'
+      AND (? IS NULL OR lower(full_name) <> lower(?))
+      AND EXISTS (SELECT 1 FROM student_repository_bindings WHERE student_id = ? AND last_mutation_id = ?)`)
+    .bind(studentId, keepFullName, keepFullName, studentId, mutationId);
+}
+
 export async function changeStudentRepository(d1: D1Database, change: RepositoryChange): Promise<StudentRepositoryState> {
   const { studentId, actorUserId, expectedVersion, input } = change;
   const mutationId = crypto.randomUUID();
@@ -146,6 +157,7 @@ export async function changeStudentRepository(d1: D1Database, change: Repository
   const result = await d1.batch<RepositoryRow>([
     mutation,
     auditStatement(d1, mutationId, expectedVersion === 0 ? "created" : "updated", actorUserId),
+    revokeVerifiedLink(d1, studentId, mutationId, input.repositoryFullName),
   ]);
   const row = result[0].results[0];
   if (!row) throw new RepositoryConflictError("仓库设置已被更新，请载入最新设置后再保存");
@@ -164,6 +176,7 @@ export async function unlinkStudentRepository(
       RETURNING student_id, github_username, repository_url, repository_full_name, visibility, active, version, updated_at`)
       .bind(mutationId, actorUserId, studentId, expectedVersion),
     auditStatement(d1, mutationId, "unlinked", actorUserId),
+    revokeVerifiedLink(d1, studentId, mutationId, null),
   ]);
   const row = result[0].results[0];
   if (!row) throw new RepositoryConflictError("仓库设置已被更新，请载入最新设置后再解除绑定");

@@ -91,6 +91,7 @@ export type TaskRow = {
 type VersionRow = {
   task_id: string;
   version: number;
+  title: string;
   research_question: string;
   hypothesis: string;
   instructions: string;
@@ -163,29 +164,9 @@ async function requireActiveStudent(d1: D1Database, studentId: string) {
 // Snapshots
 // ---------------------------------------------------------------------------
 
-/** research_task_versions has no title column, so each version's title is
- * recovered from the audit trail written in the same batch as the version:
- * `revised`/`confirmed` payloads carry `title`, the first revision also carries
- * `previousTitle`, and the task row holds the current version's title. */
-function versionTitles(task: TaskRow, events: EventRow[]) {
-  const titles = new Map<number, string>();
-  const previous = new Map<number, string>();
-  for (const event of events) {
-    const payload = parseJson<Record<string, unknown>>(event.payload_json, {});
-    if ((event.action === "revised" || event.action === "confirmed") && typeof payload.title === "string") {
-      titles.set(Number(event.version), payload.title);
-    }
-    if (event.action === "revised" && typeof payload.previousTitle === "string") {
-      previous.set(Number(event.version) - 1, payload.previousTitle);
-    }
-  }
-  return (version: number) => titles.get(version)
-    ?? (version === Number(task.current_version) ? task.title : previous.get(version) ?? null);
-}
-
-function contentFromVersion(row: VersionRow, title: string): TaskContent {
+function contentFromVersion(row: VersionRow): TaskContent {
   return {
-    title,
+    title: row.title,
     researchQuestion: row.research_question,
     hypothesis: row.hypothesis,
     instructions: row.instructions,
@@ -204,15 +185,12 @@ export async function loadTaskVersionSnapshot(d1: D1Database, taskId: string, ve
   snapshot: ResearchTaskSnapshot;
   snapshotSha256: string;
 }> {
-  const [task, row, events] = await Promise.all([
+  const [task, row] = await Promise.all([
     readTaskRow(d1, taskId),
     d1.prepare("SELECT * FROM research_task_versions WHERE task_id = ? AND version = ?").bind(taskId, version).first<VersionRow>(),
-    d1.prepare("SELECT * FROM research_task_events WHERE task_id = ? ORDER BY id").bind(taskId).all<EventRow>(),
   ]);
   if (!task || !row) throw new TaskSnapshotMismatchError("任务版本不存在");
-  const title = versionTitles(task, events.results)(version);
-  if (title === null) throw new TaskSnapshotMismatchError("无法还原任务版本标题");
-  const snapshot = buildTaskSnapshot({ taskId, version, studentId: task.student_id, content: contentFromVersion(row, title) });
+  const snapshot = buildTaskSnapshot({ taskId, version, studentId: task.student_id, content: contentFromVersion(row) });
   const snapshotSha256 = await taskSnapshotSha256(snapshot);
   if (snapshotSha256 !== row.snapshot_sha256) throw new TaskSnapshotMismatchError("任务快照哈希不一致");
   return { snapshot, snapshotSha256 };
@@ -244,7 +222,6 @@ export async function researchTaskDetail(d1: D1Database, user: AppUser, taskId: 
       WHERE p.user_id = ? AND p.active = 1 AND r.status = 'active' AND r.kind = 'agent' ORDER BY p.provider`)
       .bind(user.id).all<{ provider: string }>(),
   ]);
-  const titleOf = versionTitles(task, events.results);
   const canEdit = await canViewStudent(user, task.student_id);
   const canDecide = await canDecideTask(user, task.student_id);
   const open = task.status === "draft" || task.status === "confirmed";
@@ -252,7 +229,7 @@ export async function researchTaskDetail(d1: D1Database, user: AppUser, taskId: 
     task: taskSummary(task),
     versions: versions.results.map((row) => ({
       version: Number(row.version),
-      title: titleOf(Number(row.version)),
+      title: row.title,
       researchQuestion: row.research_question,
       hypothesis: row.hypothesis,
       instructions: row.instructions,
@@ -335,7 +312,7 @@ export async function createTask(d1: D1Database, user: AppUser, body: Record<str
     sourceGuidanceNoteId = body.sourceGuidanceNoteId;
   }
   const content = parseContent(body);
-  const existing = await d1.prepare(`SELECT ${TASK_COLUMNS} FROM research_tasks WHERE last_mutation_id = ?`)
+  const existing = await d1.prepare(`SELECT ${TASK_COLUMNS} FROM research_tasks WHERE create_mutation_id = ?`)
     .bind(mutationId).first<TaskRow>();
   if (existing) {
     if (existing.student_id !== studentId || existing.created_by_user_id !== user.id) {
@@ -348,7 +325,7 @@ export async function createTask(d1: D1Database, user: AppUser, body: Record<str
   } catch (error) {
     if (!isConstraintError(error)) throw error;
   }
-  const row = await d1.prepare(`SELECT ${TASK_COLUMNS} FROM research_tasks WHERE last_mutation_id = ?`)
+  const row = await d1.prepare(`SELECT ${TASK_COLUMNS} FROM research_tasks WHERE create_mutation_id = ?`)
     .bind(mutationId).first<TaskRow>();
   if (!row || row.student_id !== studentId || row.created_by_user_id !== user.id) {
     throw conflictError("研究任务创建冲突，请刷新页面后重试");
@@ -384,10 +361,10 @@ export async function reviseTask(d1: D1Database, user: AppUser, body: Record<str
         RETURNING ${TASK_COLUMNS}`)
         .bind(content.title, version, marker, taskId, expectedVersion),
       d1.prepare(`INSERT INTO research_task_versions
-        (task_id, version, research_question, hypothesis, instructions, acceptance_criteria,
+        (task_id, version, title, research_question, hypothesis, instructions, acceptance_criteria,
          allowed_paths_json, protected_paths_json, budget_json, snapshot_sha256, author_user_id)
-        SELECT id, current_version, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM research_tasks WHERE id = ? AND last_mutation_id = ?`)
-        .bind(content.researchQuestion, content.hypothesis, content.instructions, content.acceptanceCriteria,
+        SELECT id, current_version, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM research_tasks WHERE id = ? AND last_mutation_id = ?`)
+        .bind(content.title, content.researchQuestion, content.hypothesis, content.instructions, content.acceptanceCriteria,
           JSON.stringify(content.allowedPaths), JSON.stringify(content.protectedPaths), JSON.stringify(content.budget),
           snapshotSha256, user.id, taskId, marker),
       d1.prepare(`INSERT INTO research_task_events (task_id, version, action, actor_type, actor_user_id, payload_json)

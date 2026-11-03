@@ -60,6 +60,11 @@ test("path policy normalizes paths and flags protected or out-of-scope changes",
   assert.deepEqual(result.outsideAllowed, [".github/workflows/ci.yml", "eval_protocol/metric.py"]);
   assert.deepEqual(result.protectedTouched, [".github/workflows/ci.yml", "eval_protocol/metric.py"]);
   assert.deepEqual(evaluatePathPolicy(["a/b/c.py"], [], []).outsideAllowed, []);
+  assert.throws(() => normalizeRepoPath(".GIT/config"));
+  assert.deepEqual(evaluatePathPolicy([".GitHub/workflows/x.yml"], [], [".github/**"]).protectedTouched, [".GitHub/workflows/x.yml"]);
+  const defaults = parseTaskContent({ title: "t", researchQuestion: "q", instructions: "i", acceptanceCriteria: "a" }).protectedPaths;
+  assert.deepEqual(evaluatePathPolicy(["requirements.txt", "env/Dockerfile.gpu", "src/train.py"], [], defaults).protectedTouched,
+    ["env/Dockerfile.gpu", "requirements.txt"]);
 });
 
 test("metrics must be machine-produced and well-formed (T19/T20)", () => {

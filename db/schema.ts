@@ -1014,6 +1014,9 @@ export const researchTasks = sqliteTable("research_tasks", {
   currentVersion: integer("current_version").notNull().default(1),
   confirmedVersion: integer("confirmed_version"),
   createdByUserId: integer("created_by_user_id").notNull().references(() => appUsers.id),
+  // Idempotency key of the create request; never overwritten.
+  createMutationId: text("create_mutation_id").notNull().unique(),
+  // Latest mutation marker, also used to guard multi-statement batches.
   lastMutationId: text("last_mutation_id").notNull().unique(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -1026,6 +1029,7 @@ export const researchTasks = sqliteTable("research_tasks", {
 export const researchTaskVersions = sqliteTable("research_task_versions", {
   taskId: text("task_id").notNull().references(() => researchTasks.id),
   version: integer("version").notNull(),
+  title: text("title").notNull(),
   researchQuestion: text("research_question").notNull(),
   hypothesis: text("hypothesis").notNull().default(""),
   instructions: text("instructions").notNull(),

@@ -103,6 +103,22 @@ export const DEFAULT_PROTECTED_PATHS = [
   ".claude/**",
   ".codex/**",
   ".mcp.json",
+  // Environment and dependency definitions change what runs on lab servers (T05).
+  "**/requirements*.txt",
+  "**/pyproject.toml",
+  "**/setup.py",
+  "**/setup.cfg",
+  "**/Pipfile",
+  "**/Pipfile.lock",
+  "**/poetry.lock",
+  "**/uv.lock",
+  "**/environment*.yml",
+  "**/environment*.yaml",
+  "**/conda-lock*.yml",
+  "**/Dockerfile*",
+  "**/*.def",
+  "**/package.json",
+  "**/package-lock.json",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -236,11 +252,12 @@ export function normalizeRepoPath(value: unknown): string {
   if (value.startsWith("/") || /^[A-Za-z]:/.test(value)) throw new PathPolicyError(`不允许绝对路径：${value}`);
   const parts = value.split("/");
   if (parts.some((part) => part === "" || part === "." || part === "..")) throw new PathPolicyError(`路径不规范：${value}`);
-  if (parts[0] === ".git" || parts.includes(".git")) throw new PathPolicyError(`不允许修改 .git：${value}`);
+  // Case-insensitive: checkouts may land on case-insensitive filesystems.
+  if (parts.some((part) => part.toLowerCase() === ".git")) throw new PathPolicyError(`不允许修改 .git：${value}`);
   return parts.join("/");
 }
 
-function globToRegExp(pattern: string) {
+function globToRegExp(pattern: string, flags = "") {
   let source = "";
   for (let index = 0; index < pattern.length; index += 1) {
     const char = pattern[index];
@@ -253,11 +270,11 @@ function globToRegExp(pattern: string) {
     } else if (char === "?") source += "[^/]";
     else source += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
   }
-  return new RegExp(`^${source}$`);
+  return new RegExp(`^${source}$`, flags);
 }
 
-export function matchesPathPattern(path: string, pattern: string) {
-  return globToRegExp(pattern).test(path);
+export function matchesPathPattern(path: string, pattern: string, options: { caseInsensitive?: boolean } = {}) {
+  return globToRegExp(pattern, options.caseInsensitive ? "i" : "").test(path);
 }
 
 export type PathPolicyResult = {
@@ -272,7 +289,8 @@ export function evaluatePathPolicy(paths: unknown[], allowed: readonly string[],
   return {
     paths: normalized,
     outsideAllowed: allowed.length ? normalized.filter((path) => !allowed.some((pattern) => matchesPathPattern(path, pattern))) : [],
-    protectedTouched: normalized.filter((path) => protectedPatterns.some((pattern) => matchesPathPattern(path, pattern))),
+    // Protected matching errs toward review: case-insensitive. Allowed matching stays exact.
+    protectedTouched: normalized.filter((path) => protectedPatterns.some((pattern) => matchesPathPattern(path, pattern, { caseInsensitive: true }))),
   };
 }
 

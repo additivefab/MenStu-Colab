@@ -242,6 +242,7 @@ CREATE INDEX `idx_research_task_events_task` ON `research_task_events` (`task_id
 CREATE TABLE `research_task_versions` (
 	`task_id` text NOT NULL,
 	`version` integer NOT NULL,
+	`title` text NOT NULL,
 	`research_question` text NOT NULL,
 	`hypothesis` text DEFAULT '' NOT NULL,
 	`instructions` text NOT NULL,
@@ -273,6 +274,7 @@ CREATE TABLE `research_tasks` (
 	`current_version` integer DEFAULT 1 NOT NULL,
 	`confirmed_version` integer,
 	`created_by_user_id` integer NOT NULL,
+	`create_mutation_id` text NOT NULL,
 	`last_mutation_id` text NOT NULL,
 	`created_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	`updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -282,6 +284,8 @@ CREATE TABLE `research_tasks` (
 	CONSTRAINT "research_task_status" CHECK("research_tasks"."status" IN ('draft', 'confirmed', 'closed', 'canceled')),
 	CONSTRAINT "research_task_version" CHECK("research_tasks"."current_version" >= 1)
 );
+--> statement-breakpoint
+CREATE UNIQUE INDEX `research_tasks_create_mutation_id_unique` ON `research_tasks` (`create_mutation_id`);
 --> statement-breakpoint
 CREATE UNIQUE INDEX `research_tasks_last_mutation_id_unique` ON `research_tasks` (`last_mutation_id`);
 --> statement-breakpoint
