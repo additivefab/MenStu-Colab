@@ -1,0 +1,38 @@
+# systemd unit for the Tanyan lab compute runner (example; adjust paths).
+# Install: copy to /etc/systemd/system/lab-runner.service, then
+#   systemctl daemon-reload && systemctl enable --now lab-runner
+[Unit]
+Description=Tanyan lab compute runner (pulls approved runs; no inbound ports)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tanyan-runner
+Group=tanyan-runner
+WorkingDirectory=/opt/tanyan
+# Node 22.6+ needs --experimental-strip-types to import lib/research-loop/contracts.ts.
+ExecStart=/usr/local/bin/node --experimental-strip-types /opt/tanyan/infra/lab-runner/runner.mjs --config /etc/tanyan/lab-runner.json
+# The token stays out of the config: either tokenFile (chmod 600, owned by
+# tanyan-runner) or a systemd credential exported as TANYAN_LAB_RUNNER_TOKEN.
+# Environment=TANYAN_LAB_RUNNER_TOKEN is NOT recommended (visible via systemctl show).
+Restart=on-failure
+RestartSec=10
+# SIGTERM: stop claiming and exit; scheduler jobs keep running and are
+# reconciled by submitTag after restart.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+# Local scheduler jobs are detached children; keep them alive across a runner
+# restart (they are adopted by submitTag). Slurm jobs are unaffected either way.
+KillMode=process
+# NoNewPrivileges blocks a setuid Apptainer install (starter-suid) for local
+# scheduler jobs, which are children of this service. Enable it only when
+# Apptainer runs unprivileged (user namespaces).
+#NoNewPrivileges=true
+PrivateTmp=true
+# Apptainer caches images under $HOME/.apptainer unless APPTAINER_CACHEDIR is set.
+#ProtectHome=read-only
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
