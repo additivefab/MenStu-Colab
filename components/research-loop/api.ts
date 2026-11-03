@@ -233,6 +233,16 @@ export type RunArtifact = {
   downloadable: boolean;
 };
 
+/** Read-only subset of RunManifest (lib/research-loop/contracts.ts) shown on the card. */
+export type RunManifestView = {
+  environment?: {
+    imageDigest?: string;
+    /** Batch 7 (G02): sha256 of the SIF file the runner verified; absent from older runners. */
+    imageFileSha256?: string;
+    imageSource?: string;
+  };
+};
+
 export type RunDetail = {
   run: RunSummary;
   spec: RunSpec;
@@ -241,6 +251,8 @@ export type RunDetail = {
   artifacts: RunArtifact[];
   result: {
     manifestSha256: string;
+    /** Stored manifest (run_results.manifest_json); only the fields the card reads. */
+    manifest?: RunManifestView | null;
     metrics: { split?: string; evaluationProtocolSha256?: string; values?: Record<string, number> } | null;
     metricsSourceArtifactId: string | null;
     technicalValidity: "valid" | "invalid" | "unknown";

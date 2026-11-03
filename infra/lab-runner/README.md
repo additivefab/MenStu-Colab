@@ -66,7 +66,7 @@ Only one runner may use a given `workRoot`. A lock file (`.runner.lock`) enforce
 | `scheduler.type` | `local` or `slurm`. |
 | `scheduler.passEnv` | Host variables passed to scheduler commands. Names that look like credentials are refused. |
 | `scheduler.slurm` | Command paths, `extraArgs` (`--partition=…`, `--account=…`), `sacctLookbackDays`. |
-| `apptainer.*` | See "Isolation". `images` maps each digest-pinned `imageRef` to a pre-pulled SIF. `allowPullByDigest` lets the runner use `docker://<imageRef>` instead. |
+| `apptainer.*` | See "Isolation". `images` maps each digest-pinned `imageRef` to a pre-pulled SIF with its provenance, `{ociDigest, sifPath, sifSha256, source, verifySignature?, allowRunnerWritable?}`. See "Image provenance". `allowPullByDigest` lets the runner use `docker://<imageRef>` instead, with no file hash recorded. |
 | `datasets[]` | `{versionId, dataPath, manifestPath, splitManifestPath?}` for each dataset version hosted here. |
 | `gitReadFallback` | `{url}` used when the claim returns `repository: null` (no GitHub App, or reconcile mode). Typical values are a local mirror path or an SSH URL that uses the host's own read-only deploy key. |
 | `limits` | `maxConcurrentRuns` (1), `heartbeatSeconds` (30), `pollSeconds` (15), `claimIntervalSeconds` (20), `killGraceSeconds` (30), `maxArtifacts` (500), `requestTimeoutSeconds` (60). |
@@ -216,7 +216,78 @@ Flags checked against the Apptainer docs (apptainer.org, `apptainer exec`, the n
   read-only.
 - **Image trust:** `apptainer.images` maps a digest-pinned ref to a local SIF.
   The manifest reports the digest from `imageRef`. That the SIF was built from that
-  digest is the admin's assertion.
+  digest is still the admin's assertion. What the runner does enforce is that the
+  file it runs is the one the admin recorded. See "Image provenance".
+
+## Image provenance
+
+An OCI digest (`imageRef`, `environment.imageDigest`) and the sha256 of a local
+SIF file are **different kinds of digest**. Converting OCI to SIF changes the
+bytes, so the two cannot be compared. Each image entry therefore records both:
+
+```json
+"images": {
+  "registry.example.org/lab/train@sha256:<oci>": {
+    "ociDigest": "sha256:<oci>",
+    "sifPath": "/srv/tanyan-lab-runner/images/train.sif",
+    "sifSha256": "<sha256sum of train.sif>",
+    "source": "apptainer build from lab/train.def @<git rev> by <admin>; or registry ref / signer",
+    "verifySignature": false,
+    "allowRunnerWritable": false
+  }
+}
+```
+
+- `ociDigest` must equal the digest in the key, and `sifSha256` must be 64 lowercase
+  hex characters (`sha256sum train.sif`). `source` is free text of 1–300 printable
+  characters. A malformed entry stops the runner at startup.
+- **Before every submit** the runner checks the SIF in this order. Any failure
+  fails the run before submission, with `failureReason` set to
+  `image verification failed: …`, for example `SIF file hash mismatch … config expects …`.
+  1. Immutability, below.
+  2. It hashes the file as a stream, through one open descriptor, and compares
+     the result with `sifSha256`.
+  3. With `verifySignature: true`, it runs `<apptainer.binary> verify <sif>` and
+     fails on a non-zero exit. The setting is off by default, and the test shim
+     does not implement it.
+- **Hash cache.** Results are cached in memory, keyed by
+  `(dev, ino, size, mtime ns, ctime ns)`, so a multi-GB image is hashed once per
+  runner process, not once per run. The cache **trusts stat metadata**. An in-place
+  edit that keeps the size and restores mtime still changes ctime, which `utimes`
+  cannot set back, so it is re-hashed. Something that can rewrite the bytes without
+  touching the inode metadata defeats the cache: root writing the block device, or a
+  filesystem that lies about ctime. A restart drops the cache.
+- **Immutability.** The runner refuses the SIF when any of these holds:
+  - the real file is group- or world-writable;
+  - a directory on the path from the file up to `/` is group- or world-writable
+    and has no sticky bit;
+  - the runner user itself can write the file or any of those non-sticky
+    directories. Set `allowRunnerWritable: true` only when there is no
+    alternative, for example on a test host;
+  - `sifPath` is a **symlink** whose target, or a directory above the target,
+    is writable by anyone, including the runner. `allowRunnerWritable` does not
+    relax this rule.
+
+  Recommended layout: `root:root`, file `0444` or `0644`, in a `0755` directory owned
+  by root, outside `workRoot`.
+- Apptainer is given the resolved real path that was hashed. The resolved path,
+  the file hash and the source are kept in `state.json`, so a run adopted later by
+  reconciliation still reports them.
+- **Manifest:** `environment.imageFileSha256` and `environment.imageSource` are
+  filled for verified entries. The run card shows both under "可追溯信息".
+- **Legacy entries.** A plain string value (`"<imageRef>": "/path.sif"`) still
+  works. At startup the runner logs `image provenance is unverified`, does not
+  check the file, and leaves both manifest fields out. It never claims a hash it
+  did not check.
+- **Limits, to be verified on real hosts:**
+  - The check runs on the runner host at submit time. Under Slurm the compute node
+    reads the file later from shared storage, and only the immutability rules
+    protect that window. Nothing re-hashes on the node.
+  - The rules use `access(W_OK)` and mode bits. ACLs and root-squash NFS behave
+    differently, and a runner running as root can write everything, so
+    verification always fails unless `allowRunnerWritable` is set. Don't run it
+    as root.
+  - `apptainer verify` needs keys set up on the host.
 - **Shared runner account:** jobs run under the runner's Unix account. Cross-project
   isolation relies on the binds above, not on separate users.
 

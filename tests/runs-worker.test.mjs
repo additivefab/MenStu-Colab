@@ -449,6 +449,25 @@ test("run registry: approval binding, lab lease protocol, egress and result revi
       assert.equal((await lab(runnerToken, { action: "complete", runId: missing.runId, leaseEpoch: missing.leaseEpoch, outcome: "completed", exitCode: 0, manifest: null }, 422)).code, "MANIFEST_REQUIRED");
     });
 
+    await t.test("batch 7 (G02): SIF file hash and image source are stored and exposed by run detail", async () => {
+      const imageFileSha256 = "5".repeat(64);
+      const imageSource = "apptainer build lab/train.def@3f2a by admin";
+      const work = await claimed();
+      const items = [file("metrics.json", metricsContent(), { kind: "metrics" })];
+      const base = manifestFor(work, items);
+      const done = await complete(work, items, { manifest: { ...base, environment: { ...base.environment, imageFileSha256, imageSource } } });
+      assert.equal(done.status, "completed");
+      const view = await detail(work.runId);
+      assert.equal(view.result.manifest.environment.imageFileSha256, imageFileSha256);
+      assert.equal(view.result.manifest.environment.imageSource, imageSource);
+      assert.equal(view.result.manifest.environment.imageDigest, IMAGE_DIGEST, "the OCI digest is kept alongside");
+      // An OCI-style digest is not a file hash: rejected, nothing stored.
+      const bad = await claimed();
+      const badBase = manifestFor(bad, items);
+      const rejected = await complete(bad, items, { manifest: { ...badBase, environment: { ...badBase.environment, imageFileSha256: `sha256:${imageFileSha256}` } } }, 422);
+      assert.equal(rejected.code, "MANIFEST_INVALID");
+    });
+
     await t.test("egress is re-applied: only downgrades, traversal rejected, nothing held reaches R2 (T17)", async () => {
       const work = await claimed();
       const ok = file("summary.json", "{\"ok\":true}");
