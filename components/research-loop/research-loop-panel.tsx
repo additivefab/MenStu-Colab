@@ -109,6 +109,31 @@ function PanelContent({ studentId, mode, prefill, guidanceHref }: {
     }
   }, [data]);
 
+  // Deep links (#research-task-<id> / #research-run-<id>) open the card once the
+  // panel data is loaded. Each hash is followed once, so later reloads (after
+  // any action) don't pull the view back; a new hash is followed again.
+  const followedHash = useRef<string | null>(null);
+  useEffect(() => {
+    if (!data) return;
+    const follow = () => {
+      const hash = window.location.hash;
+      if (hash === followedHash.current) return;
+      const match = /^#research-(task|run)-([A-Za-z0-9_]+)$/.exec(hash);
+      if (!match) return;
+      followedHash.current = hash;
+      if (match[1] === "task") {
+        if (data.tasks.some((task) => task.id === match[2])) navigate({ kind: "task", taskId: match[2] });
+        return;
+      }
+      const run = data.runs.runs.find((item) => item.id === match[2]);
+      if (run) navigate({ kind: "run", taskId: run.taskId, runId: run.id });
+    };
+    const timer = window.setTimeout(follow, 0);
+    window.addEventListener("hashchange", follow);
+    return () => { window.clearTimeout(timer); window.removeEventListener("hashchange", follow); };
+    // navigate changes with data; following once per data load is intended.
+  }, [data, navigate]);
+
   const registerChangeRequest = useCallback((item: RegisteredChangeRequest) => {
     setChangeRequests((current) => {
       const known = current.get(item.id);
