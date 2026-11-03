@@ -1,6 +1,6 @@
 # 科研闭环本地合成数据（seed-research-loop）
 
-用于在浏览器里核对任务阶段条与“下一步”（前端方案 F1）和来源/谱系链接（F3）。
+用于在浏览器里核对任务阶段条与“下一步”（前端方案 F1）、来源/谱系链接（F3）和导师决策收件箱（FA1，`lib/research-loop-inbox.ts`）。
 数据全部是合成的，只写入本地 `.wrangler/state`（Miniflare 的 D1/R2），从不连接线上数据库。
 
 ## 用法
@@ -13,8 +13,8 @@ npm run dev -- --port 3124    # 打开 /students/synthetic-loop-01
 ```
 
 - 不带 `--reset` 再次运行是幂等的：数据已存在时不写库，只重新打印期望阶段表。旧版本种子留下的数据会提示改用 `--reset`。
-- `--reset` 只删除并重建脚本自己拥有的行：两个合成学生（`synthetic-loop-01/02`）及其任务、代理尝试、变更请求、运行、结果、指导意见，`local-dev-only:synthetic-*` 账号及其会话，`*_synth*` 编号的登记数据，以及 R2 中 `agent-attempts/att_synth*`、`runs/run_synth*` 下的对象。
-- 本地登录：`synthetic-student`（学生视角）、`synthetic-mentor`（导师视角，审核两个合成学生）、`local-admin`（超级管理员）。随机密码追加到已被 gitignore 的 `.local-dev-admin.txt`，脚本不打印密码。每次 `--reset` 会重新生成合成账号的密码，旧会话失效。
+- `--reset` 只删除并重建脚本自己拥有的行：三个合成学生（`synthetic-loop-01/02/03`）及其任务、代理尝试、变更请求、运行、结果、指导意见，`local-dev-only:synthetic-*` 账号及其会话，`*_synth*` 编号的登记数据，以及 R2 中 `agent-attempts/att_synth*`、`runs/run_synth*` 下的对象。
+- 本地登录：`synthetic-student`（学生视角）、`synthetic-mentor`（导师视角，审核三个合成学生）、`synthetic-mentor-readonly`（分配到 01 但 `can_review = 0`）、`synthetic-mentor-other`（只审核 02，未分配 01）、`local-admin`（超级管理员）。随机密码追加到已被 gitignore 的 `.local-dev-admin.txt`，脚本不打印密码。每次 `--reset` 会重新生成合成账号的密码，旧会话失效。
 - GitHub 与实验室标识都是假的；本地未配置 GitHub App，所以“启动代理”“发布 PR”会返回 `GITHUB_NOT_CONFIGURED`。
 - 编号固定（`task_synthS01`、`att_synthS04`、`cr_synthS06`、`run_synthS09a` …），便于对照。
 
@@ -42,8 +42,29 @@ npm run dev -- --port 3124    # 打开 /students/synthetic-loop-01
 | S15b | task_synthS15b | 跟进任务草稿，`source_run_id = run_synthS15a`，`parent_task_id = task_synthS15` | 任务：第 1 版草稿待确认（学生）；来源：S15 运行 #1 的评审 |
 | S16 | task_synthS16 | 运行已采纳，PR 已合并，任务 `closed` | 全部完成：任务已关闭（无人需处理） |
 | S17 | task_synthS17 | 草稿直接取消 | 任务：已取消，其余阶段不适用（无人需处理） |
+| S18 | task_synthS18 | PR #18 `open`，运行 #1 `awaiting_approval`，由 `synthetic-mentor` 登记（`runs.created_by_user_id`） | 运行：运行 #1 待导师批准（导师）；须由另一位导师/管理员批准 |
+| S19 | task_synthS19 | 草稿由 `synthetic-mentor` 起草（`created_by_user_id`） | 任务：第 1 版草稿待确认（学生） |
+| S20 | task_synthS20 | 变更 `pending_review`，触及 `src/requirements.txt`，需额外审查；代理由 `synthetic-mentor` 发起（`agent_attempts.requested_by_user_id`） | 代码：变更待额外审查（导师）；须由另一位导师/管理员审查 |
+| S21 | task_synthS21 | 学生 `synthetic-loop-03` 已停用（`students.active = 0`，`synthetic-mentor` 仍有 `can_review = 1` 的分配）；PR #21，运行 #1 `awaiting_approval` | 运行：运行 #1 待导师批准（导师）；但不进任何收件箱 |
 
 负责人一栏是按方案 §1.2/§1.3 推出的期望值；若 `computeTaskStages` 的规则与此不同，以评审时商定的规则为准，并同步修改脚本中的 `SCENARIOS` 和本表。
+
+## 期望导师决策收件箱（FA1）
+
+规则见 `lib/research-loop-inbox.ts` 文件头：只看可审核的**在读**学生（超级管理员：全部；管理员：`can_review = 1` 的有效分配），不给自己起草的草稿、自己发起的代理的额外审查、自己登记的运行出待办；学生没有待办。脚本最后会打印同一张表。
+
+| 登录 | 范围 | task_confirmation | change_extra_review | run_approval | result_review | 合计 |
+|---|---|---|---|---|---|---|
+| `synthetic-mentor` | admin，审核 01/02/03（03 已停用） | S01, S02 | S06 | S09（运行 #1） | S12, S13（技术无效） | 6 |
+| `synthetic-mentor-readonly` | admin，分配 01，`can_review = 0` | — | — | — | — | 0 |
+| `synthetic-mentor-other` | admin，只审核 02（无科研闭环数据） | — | — | — | — | 0 |
+| `local-admin` | superadmin，所有在读学生 | S01, S02, S15b, S19 | S06, S20 | S09（运行 #1）, S18 | S12, S13（技术无效） | 10 |
+| `synthetic-student` | student | — | — | — | — | 0 |
+
+不出现的原因：
+- `synthetic-mentor` 看不到 S15b、S19（本人起草）、S20（代理由本人发起）、S18（本人登记的运行）、S21（学生已停用）。
+- 所有人都看不到：S17（已取消）、S09 运行 #2（运行中）、S14/S16（已采纳）、S15（`needs_followup`）、S21（学生已停用，超级管理员也不例外）。
+- `synthetic-mentor-readonly` 能打开 01 的档案但不能审核，所以没有待办；`synthetic-mentor-other` 未分配 01，看不到 01 的任何事项。
 
 ## 谱系链（F3 / T25）
 
