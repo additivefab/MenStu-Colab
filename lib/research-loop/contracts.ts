@@ -555,7 +555,16 @@ export type ComputeReconcileRequest = {
   found: boolean;
   schedulerJobId?: string;
   schedulerState?: "pending" | "running" | "finished" | "failed" | "canceled" | "unknown";
+  /** R05: only with found:false. The runner holds evidence that a submit may
+   * have reached the scheduler (receipt without job id) but no job became
+   * visible within its window. The platform must not treat this as "proven
+   * absent": the run fails with SUBMIT_OUTCOME_UNKNOWN for a human to rerun. */
+  submitOutcome?: "unknown";
 };
+
+/** Reason-code prefixes the runner puts in failureReason ("<CODE>: detail"). */
+export const RUN_FAILURE_CODES = ["SUBMIT_OUTCOME_UNKNOWN", "SUBMIT_REJECTED", "DUPLICATE_JOBS"] as const;
+export type RunFailureCode = typeof RUN_FAILURE_CODES[number];
 /** Platform's answer to a reconcile. `status` is authoritative: a terminal
  * status means nothing is left to do; "dispatching" means the runner proved no
  * job exists and must submit under this lease (after another findByTag).

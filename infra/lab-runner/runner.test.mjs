@@ -1,7 +1,7 @@
 // End-to-end runner tests against a FAKE platform and FAKE schedulers/container
 // (simulation only: no Apptainer, no Slurm, no GPU, no network).
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, realpathSync, writeFileSync, chmodSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync, chmodSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -332,6 +332,34 @@ test("T11: execute mode after a lost submit also adopts by submitTag", async (t)
   assert.equal(second.outcome, "completed");
   assert.equal(env.shim.calls().length, 1);
   assert.ok(env.lines.some((line) => line.includes("adopting existing scheduler job")));
+});
+
+test("R05/T11: restart after a crash before the job id, job not visible → never resubmits, SUBMIT_OUTCOME_UNKNOWN", async (t) => {
+  const env = await setup(t, { limits: { submitVisibilitySeconds: 0.5, submitVisibilityPollSeconds: 0.05 } });
+  const work = makeWork({ spec: makeSpec({ sha: env.repo.sha, dataset: env.dataset }) });
+  env.platform.enqueue(work);
+  const first = await env.newRunner({ afterSubmit: () => { throw new Error("simulated crash"); } }).runOnce();
+  assert.ok(first.submitStartedAt);
+  assert.equal(first.schedulerJobId, null);
+  // The scheduler does not (yet) list the job: an empty findByTag is not proof of absence.
+  const registry = join(env.config.workRoot, ".local-scheduler");
+  const status = await waitFor(() => {
+    const path = join(env.config.workRoot, work.runId, "status.json");
+    const value = existsSync(path) && JSON.parse(readFileSync(path, "utf8"));
+    return value && value.state === "finished" && value;
+  });
+  assert.equal(status.exitCode, 0);
+  for (const name of readdirSync(registry)) rmSync(join(registry, name));
+
+  env.platform.enqueue({ ...work });
+  const second = await env.newRunner().runOnce();
+  assert.equal(second.submit, "unknown_reported");
+  assert.deepEqual(readdirSync(registry), [], "no second scheduler job");
+  assert.equal(env.shim.calls().length, 1, "container ran once");
+  const [complete] = env.platform.requestsFor(work.runId, "complete");
+  assert.equal(complete.outcome, "failed");
+  assert.match(complete.failureReason, /^SUBMIT_OUTCOME_UNKNOWN: /);
+  assert.equal(complete.manifest, null, "outputs of an unattributed job are not collected");
 });
 
 test("T11 (Slurm fake): sbatch response lost → squeue/sacct by name finds the job, sbatch called once", async (t) => {

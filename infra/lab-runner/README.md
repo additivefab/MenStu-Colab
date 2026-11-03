@@ -67,6 +67,7 @@ Only one runner may use a given `workRoot`. A lock file (`.runner.lock`) enforce
 | `scheduler.type` | `local` or `slurm`. |
 | `scheduler.passEnv` | Host variables passed to scheduler commands. Names that look like credentials are refused. |
 | `scheduler.slurm` | Command paths, `extraArgs` (`--partition=…`, `--account=…`), `sacctLookbackDays`. |
+| `limits.submitVisibilitySeconds`, `limits.submitVisibilityPollSeconds` | How long (default 300 s) and how often (default 10 s) a submit with an unknown outcome is reconciled by `submitTag` before the run fails `SUBMIT_OUTCOME_UNKNOWN`. Set the window above the cluster's worst `squeue`/`sacct` visibility delay. |
 | `apptainer.*` | See "Isolation". `images` maps each digest-pinned `imageRef` to a pre-pulled SIF with its provenance, `{ociDigest, sifPath, sifSha256, source, verifySignature?, allowRunnerWritable?}`. See "Image provenance". `allowPullByDigest` lets the runner use `docker://<imageRef>` instead, with no file hash recorded. |
 | `datasets[]` | `{versionId, dataPath, manifestPath, splitManifestPath?, extraFiles?, snapshot?}` for each dataset version hosted here. `extraFiles` is `"reject"` (default) or `"ignore"`; `snapshot: {sealPath}` selects sealed-snapshot verification. See "Dataset binding". |
 | `gitReadFallback` | `{url}` used when the claim returns `repository: null` (no GitHub App, or reconcile mode). Typical values are a local mirror path or an SSH URL that uses the host's own read-only deploy key. |
@@ -183,16 +184,19 @@ The manifest's own hash and the split manifest's hash are also added to the bloc
    1. Check the manifest hashes (above).
    2. Check out the code (below).
    3. Verify the data bytes (full or sealed; "Dataset binding"), then write `data-binding.json`, `job.json` and `job.mjs`.
-   4. Call **`findByTag(submitTag)`**. If a job is found, adopt it. Otherwise submit.
+   4. Call **`findByTag(submitTag)`**. If a job is found, adopt it. If an earlier
+      submit has no recorded job id, reconcile it (see "Unknown submit outcomes").
+      Otherwise submit, once.
    5. Record the job id at once.
    6. Poll the scheduler and send a heartbeat every `heartbeatSeconds`, with phase
       `dispatching` → `running` → `collecting`.
    7. Run the egress gate, then build the manifest and metrics.
    8. Send `complete`.
 3. **reconcile**. The runner runs `findByTag`, falling back to the recorded job id
-   from the claim or local state, then reports `{found, schedulerJobId, schedulerState}`.
-   If the job is not found, the run goes back to dispatching and is submitted under this lease, again
-   after a `findByTag`. If it is pending or running, the runner monitors it. If it
+   from the claim, local state or submit receipt, then reports `{found, schedulerJobId, schedulerState}`.
+   If the job is not found **and no submit was ever started** (no `submitStartedAt`, no receipt),
+   the run goes back to dispatching and is submitted under this lease, again after a `findByTag`.
+   If a submit was started, an empty `findByTag` is not proof of absence: see below. If it is pending or running, the runner monitors it. If it
    has finished, the runner collects outputs and sends `complete`. If it has failed
    or been canceled, the run is terminal on the platform and nothing more is done.
    The reconcile response (`ComputeReconcileResponse = {status, leaseExpiresAt,
@@ -211,14 +215,63 @@ The manifest's own hash and the split manifest's hash are also added to the bloc
 
 ### Never submitting twice (T11)
 
-- Every submit is preceded by `findByTag`.
-- `state.submitStartedAt` is persisted before submit, and the job id right after.
-- If `sbatch` fails (for example, the response was lost), the runner queries by tag before
-  any retry, and retries at most once.
-- The local adapter writes its job record before spawning.
+- Every submit is preceded by `findByTag`, and `scheduler.submit` is called **at most once per
+  run**: there is no retry.
+- `state.submitStartedAt`, `state.submitAttempts` and `state.submit: "submitting"` are persisted
+  before submit, and the job id right after.
+- Slurm: the adapter creates `<runDir>/submit-receipt.json` with `O_EXCL` **before** `sbatch` runs
+  and writes the job id into it afterwards. A second submit for the same run returns the recorded
+  job id, or refuses (`SubmitOutcomeUnknownError`) when the receipt has none. A job name is not a
+  uniqueness constraint in Slurm, so the receipt is what makes submit exclusive.
+- Local: the job record is published exclusively (`link(2)`, `EEXIST` like `O_EXCL`) before the
+  process is spawned, and `submit` is idempotent per `submitTag` (it returns the recorded job id).
 - Slurm `findByTag` merges `squeue -h -n <tag> -o %i|%T` (active jobs) with
   `sacct -n -X -P --name=<tag> -S <now-lookback> -o JobID,State,ExitCode`
   (finished jobs). `sacct` defaults to today's jobs only, hence the explicit `-S`.
+
+### Unknown submit outcomes (R05)
+
+`state.submit` follows this state machine:
+
+```
+(none) ─► submitting ─► submitted                 scheduler returned a job id
+                     ├► rejected                  definitive refusal → complete failed "SUBMIT_REJECTED: …"
+                     └► unknown ─► adopted        a job with the tag became visible → monitored as usual
+                               └► unknown_reported  window passed, nothing visible → "SUBMIT_OUTCOME_UNKNOWN: …"
+```
+
+- **Rejected vs unknown.** A submit error is *rejected* only when the adapter proves no job exists:
+  `sbatch` could not be started, or it exited non-zero with a controller refusal such as
+  `Invalid partition name specified`, `Invalid account`, `Requested node configuration is not
+  available`, `Job violates accounting/QOS policy`, or an option-parsing error, and the message
+  contains no transport wording (timeout, socket, connect, slurmctld…). Everything else
+  (lost responses, timeouts, signals, unparseable output, unclassified messages) is *unknown*.
+- **Unknown is never retried.** The runner polls `findByTag` (plus any job id from the claim, state
+  or receipt) every `limits.submitVisibilityPollSeconds` (default 10) for
+  `limits.submitVisibilitySeconds` (default 300), counted from `state.submitUnknownSince`, the first
+  moment the outcome was known to be unknown. Scheduler errors during polling count as "not
+  visible yet". A restart that finds `submitStartedAt` or a receipt without a job id enters the
+  same state; the window is persisted, so restarts do not extend it.
+- **Window passed, nothing visible.** The run is handed to a human, never resubmitted:
+  - execute mode (platform status `dispatching`): `complete` with `outcome:"failed"`,
+    `failureReason:"SUBMIT_OUTCOME_UNKNOWN: …"`, `manifest:null` (nothing is collected: outputs
+    could belong to an unseen job);
+  - reconcile mode: `reconcile` with `{found:false, submitOutcome:"unknown"}`. The platform moves
+    the run from `reconciling` to `failed` with that reason code instead of to `dispatching`
+    (`ComputeReconcileRequest.submitOutcome` in `contracts.ts`).
+  An operator checks the scheduler for jobs named `<submitTag>` and reruns deliberately (a rerun
+  is a new attempt with a new tag). If the job surfaces before the platform recorded the failure,
+  the runner adopts it instead.
+- **Reconcile mode and the lease.** Heartbeats are refused while a run is `reconciling`, so the
+  wait is capped at the claim's lease minus `requestTimeoutSeconds + pollSeconds`. If the lease
+  budget runs out while the window is still open, the runner reports nothing and leaves the run in
+  `reconciling`; the next reconcile claim continues the same window.
+- **Duplicate live jobs.** If `findByTag` returns more than one live job for a tag, the runner
+  cancels **all** of them (best effort; failures are recorded in `state.duplicateJobs`) and fails
+  the run with `DUPLICATE_JOBS: …`, without collecting outputs. Keeping the earliest is not safe:
+  every job of a run writes into the same `runDir` (`out/`, `status.json`), so its results could
+  not be attributed. In reconcile mode the earliest job (lowest Slurm job id) is reported first so
+  the platform leaves `reconciling`, then the run is failed the same way.
 
 ### Lease-loss policy
 

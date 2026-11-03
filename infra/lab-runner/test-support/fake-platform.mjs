@@ -55,7 +55,11 @@ export async function startFakePlatform({ token }) {
     }
     if (body.action === "reconcile") {
       if (run.status !== "reconciling") return reply(409, { code: "NOT_RECONCILING", error: "not reconciling" });
-      if (body.found) {
+      if (body.submitOutcome === "unknown" && body.found === false) {
+        // R05: like the real platform, an unsettled submit fails the run for an operator.
+        run.status = "failed";
+        run.failureReason = "SUBMIT_OUTCOME_UNKNOWN: reconcile";
+      } else if (body.found) {
         const map = { pending: "running", running: "running", finished: "collecting", failed: "failed", canceled: "canceled", unknown: "reconciling" };
         run.status = map[body.schedulerState] ?? "reconciling";
         if (run.status === "running" && run.cancelRequested) run.status = "cancel_requested";
