@@ -27,7 +27,8 @@ function eventText(event: AttemptEvent) {
 
 /** One agent attempt. While it is live, new worker events are polled with
  * `afterSequence` so only the tail is transferred. */
-export function AttemptCard({ attempt, onChanged }: { attempt: AttemptSummary; onChanged: () => void }) {
+export function AttemptCard({ attempt, number, onChanged }: { attempt: AttemptSummary; number?: number | null; onChanged: () => void }) {
+  void number; // batch 1 (A3): shown as "代理 #n"
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<AttemptDetail["attempt"] | null>(null);
   const [events, setEvents] = useState<AttemptEvent[]>([]);

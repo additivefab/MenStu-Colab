@@ -157,7 +157,8 @@ function ResultSection({ detail, taskContent, onReload, onChanged }: {
 }
 
 /** Run card: the pinned spec, approval bound to the spec hash, and the result. */
-export function RunCard({ run, taskContent, onChanged }: { run: RunSummary; taskContent: TaskContentDraft | null; onChanged: () => void }) {
+export function RunCard({ run, number, taskContent, onChanged }: { run: RunSummary; number?: number | null; taskContent: TaskContentDraft | null; onChanged: () => void }) {
+  void number; // batch 1 (A3): shown as "运行 #n"
   const [open, setOpen] = useState(run.status === "awaiting_approval");
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [error, setError] = useState<unknown>(null);
