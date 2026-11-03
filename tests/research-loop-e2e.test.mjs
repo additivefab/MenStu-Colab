@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, createHmac, generateKeyPairSync, randomUUID, verify } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
@@ -16,6 +16,7 @@ import { FakeAdapter } from "../infra/agent-worker/adapters/fake.mjs";
 import { createPlatformClient as createAgentPlatformClient } from "../infra/agent-worker/platform-client.mjs";
 import { runAttempt } from "../infra/agent-worker/worker.mjs";
 import { validateConfig as validateRunnerConfig } from "../infra/lab-runner/lib/config.mjs";
+import { computeDataDigest } from "../infra/lab-runner/lib/dataset.mjs";
 import { createLogger as createRunnerLogger } from "../infra/lab-runner/lib/log.mjs";
 import { createRunner } from "../infra/lab-runner/runner.mjs";
 import { installShim } from "../infra/lab-runner/test-support/fixtures.mjs";
@@ -137,9 +138,9 @@ function createDataset(root) {
   for (const [name, x] of [["a.json", 1], ["b.json", 2], ["c.json", 5]]) {
     const content = JSON.stringify({ id: name, x, y: 2 * x });
     writeFileSync(join(dataPath, "samples", name), content);
-    files.push({ path: `samples/${name}`, sha256: sha256(content), bytes: content.length });
+    files.push({ path: `samples/${name}`, size: Buffer.byteLength(content), sha256: sha256(content) });
   }
-  const manifest = JSON.stringify({ schema: "lab.dataset/v1", files });
+  const manifest = JSON.stringify({ schema: "tanyan.datamanifest/v1", files });
   const split = JSON.stringify({ schema: "lab.splits/v1", test: files.map((file) => file.path) });
   const manifestPath = join(root, "datasets", "v1.manifest.json");
   const splitManifestPath = join(root, "datasets", "v1.splits.json");
@@ -497,7 +498,10 @@ test("research loop end to end: real platform + real agent worker + real lab run
     datasetVersion = (await post("/api/admin/lab", {
       action: "register_dataset", label: "合成数据 v1", runnerId: computeRunner.runner.id,
       manifestSha256: dataset.manifestSha256, splitManifestSha256: dataset.splitManifestSha256,
-      egressPolicy: { schema: "tanyan.egress/v1", allowedExtensions: [".json", ".csv", ".log", ".png", ".avif"], maxFileBytes: 1_000_000, maxTotalBytes: 5_000_000, allowImages: false, blockDatasetHashMatches: true },
+      egressPolicy: { schema: "tanyan.egress/v1", allowedExtensions: [".json", ".csv", ".log", ".png", ".avif"], maxFileBytes: 1_000_000, maxTotalBytes: 5_000_000, allowImages: false, blockDatasetHashMatches: true,
+        // R03: held by default. The one opt-in shows that an authorised path still
+        // passes the image rule shared by runner and platform.
+        autoPublishPaths: ["figures/attention.avif"] },
     }, "root")).dataset;
     await post("/api/admin/lab", { action: "grant_dataset", datasetVersionId: datasetVersion.id, studentId: STUDENT }, "root");
   });
@@ -714,7 +718,7 @@ test("research loop end to end: real platform + real agent worker + real lab run
     assert.deepEqual(fetch.permissions, { contents: "read" }, "checkout used a minted contents:read token");
     assert.ok(!runnerLines.join("\n").includes(fetch.token), "token never logged");
     const [container] = shimCallsFor(run.runId);
-    assert.equal(container.binds["/data"].source, dataset.dataPath);
+    assert.equal(container.binds["/data"].source, realpathSync(dataset.dataPath), "the verified real path is mounted");
     assert.equal(container.binds["/data"].mode, "ro");
     assert.equal(container.binds["/src"].mode, "ro");
     assert.deepEqual(container.entry, ["node", "train.mjs", "--mode=ok", "--seed=7"]);
@@ -726,11 +730,18 @@ test("research loop end to end: real platform + real agent worker + real lab run
     assert.deepEqual(detail.result.metrics.values, { accuracy: 1, samples: 3 }, "metrics prove the agent's change ran");
     assert.equal(detail.result.manifest.repository.executedCommitSha, headSha);
     assert.equal(detail.result.manifest.inputs.manifestSha256, dataset.manifestSha256);
+    // R02: the platform stores the digest of the input bytes verified before submit.
+    assert.equal(detail.result.manifest.inputs.dataVerification, "full");
+    assert.equal(detail.result.manifest.inputs.dataDigest, computeDataDigest(dataset.files));
     assert.deepEqual(detail.result.manifest.inputs.seeds, [7]);
     const byPath = Object.fromEntries(detail.artifacts.map((item) => [item.relativePath, item]));
     assert.equal(byPath["metrics.json"].egressDecision, "published");
-    assert.equal(byPath["predictions.csv"].egressDecision, "published");
-    assert.equal(byPath["logs/job.log"].egressDecision, "published");
+    // R03: held by default; only the validated metrics.json leaves the lab.
+    assert.equal(byPath["metrics.json"].egressReason, "平台复核：可信指标 metrics.json");
+    for (const path of ["predictions.csv", "logs/job.log"]) {
+      assert.equal(byPath[path].egressDecision, "held", path);
+      assert.match(byPath[path].egressReason, /需数据持有方授权后外发/, path);
+    }
     assert.equal(byPath["figures/accuracy.png"].egressDecision, "held", "images held unless allowed");
     assert.equal(byPath["figures/attention.avif"].egressDecision, "held", "runner and platform share the image list");
     assert.equal(byPath["figures/attention.avif"].egressReason, "image output and allowImages=false", "held by the runner, not only by the re-check");
@@ -740,7 +751,7 @@ test("research loop end to end: real platform + real agent worker + real lab run
     assert.equal(byPath["data-link"].sha256, "", "rejected non-regular entry recorded without a hash");
     for (const item of detail.artifacts) assert.equal(item.downloadable, item.egressDecision === "published", item.relativePath);
     const keys = (await bucket.list({ prefix: `runs/${run.runId}/` })).objects.map((object) => object.key).sort();
-    assert.deepEqual(keys, ["logs/job.log", "metrics.json", "predictions.csv"].map((path) => `runs/${run.runId}/${path}`));
+    assert.deepEqual(keys, [`runs/${run.runId}/metrics.json`]);
     const download = await call(`/api/run-artifacts?artifactId=${byPath["metrics.json"].id}`, { actor: "student" });
     assert.equal(download.status, 200);
     assert.equal(sha256(Buffer.from(await download.arrayBuffer())), byPath["metrics.json"].sha256);
@@ -782,12 +793,13 @@ test("research loop end to end: real platform + real agent worker + real lab run
     await post("/api/runs", { action: "approve", runId: bad.runId, runSpecSha256: bad.runSpecSha256 }, "root");
     const state = await newRunner().runOnce();
     assert.equal(state.runId, bad.runId);
-    assert.match(state.metricsNote, /failed validation/);
+    // R03: the untrusted file is held by the runner gate, but its path is still reported.
+    assert.match(state.metricsNote, /未通过可信指标校验/);
     const detail = await get(`/api/runs?runId=${bad.runId}`, "mentor");
     assert.equal(detail.run.status, "completed");
     assert.equal(detail.result.manifest.metricsArtifactPath, "metrics.json", "runner reports the invalid file");
     assert.equal(detail.result.technicalValidity, "invalid");
-    assert.match(detail.result.validityNotes, /metrics 校验失败/);
+    assert.match(detail.result.validityNotes, /metrics 产物未外发（metrics\.json 未通过可信指标校验/);
     assert.equal(detail.result.metrics, null, "invalid metrics never become formal metrics");
     const refused = await post("/api/run-results", { action: "review", runId: bad.runId, expectedVersion: 1, state: "accepted", hypothesisOutcome: "supported" }, "mentor", 409);
     assert.equal(refused.code, "NOT_TECHNICALLY_VALID");
@@ -851,7 +863,7 @@ test("research loop end to end: real platform + real agent worker + real lab run
     const detail = await get(`/api/runs?runId=${long.runId}`, "student");
     assert.equal(detail.run.status, "canceled");
     assert.equal(detail.run.exitCode, 143, "the job was terminated by SIGTERM");
-    assert.ok(detail.artifacts.some((item) => item.relativePath === "partial/progress.csv" && item.egressDecision === "published"), "partial outputs kept");
+    assert.ok(detail.artifacts.some((item) => item.relativePath === "partial/progress.csv" && item.egressDecision === "held"), "partial outputs kept on lab storage");
     assert.equal(JSON.parse(readFileSync(statusPath, "utf8")).state, "canceled");
     const record = JSON.parse(readFileSync(join(runnerRoot, ".local-scheduler", `tanyan-${long.runId}.json`), "utf8"));
     assert.equal(record.jobId, detail.run.schedulerJobId, "the exact recorded job was canceled");

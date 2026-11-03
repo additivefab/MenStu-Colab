@@ -29,7 +29,8 @@ The runner is a Node 22+ daemon on the lab's GPU servers. It implements spec
 | `schedulers/local.mjs`, `schedulers/slurm.mjs` | Scheduler adapters with one interface: `submit`, `findByTag`, `query`, `cancel`. |
 | `lib/checkout.mjs` | Fetches exactly `executedCommitSha`, without persisting the token. |
 | `lib/container.mjs` | Builds the Apptainer argv and applies the parameter-passing rule. |
-| `lib/dataset.mjs` | Checks the dataset manifest hash and extracts per-file hashes. |
+| `lib/dataset.mjs` | Binds the dataset: manifest hash, then the actual bytes under `dataPath` (full re-hash or sealed snapshot), post-run stat re-check, `dataDigest`. |
+| `seal-dataset.mjs` | Ingest command: hashes a dataset directory and writes its manifest and seal. |
 | `lib/config.mjs` | Validates the config and loads the token. |
 | `runner.config.example.json` | Example configuration. |
 | `lab-runner.service` | Example systemd unit. |
@@ -59,31 +60,120 @@ Only one runner may use a given `workRoot`. A lock file (`.runner.lock`) enforce
 | `platformUrl` | Platform origin. HTTPS is required. Plain HTTP is accepted only for `localhost` / `127.0.0.1` (tests). |
 | `runnerId` | The registered runner id. It appears in manifests and lab locators. |
 | `tokenFile` | Path to the runner token. `TANYAN_LAB_RUNNER_TOKEN` takes precedence. |
-| `workRoot` | Absolute path. Per-run directory: `<workRoot>/<runId>/{state.json, src/, out/, job.json, job.mjs, status.json, env.json}`. Under Slurm it must be on a filesystem shared with the compute nodes. |
+| `workRoot` | Absolute path. Per-run directory: `<workRoot>/<runId>/{state.json, data-binding.json, src/, out/, job.json, job.mjs, status.json, env.json}`. Under Slurm it must be on a filesystem shared with the compute nodes. |
 | `nodePath` | Interpreter written into each run's `job.mjs` shebang. |
 | `git`, `githubBaseUrl` | Git binary, and the base URL used with the minted token. |
 | `nvidiaSmi` | Path to `nvidia-smi`, or `null` to skip. If it is missing or fails, driver and GPU are reported as `""` and never guessed. |
 | `scheduler.type` | `local` or `slurm`. |
 | `scheduler.passEnv` | Host variables passed to scheduler commands. Names that look like credentials are refused. |
 | `scheduler.slurm` | Command paths, `extraArgs` (`--partition=…`, `--account=…`), `sacctLookbackDays`. |
-| `apptainer.*` | See "Isolation". `images` maps each digest-pinned `imageRef` to a pre-pulled SIF. `allowPullByDigest` lets the runner use `docker://<imageRef>` instead. |
-| `datasets[]` | `{versionId, dataPath, manifestPath, splitManifestPath?}` for each dataset version hosted here. |
+| `limits.submitVisibilitySeconds`, `limits.submitVisibilityPollSeconds` | How long (default 300 s) and how often (default 10 s) a submit with an unknown outcome is reconciled by `submitTag` before the run fails `SUBMIT_OUTCOME_UNKNOWN`. Set the window above the cluster's worst `squeue`/`sacct` visibility delay. |
+| `apptainer.*` | See "Isolation". `images` maps each digest-pinned `imageRef` to a pre-pulled SIF with its provenance, `{ociDigest, sifPath, sifSha256, source, verifySignature?, allowRunnerWritable?}`. See "Image provenance". `allowPullByDigest` lets the runner use `docker://<imageRef>` instead, with no file hash recorded. |
+| `datasets[]` | `{versionId, dataPath, manifestPath, splitManifestPath?, extraFiles?, snapshot?}` for each dataset version hosted here. `extraFiles` is `"reject"` (default) or `"ignore"`; `snapshot: {sealPath}` selects sealed-snapshot verification. See "Dataset binding". |
 | `gitReadFallback` | `{url}` used when the claim returns `repository: null` (no GitHub App, or reconcile mode). Typical values are a local mirror path or an SSH URL that uses the host's own read-only deploy key. |
 | `limits` | `maxConcurrentRuns` (1), `heartbeatSeconds` (30), `pollSeconds` (15), `claimIntervalSeconds` (20), `killGraceSeconds` (30), `maxArtifacts` (500), `requestTimeoutSeconds` (60). |
 
-### Dataset manifest format
+### Dataset binding (R02)
 
-`manifestPath` must hash, byte for byte, to `spec.dataset.manifestSha256`. When
-the spec names a split manifest, `splitManifestPath` must match
-`splitManifestSha256`. On a mismatch the run fails **before** checkout or
-submission. Per-file hashes are read from either:
+An approved RunSpec names the dataset manifest by sha256. The runner proves that
+the bytes under `dataPath` are the bytes that manifest lists. A read-only mount
+only stops writes from inside the container, not changes on the NAS.
 
-- JSON, where every property named `sha256` at any depth counts; or
-- `sha256sum` output (`<hex>  <path>`).
+**Manifest format.** `manifestPath` must hash, byte for byte, to
+`spec.dataset.manifestSha256`. When the spec names a split manifest,
+`splitManifestPath` must match `splitManifestSha256`. These two hash checks run
+first, before checkout. The manifest content must be one of:
 
-If the manifest yields no per-file hashes, the run fails, because the raw-copy check
-would be meaningless. The manifest's own hash and the split manifest's hash are
-also added to the blocked set.
+- `tanyan.datamanifest/v1`: `{"schema":"tanyan.datamanifest/v1","files":[{"path","size","sha256"}]}`,
+  or the bare list `[{"path","size","sha256"}]`;
+- `sha256sum` output (`<hex>  <path>`, an optional `*`, an optional leading `./`). Sizes
+  are then taken from disk (full mode) or from the seal (sealed mode).
+
+Paths are relative POSIX paths with no leading `/`, no `.`, `..` or empty segments,
+no backslash and no control characters. Each path may appear only once. Any other JSON
+shape is refused. `seal-dataset.mjs` writes the object form.
+
+**Full verification** (default). This runs after checkout, as the last step before the job files are
+written and the job is submitted:
+
+1. `dataPath` is resolved with `realpath`. That real directory is verified, and the same
+   real directory is bound read-only at `/data`.
+2. The tree is walked with `lstat` and symlinks are never followed. A symlink (file or directory), a
+   special file (socket, FIFO, device), another filesystem mounted inside, or a directory whose
+   identity changes while it is listed refuses the run.
+3. Every manifest file is opened with `O_NOFOLLOW` and streamed through sha256, 4 files at a time.
+   The open file's inode, size, mtime and ctime must equal the walk's `lstat` before and after
+   reading. A modified (size or sha256), missing or replaced file refuses the run.
+4. Files on disk but not in the manifest follow `extraFiles`:
+   - `reject` (default) refuses the run;
+   - `ignore` lets the run go ahead. A directory bind cannot hide single files, so **ignored
+     files stay visible under `/data`**. The runner hashes them and records `{path, size, sha256}`
+     in `<runDir>/data-binding.json` and the log. They are not part of `dataDigest`. Use `ignore`
+     only for known, harmless clutter.
+
+The failure is reported as `data binding failed: …`, with the first problems listed. The
+job is never submitted.
+
+**Sealed snapshot** (`snapshot: {sealPath}`), for datasets too large to re-hash on
+every run. At ingest, an admin runs
+
+```
+node infra/lab-runner/seal-dataset.mjs --data /tank/datasets/.zfs/snapshot/imagenet-v2/data \
+  --manifest /srv/tanyan-datasets/imagenet-v2.manifest.json --seal /srv/tanyan-datasets/imagenet-v2.seal.json
+```
+
+The command hashes every file. It writes the manifest and the seal
+(`tanyan.dataseal/v1`: the real `dataPath`, `manifestSha256`, `dataDigest`, and for each file
+`{path, size, mtimeNs, ctimeNs, ino}`), both mode 0444, and prints the manifest sha256 to
+register. It refuses symlinks, special files, and output paths inside the dataset. At run time
+the runner checks that:
+
+- the seal is a regular file, not writable by group or other;
+- the seal was written for this manifest sha256 and this real `dataPath`;
+- the seal lists exactly the manifest's files, with the same sizes;
+- the seal's `dataDigest` matches the manifest listing.
+
+Then it walks the tree with `lstat`, with the same symlink, special-file and `extraFiles`
+rules, and compares every file's size, mtime, ctime and inode with the seal. Nothing is
+re-hashed. `dataVerification` is then `"sealed_snapshot"`.
+
+This mode **trusts the snapshot's immutability**. Stat metadata is evidence, not proof:
+a privileged user, or a filesystem that lets someone rewrite content and forge both mtime and ctime
+(for example by changing the clock), defeats it. Use it only for data that really cannot change, such
+as a ZFS or btrfs read-only snapshot, or a root-owned read-only directory that neither students nor the
+runner user can write. Seal the path the runner will mount, after the data has been made read-only:
+`chmod` and `chown` change ctime and invalidate the seal. Keep the seal and manifest admin-owned, outside
+`dataPath`.
+
+**Time of check and time of use.** Verification runs as late as `prepare()` allows: after
+checkout, immediately before `findByTag` and submit. The verified real directory is the one
+bind-mounted read-only. A residual window remains: between verification and the moment the job
+opens each file, and while the job runs, a process outside the container with write access
+to the NAS can still change the data. To close the loop, after the scheduler reports the job ended,
+the runner walks the mounted directory again. It compares every verified file's `(size, mtime, ctime,
+inode, device)` and every directory's identity with what it recorded before submit (`data-binding.json`):
+
+- a change, removal, replacement, new symlink or special file, or a new file under `extraFiles: "reject"`
+  turns the run into `outcome: "failed"` with `failureReason: "input data changed during the run …"`. The
+  manifest, with the pre-run `dataDigest`, and the artifacts are still reported as evidence. The platform
+  therefore records `technical_validity: "invalid"`;
+- new files under `extraFiles: "ignore"` are recorded in `state.json` (`dataRecheck.newlyIgnored`) and the log.
+
+The result is kept in `state.json` (`dataRecheck`). The re-check uses stat metadata. A change made and
+undone within the run with forged timestamps is not detectable this way, so immutable snapshots remain
+the strong guarantee. A canceled run is not re-checked. If `data-binding.json` is missing, for example
+when a job is adopted from a runner without this record, the re-check is skipped with a warning and no
+`dataDigest` is reported.
+
+**Digest.** `manifest.inputs.dataDigest` = sha256 of the canonical JSON listing
+`[{"path":…,"sha256":…,"size":…}, …]`: keys in that order, entries sorted by the UTF-8 bytes of `path`,
+no whitespace. This equals `canonicalJson` from `contracts.ts`. It covers the manifest files only, with
+sizes as verified. `manifest.inputs.dataVerification` is `"full"` or `"sealed_snapshot"`. Full and sealed
+verification of the same data give the same digest.
+
+**Egress.** Per-file hashes for the raw-copy check are read from the manifest as before: in JSON, every
+property named `sha256` at any depth; or `sha256sum` lines. If the manifest yields none, the run fails.
+The manifest's own hash and the split manifest's hash are also added to the blocked set.
 
 ## Execution flow
 
@@ -91,19 +181,22 @@ also added to the blocked set.
    Repository tokens are kept in memory only. An immediate heartbeat confirms the lease
    and picks up a pending cancel.
 2. **execute**:
-   1. Check the data binding (above).
+   1. Check the manifest hashes (above).
    2. Check out the code (below).
-   3. Write `job.json` and `job.mjs`.
-   4. Call **`findByTag(submitTag)`**. If a job is found, adopt it. Otherwise submit.
+   3. Verify the data bytes (full or sealed; "Dataset binding"), then write `data-binding.json`, `job.json` and `job.mjs`.
+   4. Call **`findByTag(submitTag)`**. If a job is found, adopt it. If an earlier
+      submit has no recorded job id, reconcile it (see "Unknown submit outcomes").
+      Otherwise submit, once.
    5. Record the job id at once.
    6. Poll the scheduler and send a heartbeat every `heartbeatSeconds`, with phase
       `dispatching` → `running` → `collecting`.
    7. Run the egress gate, then build the manifest and metrics.
    8. Send `complete`.
 3. **reconcile**. The runner runs `findByTag`, falling back to the recorded job id
-   from the claim or local state, then reports `{found, schedulerJobId, schedulerState}`.
-   If the job is not found, the run goes back to dispatching and is submitted under this lease, again
-   after a `findByTag`. If it is pending or running, the runner monitors it. If it
+   from the claim, local state or submit receipt, then reports `{found, schedulerJobId, schedulerState}`.
+   If the job is not found **and no submit was ever started** (no `submitStartedAt`, no receipt),
+   the run goes back to dispatching and is submitted under this lease, again after a `findByTag`.
+   If a submit was started, an empty `findByTag` is not proof of absence: see below. If it is pending or running, the runner monitors it. If it
    has finished, the runner collects outputs and sends `complete`. If it has failed
    or been canceled, the run is terminal on the platform and nothing more is done.
    The reconcile response (`ComputeReconcileResponse = {status, leaseExpiresAt,
@@ -122,14 +215,63 @@ also added to the blocked set.
 
 ### Never submitting twice (T11)
 
-- Every submit is preceded by `findByTag`.
-- `state.submitStartedAt` is persisted before submit, and the job id right after.
-- If `sbatch` fails (for example, the response was lost), the runner queries by tag before
-  any retry, and retries at most once.
-- The local adapter writes its job record before spawning.
+- Every submit is preceded by `findByTag`, and `scheduler.submit` is called **at most once per
+  run**: there is no retry.
+- `state.submitStartedAt`, `state.submitAttempts` and `state.submit: "submitting"` are persisted
+  before submit, and the job id right after.
+- Slurm: the adapter creates `<runDir>/submit-receipt.json` with `O_EXCL` **before** `sbatch` runs
+  and writes the job id into it afterwards. A second submit for the same run returns the recorded
+  job id, or refuses (`SubmitOutcomeUnknownError`) when the receipt has none. A job name is not a
+  uniqueness constraint in Slurm, so the receipt is what makes submit exclusive.
+- Local: the job record is published exclusively (`link(2)`, `EEXIST` like `O_EXCL`) before the
+  process is spawned, and `submit` is idempotent per `submitTag` (it returns the recorded job id).
 - Slurm `findByTag` merges `squeue -h -n <tag> -o %i|%T` (active jobs) with
   `sacct -n -X -P --name=<tag> -S <now-lookback> -o JobID,State,ExitCode`
   (finished jobs). `sacct` defaults to today's jobs only, hence the explicit `-S`.
+
+### Unknown submit outcomes (R05)
+
+`state.submit` follows this state machine:
+
+```
+(none) ─► submitting ─► submitted                 scheduler returned a job id
+                     ├► rejected                  definitive refusal → complete failed "SUBMIT_REJECTED: …"
+                     └► unknown ─► adopted        a job with the tag became visible → monitored as usual
+                               └► unknown_reported  window passed, nothing visible → "SUBMIT_OUTCOME_UNKNOWN: …"
+```
+
+- **Rejected vs unknown.** A submit error is *rejected* only when the adapter proves no job exists:
+  `sbatch` could not be started, or it exited non-zero with a controller refusal such as
+  `Invalid partition name specified`, `Invalid account`, `Requested node configuration is not
+  available`, `Job violates accounting/QOS policy`, or an option-parsing error, and the message
+  contains no transport wording (timeout, socket, connect, slurmctld…). Everything else
+  (lost responses, timeouts, signals, unparseable output, unclassified messages) is *unknown*.
+- **Unknown is never retried.** The runner polls `findByTag` (plus any job id from the claim, state
+  or receipt) every `limits.submitVisibilityPollSeconds` (default 10) for
+  `limits.submitVisibilitySeconds` (default 300), counted from `state.submitUnknownSince`, the first
+  moment the outcome was known to be unknown. Scheduler errors during polling count as "not
+  visible yet". A restart that finds `submitStartedAt` or a receipt without a job id enters the
+  same state; the window is persisted, so restarts do not extend it.
+- **Window passed, nothing visible.** The run is handed to a human, never resubmitted:
+  - execute mode (platform status `dispatching`): `complete` with `outcome:"failed"`,
+    `failureReason:"SUBMIT_OUTCOME_UNKNOWN: …"`, `manifest:null` (nothing is collected: outputs
+    could belong to an unseen job);
+  - reconcile mode: `reconcile` with `{found:false, submitOutcome:"unknown"}`. The platform moves
+    the run from `reconciling` to `failed` with that reason code instead of to `dispatching`
+    (`ComputeReconcileRequest.submitOutcome` in `contracts.ts`).
+  An operator checks the scheduler for jobs named `<submitTag>` and reruns deliberately (a rerun
+  is a new attempt with a new tag). If the job surfaces before the platform recorded the failure,
+  the runner adopts it instead.
+- **Reconcile mode and the lease.** Heartbeats are refused while a run is `reconciling`, so the
+  wait is capped at the claim's lease minus `requestTimeoutSeconds + pollSeconds`. If the lease
+  budget runs out while the window is still open, the runner reports nothing and leaves the run in
+  `reconciling`; the next reconcile claim continues the same window.
+- **Duplicate live jobs.** If `findByTag` returns more than one live job for a tag, the runner
+  cancels **all** of them (best effort; failures are recorded in `state.duplicateJobs`) and fails
+  the run with `DUPLICATE_JOBS: …`, without collecting outputs. Keeping the earliest is not safe:
+  every job of a run writes into the same `runDir` (`out/`, `status.json`), so its results could
+  not be attributed. In reconcile mode the earliest job (lowest Slurm job id) is reported first so
+  the platform leaves `reconciling`, then the run is failed the same way.
 
 ### Lease-loss policy
 
@@ -168,7 +310,7 @@ Inside the container:
 
 The environment variables `TANYAN_RUN_ID`, `TANYAN_SRC_DIR`, `TANYAN_DATA_DIR` and `TANYAN_OUT_DIR` are passed as
 `APPTAINERENV_*`. The job's stdout and stderr go to `/out/logs/job.log`, which is
-subject to the egress gate like any other output.
+subject to the egress gate like any other output (held unless opted in).
 
 Seeds in the manifest come only from integer params named `seed` or `seed_*`.
 
@@ -216,41 +358,145 @@ Flags checked against the Apptainer docs (apptainer.org, `apptainer exec`, the n
   read-only.
 - **Image trust:** `apptainer.images` maps a digest-pinned ref to a local SIF.
   The manifest reports the digest from `imageRef`. That the SIF was built from that
-  digest is the admin's assertion.
+  digest is still the admin's assertion. What the runner does enforce is that the
+  file it runs is the one the admin recorded. See "Image provenance".
+
+## Image provenance
+
+An OCI digest (`imageRef`, `environment.imageDigest`) and the sha256 of a local
+SIF file are **different kinds of digest**. Converting OCI to SIF changes the
+bytes, so the two cannot be compared. Each image entry therefore records both:
+
+```json
+"images": {
+  "registry.example.org/lab/train@sha256:<oci>": {
+    "ociDigest": "sha256:<oci>",
+    "sifPath": "/srv/tanyan-lab-runner/images/train.sif",
+    "sifSha256": "<sha256sum of train.sif>",
+    "source": "apptainer build from lab/train.def @<git rev> by <admin>; or registry ref / signer",
+    "verifySignature": false,
+    "allowRunnerWritable": false
+  }
+}
+```
+
+- `ociDigest` must equal the digest in the key, and `sifSha256` must be 64 lowercase
+  hex characters (`sha256sum train.sif`). `source` is free text of 1–300 printable
+  characters. A malformed entry stops the runner at startup.
+- **Before every submit** the runner checks the SIF in this order. Any failure
+  fails the run before submission, with `failureReason` set to
+  `image verification failed: …`, for example `SIF file hash mismatch … config expects …`.
+  1. Immutability, below.
+  2. It hashes the file as a stream, through one open descriptor, and compares
+     the result with `sifSha256`.
+  3. With `verifySignature: true`, it runs `<apptainer.binary> verify <sif>` and
+     fails on a non-zero exit. The setting is off by default, and the test shim
+     does not implement it.
+- **Hash cache.** Results are cached in memory, keyed by
+  `(dev, ino, size, mtime ns, ctime ns)`, so a multi-GB image is hashed once per
+  runner process, not once per run. The cache **trusts stat metadata**. An in-place
+  edit that keeps the size and restores mtime still changes ctime, which `utimes`
+  cannot set back, so it is re-hashed. Something that can rewrite the bytes without
+  touching the inode metadata defeats the cache: root writing the block device, or a
+  filesystem that lies about ctime. A restart drops the cache.
+- **Immutability.** The runner refuses the SIF when any of these holds:
+  - the real file is group- or world-writable;
+  - a directory on the path from the file up to `/` is group- or world-writable
+    and has no sticky bit;
+  - the runner user itself can write the file or any of those non-sticky
+    directories. Set `allowRunnerWritable: true` only when there is no
+    alternative, for example on a test host;
+  - `sifPath` is a **symlink** whose target, or a directory above the target,
+    is writable by anyone, including the runner. `allowRunnerWritable` does not
+    relax this rule.
+
+  Recommended layout: `root:root`, file `0444` or `0644`, in a `0755` directory owned
+  by root, outside `workRoot`.
+- Apptainer is given the resolved real path that was hashed. The resolved path,
+  the file hash and the source are kept in `state.json`, so a run adopted later by
+  reconciliation still reports them.
+- **Manifest:** `environment.imageFileSha256` and `environment.imageSource` are
+  filled for verified entries. The run card shows both under "可追溯信息".
+- **Legacy entries.** A plain string value (`"<imageRef>": "/path.sif"`) still
+  works. At startup the runner logs `image provenance is unverified`, does not
+  check the file, and leaves both manifest fields out. It never claims a hash it
+  did not check.
+- **Limits, to be verified on real hosts:**
+  - The check runs on the runner host at submit time. Under Slurm the compute node
+    reads the file later from shared storage, and only the immutability rules
+    protect that window. Nothing re-hashes on the node.
+  - The rules use `access(W_OK)` and mode bits. ACLs and root-squash NFS behave
+    differently, and a runner running as root can write everything, so
+    verification always fails unless `allowRunnerWritable` is set. Don't run it
+    as root.
+  - `apptainer verify` needs keys set up on the host.
 - **Shared runner account:** jobs run under the runner's Unix account. Cross-project
   isolation relies on the binds above, not on separate users.
 
-## Egress gate (D5)
+## Egress gate (D5, R03: held by default)
 
-For each entry under `out/`, using `lstat` and never following links:
+Data may be computed on but never copied out. Content scanning cannot tell a
+transformed copy of the data (base64/hex, split into parts, renamed, mixed into a
+log) from a legitimate output, so the gate does not try: **every output is held
+unless it has a basis to leave the lab**. There are exactly two bases:
+
+1. **Trusted metrics.** The top-level `out/metrics.json` (exact path), when its bytes
+   pass `checkMetricsEgress` in `lib/research-loop/contracts.ts`: at most
+   `METRICS_EGRESS_LIMITS.maxBytes` (32 KiB), valid UTF-8 JSON, `tanyan.metrics/v1`
+   per `validateMetricsFile`, no fields beyond `schema`, `evaluationProtocolSha256`,
+   `split`, `values`, `split` a short identifier (`[A-Za-z0-9_.@/-]{1,64}`), at most
+   200 finite numeric values with names of ≤ 80 identifier characters, and raw bytes
+   no larger than the compact re-serialization plus a small whitespace allowance
+   (catches duplicate keys, padded numbers and appended payloads). The gate checks
+   the same bytes it hashed.
+2. **Data-steward opt-in.** A relative path listed in the dataset policy's optional
+   `autoPublishPaths` (`tanyan.egress/v1`). Entries are exact paths
+   (`predictions.csv`) or narrow globs with `*` only in the last segment beneath a
+   literal directory (`logs/*.log`); `**`, `?`, top-level globs (`*.csv`) and
+   all-wildcard segments are refused. Only a superadmin (the data steward) can
+   register a dataset, and the policy is copied into the approved run spec, so the
+   opt-in is bound by the spec hash.
+
+For each entry under `out/`, using `lstat` and never following links, in order:
 
 | Condition | Decision |
 |---|---|
 | Symbolic link, FIFO, socket or device; name that is not a normalized relative path (backslash, control characters, `.git`); resolved path outside `out/` | `rejected` |
 | sha256 equals any dataset-manifest file hash, or the manifest hashes themselves | `rejected` (raw-data copy) |
 | Hard link (link count > 1) | `held` |
+| `metrics.json` failing `checkMetricsEgress` | `held` (`metrics.json 未通过可信指标校验…`) |
+| Any other path not matched by `autoPublishPaths` | `held` (`需数据持有方授权后外发（默认只自动外发校验通过的 metrics.json）`) |
 | Extension not in `allowedExtensions` (or no extension) | `held` |
 | Image (`EGRESS_IMAGE_EXTENSIONS` in `contracts.ts`: `.png .jpg .jpeg .gif .bmp .tif(f) .webp .svg .pdf .eps .ico .heic .heif .avif`, the same list the platform re-check uses) with `allowImages=false` | `held` |
 | Size > `maxFileBytes`, or > `LIMITS.maxPublishedArtifactBytes` | `held` |
 | Running total of published bytes would exceed `maxTotalBytes` (paths in sorted order) | `held` |
-| Otherwise | `published` |
+| Otherwise | `published`; the reason records the basis (`可信指标 metrics.json…` or `数据持有方授权外发：autoPublishPaths 命中 "<pattern>"…`) |
 
-- Only published files are sent inline (base64) in `complete`. Held and rejected
-  files stay on lab storage. Each artifact carries an opaque
-  `labLocator = lab://<runnerId>/<runId>/out/<path>`, which is not a URL.
+- Only published files are sent inline (base64) in `complete`, and only if their bytes
+  still hash to what the gate recorded. Held and rejected files stay on lab storage.
+  Each artifact carries an opaque `labLocator = lab://<runnerId>/<runId>/out/<path>`,
+  which is not a URL.
 - `kind` is derived from path and extension only.
 - Non-regular entries are reported with `sha256: ""` and `sizeBytes: 0`. The contract
   allows an empty hash only together with `egressDecision: "rejected"`; the platform
   records such entries and never publishes them.
-- The raw-copy check matches exact bytes only. A transformed or re-encoded copy of
-  data is not detected. That case is covered by the extension, image and size rules
-  and by human review of held outputs.
+- **Platform enforcement.** On `complete` the platform re-applies the same rule
+  (`planArtifacts` in `lib/run-registry-service.ts`): a `published` claim survives only
+  for `metrics.json` passing `checkMetricsEgress` on the uploaded bytes, or for a path
+  matched by the spec's `autoPublishPaths`, and then the extension, image, size and
+  hash checks. Anything else is downgraded to `held` (decisions only get stricter),
+  and the stored reason is the platform's own basis, not the runner's text.
+- **Limits of this defence.** The raw-copy check matches exact bytes only and is
+  defence in depth. The metrics checks bound, but cannot close, a covert channel:
+  200 float64 values can still carry about 1.6 KB chosen by the job. An opt-in path
+  is published on the steward's authority; nothing here inspects its content.
+  Neither the gate nor the platform is a data-loss guarantee.
 
-Metrics come only from a **published** `out/metrics.json`. Whenever that file is a
-published regular file, the runner reports `metricsArtifactPath: "metrics.json"`, even if
-it fails the runner's own check (`validateMetricsFile`, protocol hash equal to the
-spec's); the reason is logged and kept in `state.metricsNote`. The platform validates
-the file again and records `technical_validity = "invalid"` (T19). Without a published
+Metrics come only from `out/metrics.json`. Whenever that file is a regular file,
+published or held, the runner reports `metricsArtifactPath: "metrics.json"`, even if
+it fails the trusted-metrics check or the runner's own check (protocol hash equal to the
+spec's); the reason is logged and kept in `state.metricsNote`. The platform records
+`technical_validity = "invalid"` for a held or invalid file (T19). Without a regular
 `metrics.json` the path is `null` and the platform records `unknown`.
 
 ## Manifest

@@ -46,7 +46,12 @@ export function validateConfig(raw) {
       dataPath: requireAbsolute(entry.dataPath, `datasets[${index}].dataPath`),
       manifestPath: requireAbsolute(entry.manifestPath, `datasets[${index}].manifestPath`),
       splitManifestPath: entry.splitManifestPath ? requireAbsolute(entry.splitManifestPath, `datasets[${index}].splitManifestPath`) : null,
+      // R02: files on disk but not in the manifest are refused unless "ignore".
+      extraFiles: entry.extraFiles ?? "reject",
+      // R02: sealed immutable snapshot (stat + seal check instead of a full re-hash).
+      snapshot: entry.snapshot ? { sealPath: requireAbsolute(entry.snapshot.sealPath, `datasets[${index}].snapshot.sealPath`) } : null,
     };
+    if (!["reject", "ignore"].includes(datasets[versionId].extraFiles)) throw new ConfigError(`datasets[${index}].extraFiles must be "reject" or "ignore"`);
   }
 
   const apptainer = raw.apptainer ?? {};
@@ -92,6 +97,9 @@ export function validateConfig(raw) {
       killGraceSeconds: positiveNumber(limits.killGraceSeconds, 30, "limits.killGraceSeconds"),
       maxArtifacts: Math.floor(positiveNumber(limits.maxArtifacts, 500, "limits.maxArtifacts")),
       requestTimeoutSeconds: positiveNumber(limits.requestTimeoutSeconds, 60, "limits.requestTimeoutSeconds"),
+      // R05: window for reconciling a submit with an unknown outcome, and its poll interval.
+      submitVisibilitySeconds: positiveNumber(limits.submitVisibilitySeconds, 300, "limits.submitVisibilitySeconds"),
+      submitVisibilityPollSeconds: positiveNumber(limits.submitVisibilityPollSeconds, 10, "limits.submitVisibilityPollSeconds"),
     },
   };
 }

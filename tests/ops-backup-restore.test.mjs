@@ -125,7 +125,8 @@ async function seedLoop(mf, db, bucket) {
   }, "root")).entrypoint;
   const dataset = (await api.post("/api/admin/lab", {
     action: "register_dataset", label: "合成数据 v1", runnerId: computeRunner.runner.id, manifestSha256: "a".repeat(64), splitManifestSha256: "b".repeat(64),
-    egressPolicy: { schema: "tanyan.egress/v1", allowedExtensions: [".json", ".csv"], maxFileBytes: 10_000, maxTotalBytes: 50_000, allowImages: false, blockDatasetHashMatches: true },
+    // R03: held by default; opting tables/loss.csv in keeps a second R2 object to back up.
+    egressPolicy: { schema: "tanyan.egress/v1", allowedExtensions: [".json", ".csv"], maxFileBytes: 10_000, maxTotalBytes: 50_000, allowImages: false, blockDatasetHashMatches: true, autoPublishPaths: ["tables/loss.csv"] },
   }, "root")).dataset;
   await api.post("/api/admin/lab", { action: "grant_dataset", datasetVersionId: dataset.id, studentId: "ops-a" }, "root");
 

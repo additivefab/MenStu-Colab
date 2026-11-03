@@ -23,19 +23,23 @@ it must run with `node --experimental-strip-types`.
 
 ```
 claim ──► verify contextSnapshotSha256 = sha256(canonicalJson({task, baseCommitSha})) (else CONTEXT_MISMATCH)
-      ──► work/<attemptId>/repo: git fetch exactly baseCommitSha (short-lived read token via
-          one-shot http.extraHeader env; never in argv/.git/config), verify HEAD, no remotes
+      ──► work/<attemptId>/git (trusted, outside the checkout): git fetch exactly baseCommitSha
+          (short-lived read token via one-shot http.extraHeader env; never in argv/.git/config);
+          work/<attemptId>/repo: the agent's checkout, objects via alternates; verify HEAD, no remotes
       ──► prompt + policy from the task snapshot and worker config only (repo text grants nothing)
       ──► per-profile lock (<profilesDir>/<id>/.run.lock, O_EXCL, stale-pid recovery)
       ──► adapter.start → streamEvents → sanitize (redact, cap 16 kB, monotonic sequence, ≤100/batch)
       ──► heartbeat every 30 s: cancelRequested → adapter.requestCancel; 409 LEASE_LOST → stop, no result
       ──► budget: task.budget.maxAgentMinutes (capped by limits.maxAgentMinutes) → cancel, then give up
           after cancelGraceSeconds (profile stays locked until the stray run ends)
-      ──► collect: restore trusted .git/config, drop hooks, `git add -A`, raw diff vs base → files
+      ──► collect: verify .git chain (R01), `git --git-dir=<attempt>/git --work-tree=repo add -A`,
+          raw diff vs base → files
           (base64 + sha256 + mode 100644/100755), `git diff --binary` → unifiedDiff
       ──► local evaluatePathPolicy: outside allowed → failed POLICY_VIOLATION (no files sent);
           protected touched → change_ready + status event (platform sets requires_extra_review)
-      ──► result (tests = real commands with provider-reported exit codes; usage)
+      ──► result (tests = real commands with provider-reported exit codes; usage):
+          persisted to the outbox first, then sent with bounded retries; the workspace
+          and the outbox entry are removed only after a definitive answer (see "Result outbox")
 ```
 
 Result error codes: `CONTEXT_MISMATCH`, `POLICY_VIOLATION`, `BUDGET_EXCEEDED`, `AGENT_UNRESPONSIVE`,
@@ -47,6 +51,57 @@ Result error codes: `CONTEXT_MISMATCH`, `POLICY_VIOLATION`, `BUDGET_EXCEEDED`, `
 `NO_PLAN`.
 
 A platform cancel gives outcome `canceled`.
+
+## Result outbox (R04)
+
+A finished result must survive a network error, a lost response and a worker
+crash. `outbox.mjs` does this:
+
+1. **Persist before sending.** The normalized `AgentResultRequest` (already
+   redacted; it never contains the worker token) is written to
+   `<outbox>/pending/<attemptId>.<leaseEpoch>.json` with `attemptId`,
+   `leaseEpoch`, `payload`, `sha256` (of the payload JSON), `createdAt` and the
+   workspace path. The worker writes a temp file, fsyncs it, renames it into
+   place and fsyncs the directory. Directories are 0700 and files 0600. The
+   default directory is `<stateDir>/outbox`; `stateDir` defaults to the parent
+   of `workRoot`.
+2. **Send with bounded retries.** Transient failures are retried with
+   exponential backoff and jitter (`outbox.resultAttempts`, `retryBaseMs`,
+   `retryMaxMs`). Transient means no answer, a timeout or reset, 5xx, 429 or
+   408. 401 and 403 also count, since an operator can fix the credentials. The
+   heartbeat keeps running during these retries, so a failing result endpoint
+   does not also expire the lease.
+3. **Settle only on a definitive answer:**
+   - **2xx:** delivered. The entry and the workspace are removed.
+   - **2xx `replayed: true`:** the platform's answer to a same-epoch replay of
+     a result it already recorded (`submitAgentResult` returns the stored
+     attempt; see `requireLease` in `lib/agent-attempts-service.ts`). The
+     worker treats it as delivered, and the platform records no second
+     result. The exception is `errorCode: "LEASE_EXPIRED"`: the maintenance
+     sweep expired the lease before our result arrived, so the worker treats
+     it like `LEASE_LOST`.
+   - **409 `LEASE_LOST`:** the lease moved on. The entry is dropped and never
+     resent, so a stale epoch never overwrites a newer result.
+   - **Other 4xx (validation):** dead-lettered. The entry moves to
+     `<outbox>/dead/` with `deadLetter: {status, code, message, at}`. Its
+     workspace is kept for an operator.
+   - **No definitive answer:** the entry stays in `pending/` and the workspace
+     is kept.
+4. **Replay.** `runWorker` replays `pending/` at startup and every
+   `outbox.replaySeconds`, before it claims new work. Each replay pass tries
+   each entry once. A crash between persisting and sending, or between sending
+   and deleting, therefore converges to exactly one recorded result.
+   Unreadable or tampered entries (sha256 mismatch) are never sent; they move
+   to `dead/*.corrupt`.
+5. **Retention.** Pending and dead entries older than `outbox.retentionDays`
+   (default 14) are pruned. Each one gets an error-level log line
+   (`outbox entry is past retention; pruning it`, with attemptId, epoch, age),
+   and its workspace is removed. A workspace is only removed when it is
+   `<workRoot>/<attemptId>` and that attempt is not running on this worker.
+
+Operator: to retry a dead-lettered result after fixing the cause, move its
+file from `dead/` back to `pending/`. At startup the worker logs how many dead
+letters are waiting.
 
 ## Plan-first attempts (FB2)
 
@@ -102,8 +157,9 @@ adapter invocation and result are byte-for-byte what they were before FB2.
 | File | Purpose |
 |---|---|
 | `worker.mjs` | Config, main loop, `runAttempt`, event sink, result |
-| `platform-client.mjs` | `POST /api/lab/agent-attempts` (claim, heartbeat, events, result) and `LeaseLostError` |
-| `workspace.mjs` | Fetch and checkout, credential stripping, binary-safe change collection, plan-mode dirty check and discard |
+| `platform-client.mjs` | `POST /api/lab/agent-attempts` (claim, heartbeat, events, result), `LeaseLostError`, error classification and bounded retry |
+| `outbox.mjs` | Durable result outbox: persist, deliver, dead-letter, replay, retention (R04) |
+| `workspace.mjs` | Fetch into a trusted git dir and check out, credential stripping, `.git` tamper checks (R01), binary-safe change collection, plan-mode dirty check and discard |
 | `prompt.mjs` | `buildAgentPolicy`, `buildPrompt` and `buildPlanPrompt` (task snapshot + config only) |
 | `profiles.mjs` | Profile paths, permission checks, per-profile lock |
 | `sanitize.mjs` | Redactor (exact secrets + patterns), payload capping, redacting logger |
@@ -251,6 +307,11 @@ config file. The worker token comes from `AGENT_WORKER_TOKEN` or from
   provider.
 - `maxConcurrentAttempts` lets different profiles run in parallel. Runs on the
   same profile always queue.
+- `stateDir` and `outbox` configure the result outbox. `outbox.dir: null`
+  means `<stateDir>/outbox`. The other settings are `retentionDays`,
+  `replaySeconds`, `resultAttempts`, `retryBaseMs` and `retryMaxMs` (see
+  "Result outbox"). The worker refuses to start if it cannot create the outbox
+  directory.
 
 ```sh
 cd infra/agent-worker && npm ci                # installs @openai/codex-sdk 0.166.0 (+ codex binary)
@@ -309,7 +370,8 @@ them as `failed`/`WORKER_SHUTDOWN`.
 | No network except the model | Codex `networkAccessEnabled:false` (workspace-write sandbox). Claude has no web tools, and Bash is limited to test prefixes, **but a test command such as `pytest` can still run arbitrary repository code** | **Partly assumed.** Needs an egress firewall |
 | No access to datasets | No data paths are mounted or passed | **Assumed.** Needs a dedicated user with no data mounts |
 | Bounded runtime | `maxAgentMinutes` budget, cancel and force-stop; Claude `--max-turns` | Real (tested, T16) |
-| Planted git filters and hooks don't run on the worker | Trusted `.git/config` restored, hooks dir removed, `--no-ext-diff --no-textconv`, `GIT_NO_REPLACE_OBJECTS` | Real (tested) |
+| Planted git filters and hooks don't run on the worker | Worker git runs only against the trusted git directory outside the checkout (R01), `core.hooksPath=/dev/null`, `--no-ext-diff --no-textconv`, `GIT_NO_REPLACE_OBJECTS` | Real (tested) |
+| Collection never reads or writes outside the workspace through the agent's `.git` (R01) | The checkout's `.git` is never written or used; it is lstat-checked and symlinks, hard links, wrong types or a replaced `.git` refuse with `WORKSPACE_TAMPERED` | Real (tested, `workspace-safety.test.mjs`) |
 
 Required OS measures (recommended deployment):
 
@@ -323,7 +385,60 @@ Required OS measures (recommended deployment):
 3. Ideally, run each attempt in its own container or VM with only
    `work/<attemptId>` and that one profile mounted. This closes the gap
    above where an agent shell command could read another profile's files.
-   The current worker does not do this.
+   Batch 7 adds the plumbing for this (see below); the launcher itself is
+   the operator's and has not been verified on a real host.
+
+### Deployment modes and isolation preflight (G01, batch 7)
+
+- `deployment`: `local_dev` (default, unchanged behaviour), `pilot` or
+  `production`. `isolation.mode`: `none` (default), `per_attempt_uid` or
+  `container`.
+- `pilot` + `none` with two or more credential profiles refuses to start;
+  `production` + `none` always refuses. A single-profile pilot may set
+  `acceptSharedUidRisk: true` and starts with a loud warning.
+- In the isolated modes both providers are started through a generated
+  stub that runs the operator's launcher (`infra/isolation-canary/launcher.mjs`)
+  with only that attempt's profile and workspace. The Codex path is wired
+  through `codexPathOverride` and is unverified locally.
+- Before a pilot, run `node infra/agent-worker/preflight.mjs --config <path>
+  --as-attempt` on the real host and keep the JSON report as T14/T15
+  evidence. Procedure: [`docs/ops/主机隔离验收.md`](../../docs/ops/主机隔离验收.md).
+  On a single-UID host it reports FAIL, which is the honest result.
+
+### Git metadata and R01
+
+The agent can rewrite everything under `repo/.git`, including turning
+`config`, `info` or `hooks` into symlinks or hard links to files outside the
+workspace. The worker therefore never writes there and never uses it:
+
+- `prepareWorkspace` fetches into a trusted git directory, `<attempt>/git`
+  (empty template: no hooks, no `info/`; `gc.auto=0`). The checkout's own
+  `.git` reads objects from it through `objects/info/alternates`, so nothing
+  is copied or fetched twice.
+- Every worker-side git command (collection, plan-mode status and discard)
+  runs as `git --git-dir=<attempt>/git --work-tree=<attempt>/repo`. Git skips
+  any entry named `.git` in the work tree, so the agent's config, hooks,
+  `info/attributes`, index (e.g. `skip-worktree` bits) and refs are inert.
+- Before and after each such git command the worker re-checks, with `lstat`
+  and `O_NOFOLLOW` only: the attempt dir, the trusted dir and the checkout's
+  `.git` are real directories with the same `(dev, ino)` as at checkout;
+  the trusted config is byte-identical to the snapshot, singly linked, and
+  the trusted dir has no `hooks/` or `info/`; the checkout's `.git/config`
+  is a regular file with one link, and `.git/hooks`, `.git/info`,
+  `.git/info/attributes` are absent or of the right type. Any mismatch fails
+  the attempt with `WORKSPACE_TAMPERED`.
+- Because nothing is written into an agent-writable directory, the earlier
+  plan of "temp file + O_EXCL/O_NOFOLLOW + fsync + rename" over
+  `.git/config` is not needed: there is no write left to race.
+
+Residual risk: the trusted directory is only as safe as its location. It is
+outside the checkout and outside the Codex sandbox's writable roots, but an
+agent that can write `<attempt>/` (e.g. Claude Bash without an OS sandbox)
+could swap it between the check and git's own path lookup. The before/after
+checks detect such a swap but cannot prevent a planted filter from running
+in that window, because Node has no `openat`-style API to pin git to a
+directory handle. Closing that needs the dedicated-user isolation below
+(G01).
 
 ## Subscription terms caveat
 

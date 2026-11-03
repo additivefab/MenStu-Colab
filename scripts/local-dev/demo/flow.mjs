@@ -84,7 +84,14 @@ export async function runAutoFlow(api, { entrypoint, datasetVersion, fakeGithub,
   const result = finished.result;
   if (result?.technicalValidity !== "valid") throw new Error(`result is ${result?.technicalValidity}: ${result?.validityNotes ?? ""}`);
   const outputs = finished.artifacts.filter((item) => item.egressDecision === "published").map((item) => item.relativePath);
+  const held = finished.artifacts.filter((item) => item.egressDecision === "held").map((item) => item.relativePath);
+  // R03 default: only a validated metrics.json leaves the lab. The demo dataset
+  // registers no autoPublishPaths, so predictions and logs stay held.
+  if (outputs.join(",") !== "metrics.json") throw new Error(`expected only metrics.json to be published, got ${outputs.join(", ") || "(none)"}`);
   step(`实验室执行器完成（退出码 ${finished.run.exitCode}），结果有效，指标 ${JSON.stringify(result.metrics.values)}；外发产物 ${outputs.join(", ")}`);
+  if (held.length) {
+    step(`扣留在实验室 ${held.join(", ")}：外发默认扣留，只自动外发校验通过的 metrics.json；其余产物需数据持有方在数据集外发策略中登记 autoPublishPaths 后才会外发`);
+  }
 
   const reviewed = await api.post("mentor", "/api/run-results", {
     action: "review", runId: run.runId, expectedVersion: finished.review?.version ?? 1, state: "accepted", hypothesisOutcome: "supported",

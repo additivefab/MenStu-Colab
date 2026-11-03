@@ -19,6 +19,8 @@ export const PARAMS_SCHEMA = {
   epochs: { type: "integer", default: 3, minimum: 1, maximum: 20 },
   seed: { type: "integer", default: 7, minimum: 0, maximum: 1000 },
 };
+// Honest default (R03): no `autoPublishPaths`, so only a validated metrics.json
+// is published; predictions.csv and logs/job.log stay held on lab storage.
 export const EGRESS_POLICY = {
   schema: "tanyan.egress/v1", allowedExtensions: [".json", ".csv", ".log"], maxFileBytes: 1_000_000, maxTotalBytes: 5_000_000,
   allowImages: false, blockDatasetHashMatches: true,

@@ -1,9 +1,19 @@
 {
   "platformUrl": "https://tanyan.example.edu",
   "workerId": "agent-worker-lab01",
+  "deployment": "pilot",
   "tokenFile": "/etc/tanyan-agent-worker/worker.token",
   "workRoot": "/var/lib/tanyan-agent-worker/work",
   "profilesDir": "/var/lib/tanyan-agent-worker/profiles",
+  "stateDir": "/var/lib/tanyan-agent-worker",
+  "outbox": {
+    "dir": null,
+    "retentionDays": 14,
+    "replaySeconds": 60,
+    "resultAttempts": 5,
+    "retryBaseMs": 1000,
+    "retryMaxMs": 30000
+  },
   "githubBaseUrl": "https://github.com",
   "gitReadFallback": {
     "urlTemplate": "git@github.com:{fullName}.git",
@@ -32,5 +42,29 @@
   "claude": {
     "claudePath": "/usr/local/bin/claude",
     "childPath": "/usr/local/bin:/usr/bin:/bin"
+  },
+  "isolation": {
+    "mode": "container",
+    "acceptSharedUidRisk": false,
+    "launcher": {
+      "argv": [
+        "/usr/bin/podman", "run", "--rm", "-i",
+        "--network", "tanyan-agent-egress",
+        "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--userns", "keep-id",
+        "--read-only", "--tmpfs", "/tmp",
+        "-v", "{repoDir}:{repoDir}:rw", "-v", "{homeDir}:{homeDir}:rw", "-v", "{tmpDir}:{tmpDir}:rw",
+        "-v", "{profileDir}:{profileDir}:rw",
+        "-w", "{repoDir}",
+        "{envFlags}",
+        "localhost/tanyan-agent-runtime@sha256:REPLACE_WITH_IMAGE_DIGEST",
+        "{binary}"
+      ],
+      "envFlag": "--env",
+      "binaries": { "codex": "/usr/local/bin/codex", "claude": "/usr/local/bin/claude" },
+      "probeNode": "/usr/local/bin/node"
+    },
+    "egressAllowlist": ["api.openai.com:443", "chatgpt.com:443", "api.anthropic.com:443", "claude.ai:443", "github.com:443", "tanyan.example.edu:443"],
+    "probeDeniedHosts": ["1.1.1.1:443", "example.com:80"],
+    "rawDataPaths": ["/data", "/srv/datasets"]
   }
 }

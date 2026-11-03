@@ -159,6 +159,7 @@ function LabSection({ students }: { students: StudentOption[] }) {
         maxTotalBytes: Math.round(Number(values.get("maxTotalMb")) * 1024 * 1024),
         allowImages: values.get("allowImages") === "on",
         blockDatasetHashMatches: true,
+        autoPublishPaths: String(values.get("autoPublishPaths") ?? "").split(/[\s,，]+/).map((item) => item.trim()).filter(Boolean),
       },
     }, "dataset", "数据集版本已登记。");
   }
@@ -215,7 +216,7 @@ function LabSection({ students }: { students: StudentOption[] }) {
 
       <h5>数据集版本</h5>
       <ul className={styles.adminList}>{data.datasets.map((item) => <li key={item.id}>
-        <span><strong>{item.label}</strong><small>清单 {shortSha(item.manifestSha256)} · 外发 {item.egressPolicy ? `${item.egressPolicy.allowedExtensions.join(" ")}，单文件 ≤ ${bytesLabel(item.egressPolicy.maxFileBytes)}，图片${item.egressPolicy.allowImages ? "可" : "不"}外发` : "策略损坏"}</small></span>
+        <span><strong>{item.label}</strong><small>清单 {shortSha(item.manifestSha256)} · 外发 {item.egressPolicy ? `${item.egressPolicy.allowedExtensions.join(" ")}，单文件 ≤ ${bytesLabel(item.egressPolicy.maxFileBytes)}，图片${item.egressPolicy.allowImages ? "可" : "不"}外发；自动外发 metrics.json${item.egressPolicy.autoPublishPaths?.length ? `、${item.egressPolicy.autoPublishPaths.join(" ")}（数据持有方授权）` : "，其余产物默认扣留"}` : "策略损坏"}</small></span>
         <span className={styles.rowActions}><Pill tone={item.active ? "good" : "neutral"}>{item.active ? "有效" : "已停用"}</Pill>
           {item.active ? <ConfirmButton label="停用" confirmLabel="确认停用" prompt="停用后不能再用于新运行。" busy={busy !== null} danger onConfirm={() => void act({ action: "disable_dataset", datasetVersionId: item.id }, `ds-${item.id}`, "数据集版本已停用。")} /> : null}</span>
       </li>)}{!data.datasets.length ? <li className={styles.muted}>尚未登记数据集版本。</li> : null}</ul>
@@ -229,8 +230,9 @@ function LabSection({ students }: { students: StudentOption[] }) {
           <label>单文件上限（MB）<input name="maxFileMb" type="number" min={0.001} max={10} step="any" required defaultValue={5} /></label>
           <label>总量上限（MB）<input name="maxTotalMb" type="number" min={0.001} max={1000} step="any" required defaultValue={20} /></label>
           <label className={styles.check}><input name="allowImages" type="checkbox" />允许外发图片（图片可能含原始数据，默认不外发）</label>
+          <label>自动外发路径（数据持有方授权，可选）<input name="autoPublishPaths" placeholder="例如 predictions.csv logs/*.log" spellCheck={false} /></label>
         </div>
-        <p className={styles.muted}>与数据集清单哈希相同的输出始终禁止外发。</p>
+        <p className={styles.muted}>默认只自动外发校验通过的 metrics.json，其余产物扣留在实验室，需数据持有方授权后外发。填写自动外发路径即代表数据持有方授权：只接受精确路径或子目录下的窄通配（如 logs/*.log），仍受扩展名和大小限制。与数据集清单哈希相同的输出始终禁止外发。</p>
         <div className={styles.actions}><button type="submit" className={styles.primary} disabled={busy !== null}>{busy === "dataset" ? "正在登记…" : "登记数据集版本"}</button><button type="button" onClick={() => setForm(null)}>取消</button></div>
       </form> : computeRunners.length ? <div className={styles.actions}><button type="button" onClick={() => setForm("dataset")}>登记数据集版本</button></div> : <Blocked>登记数据集前，需要先登记一个有效的计算执行器来托管数据。</Blocked>}
 

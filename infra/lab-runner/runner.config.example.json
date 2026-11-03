@@ -27,7 +27,14 @@
     "applyMemoryLimit": false,
     "allowPullByDigest": false,
     "images": {
-      "registry.example.org/lab/train@sha256:0000000000000000000000000000000000000000000000000000000000000000": "/srv/tanyan-lab-runner/images/train-0000.sif"
+      "registry.example.org/lab/train@sha256:0000000000000000000000000000000000000000000000000000000000000000": {
+        "ociDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "sifPath": "/srv/tanyan-lab-runner/images/train-0000.sif",
+        "sifSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "source": "apptainer build from lab/train.def (git rev REPLACE) by admin REPLACE; pulled from registry.example.org/lab/train@sha256:0000…",
+        "verifySignature": false,
+        "allowRunnerWritable": false
+      }
     },
     "hostEnv": ["PATH", "HOME", "USER", "LANG", "APPTAINER_CACHEDIR", "APPTAINER_TMPDIR", "XDG_RUNTIME_DIR"],
     "forwardIntoContainer": ["CUDA_VISIBLE_DEVICES"]
@@ -37,7 +44,15 @@
       "versionId": "ds_REPLACE_WITH_DATASET_VERSION_ID",
       "dataPath": "/data/projects/student-a/dataset-v3",
       "manifestPath": "/data/projects/student-a/dataset-v3.manifest.json",
-      "splitManifestPath": "/data/projects/student-a/dataset-v3.splits.json"
+      "splitManifestPath": "/data/projects/student-a/dataset-v3.splits.json",
+      "extraFiles": "reject"
+    },
+    {
+      "versionId": "ds_REPLACE_WITH_LARGE_DATASET_VERSION_ID",
+      "dataPath": "/tank/datasets/.zfs/snapshot/imagenet-v2/data",
+      "manifestPath": "/srv/tanyan-datasets/imagenet-v2.manifest.json",
+      "extraFiles": "reject",
+      "snapshot": { "sealPath": "/srv/tanyan-datasets/imagenet-v2.seal.json" }
     }
   ],
   "gitReadFallback": null,

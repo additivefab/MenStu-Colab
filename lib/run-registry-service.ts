@@ -14,7 +14,8 @@ import { issueRunnerToken, type LabRunner } from "./lab-runner-auth.ts";
 import {
   ARTIFACT_KINDS, EGRESS_DECISIONS, EGRESS_IMAGE_EXTENSIONS, LIMITS, RUN_TRANSITIONS, TERMINAL_RUN_STATUSES,
   canTransition, canonicalJson, isCommitSha, isSha256, newId, normalizeRepoPath, runSpecSha256, sha256Hex,
-  validateMetricsFile,
+  validateMetricsFile, EGRESS_HELD_DEFAULT_REASON, MAX_AUTO_PUBLISH_PATHS, METRICS_EGRESS_PATH, checkMetricsEgress,
+  matchAutoPublishPath, validateAutoPublishPath,
   type ArtifactKind, type ComputeClaimResponse, type ComputeReconcileResponse, type EgressDecision, type EgressPolicy, type JsonValue,
   type ManifestArtifact, type RunManifest, type RunSpec, type RunStatus, type TaskBudget,
 } from "./research-loop/contracts.ts";
@@ -323,7 +324,7 @@ function parseArgv(value: unknown) {
 export function parseEgressPolicy(value: unknown): EgressPolicy {
   const input = plainObject(value, "外发策略");
   if (input.schema !== "tanyan.egress/v1") throw bad("外发策略 schema 必须为 tanyan.egress/v1");
-  const allowedKeys = new Set(["schema", "allowedExtensions", "maxFileBytes", "maxTotalBytes", "allowImages", "blockDatasetHashMatches"]);
+  const allowedKeys = new Set(["schema", "allowedExtensions", "maxFileBytes", "maxTotalBytes", "allowImages", "blockDatasetHashMatches", "autoPublishPaths"]);
   if (Object.keys(input).some((key) => !allowedKeys.has(key))) throw bad("外发策略包含未知字段");
   if (!Array.isArray(input.allowedExtensions) || input.allowedExtensions.length > 50) throw bad("扩展名白名单需为不超过 50 项的列表");
   const allowedExtensions = [...new Set(input.allowedExtensions.map((item) => {
@@ -334,7 +335,23 @@ export function parseEgressPolicy(value: unknown): EgressPolicy {
   const maxTotalBytes = integer(input.maxTotalBytes, "总量上限", 1, 100 * LIMITS.maxPublishedArtifactBytes);
   if (typeof input.allowImages !== "boolean") throw bad("allowImages 需为布尔值");
   if (input.blockDatasetHashMatches !== true) throw bad("blockDatasetHashMatches 必须为 true");
-  return { schema: "tanyan.egress/v1", allowedExtensions, maxFileBytes, maxTotalBytes, allowImages: input.allowImages, blockDatasetHashMatches: true };
+  // R03 opt-in: optional, backward compatible. Omitted when empty so that
+  // policies (and run-spec hashes) without an opt-in are byte-identical to before.
+  let autoPublishPaths: string[] = [];
+  if (input.autoPublishPaths !== undefined && input.autoPublishPaths !== null) {
+    if (!Array.isArray(input.autoPublishPaths) || input.autoPublishPaths.length > MAX_AUTO_PUBLISH_PATHS) {
+      throw bad(`自动外发路径需为不超过 ${MAX_AUTO_PUBLISH_PATHS} 项的列表`);
+    }
+    autoPublishPaths = [...new Set(input.autoPublishPaths.map((item) => {
+      const checked = validateAutoPublishPath(item);
+      if (!checked.ok) throw bad(checked.error);
+      return checked.path;
+    }))].sort();
+  }
+  return {
+    schema: "tanyan.egress/v1", allowedExtensions, maxFileBytes, maxTotalBytes, allowImages: input.allowImages, blockDatasetHashMatches: true,
+    ...(autoPublishPaths.length ? { autoPublishPaths } : {}),
+  };
 }
 
 async function activeLink(d1: D1Database, studentId: string) {
@@ -431,6 +448,11 @@ export async function applyLabAdminAction(d1: D1Database, actor: AppUser, body: 
       const split = body.splitManifestSha256 ?? "";
       if (split !== "" && !isSha256(split)) throw bad("划分清单 sha256 无效");
       const egressPolicy = parseEgressPolicy(body.egressPolicy);
+      // Only a data steward may authorise outputs beyond metrics to leave the lab.
+      // The route already requires superadmin; keep the rule next to the data.
+      if (egressPolicy.autoPublishPaths?.length && actor.role !== "superadmin") {
+        throw new RunServiceError(403, "只有数据持有方（超级管理员）可以设置自动外发路径", "FORBIDDEN");
+      }
       const id = newId("ds");
       await d1.prepare(`INSERT INTO dataset_versions (id, label, runner_id, manifest_sha256, split_manifest_sha256, egress_policy_json, created_by_user_id)
         VALUES (?, ?, ?, ?, ?, ?, ?)`)
@@ -1163,6 +1185,9 @@ export async function reconcileRun(d1: D1Database, runner: LabRunner, body: Reco
     throw conflict("运行不在对账状态", "NOT_RECONCILING");
   }
   if (typeof body.found !== "boolean") throw bad("found 无效");
+  // R05: a submit whose outcome the runner could not settle is never "proven absent".
+  const submitUnknown = body.submitOutcome === "unknown";
+  if (body.submitOutcome !== undefined && !(submitUnknown && body.found === false)) throw bad("submitOutcome 无效");
   const jobId = schedulerJobId(body.schedulerJobId);
   const state = body.schedulerState ?? "unknown";
   if (!["pending", "running", "finished", "failed", "canceled", "unknown"].includes(state as string)) throw bad("schedulerState 无效");
@@ -1171,7 +1196,8 @@ export async function reconcileRun(d1: D1Database, runner: LabRunner, body: Reco
   const now = new Date(nowMs).toISOString();
   const cancel = Boolean(run.cancel_requested_at) || problems.length > 0;
   let to: RunStatus | null;
-  if (!body.found) to = cancel ? "canceled" : "dispatching";
+  if (submitUnknown) to = "failed";
+  else if (!body.found) to = cancel ? "canceled" : "dispatching";
   else if (state === "pending" || state === "running") to = cancel ? "cancel_requested" : "running";
   else if (state === "finished") to = "collecting";
   else if (state === "failed") to = "failed";
@@ -1183,11 +1209,15 @@ export async function reconcileRun(d1: D1Database, runner: LabRunner, body: Reco
   if (jobId !== undefined) set.scheduler_job_id = jobId;
   if (cancel && !run.cancel_requested_at) set.cancel_requested_at = now;
   if (terminal) set.ended_at = now;
-  if (to === "failed") set.failure_reason = "调度器报告作业失败（对账）";
+  if (to === "failed") {
+    set.failure_reason = submitUnknown
+      ? "SUBMIT_OUTCOME_UNKNOWN: 提交结果未知，可见窗口内调度器中没有带该 submitTag 的作业，可能仍有作业在运行；请人工核对调度器后再决定是否重新运行"
+      : "调度器报告作业失败（对账）";
+  }
   if (to === "canceled") set.failure_reason = body.found ? "调度器报告作业已取消（对账）" : "已请求取消，调度器中没有对应作业";
   const ok = await commitGuarded(d1, transitionStatements(d1, run, {
     path: to ? [to] : [], audit: !to, set, actor: { type: "runner", id: runner.id },
-    payload: { action: "reconcile", found: body.found, schedulerState: state as string, schedulerJobId: jobId ?? null, ...(problems.length ? { reasons: problems } : {}) },
+    payload: { action: "reconcile", found: body.found, schedulerState: state as string, schedulerJobId: jobId ?? null, ...(submitUnknown ? { submitOutcome: "unknown" } : {}), ...(problems.length ? { reasons: problems } : {}) },
   }));
   if (!ok) throw leaseLost();
   // A terminal status ends the lease now (contracts: ComputeReconcileResponse).
@@ -1253,6 +1283,14 @@ function parseManifest(value: unknown): RunManifest {
     if (typeof input !== "number" || !Number.isSafeInteger(input)) shapeError(`manifest 字段 ${label} 无效`);
     return input;
   };
+  const sha = (input: unknown, label: string) => {
+    if (typeof input !== "string" || !/^[0-9a-f]{64}$/.test(input)) shapeError(`manifest 字段 ${label} 无效`);
+    return input;
+  };
+  const oneOf = <T extends string>(input: unknown, allowed: readonly T[], label: string): T => {
+    if (typeof input !== "string" || !(allowed as readonly string[]).includes(input)) shapeError(`manifest 字段 ${label} 无效`);
+    return input as T;
+  };
   const repository = obj(m.repository, "repository");
   const inputs = obj(m.inputs, "inputs");
   const environment = obj(m.environment, "environment");
@@ -1297,11 +1335,15 @@ function parseManifest(value: unknown): RunManifest {
       splitManifestSha256: str(inputs.splitManifestSha256, "inputs.splitManifestSha256", 64),
       evaluationProtocolSha256: str(inputs.evaluationProtocolSha256, "inputs.evaluationProtocolSha256", 64),
       seeds: inputs.seeds.map((seed, index) => int(seed, `inputs.seeds[${index}]`)),
+      ...(inputs.dataDigest === undefined ? {} : { dataDigest: sha(inputs.dataDigest, "inputs.dataDigest") }),
+      ...(inputs.dataVerification === undefined ? {} : { dataVerification: oneOf(inputs.dataVerification, ["full", "sealed_snapshot"] as const, "inputs.dataVerification") }),
     },
     environment: {
       imageDigest: str(environment.imageDigest, "environment.imageDigest", 300),
       driverVersion: str(environment.driverVersion ?? "", "environment.driverVersion", 120),
       gpuModel: str(environment.gpuModel ?? "", "environment.gpuModel", 120),
+      ...(environment.imageFileSha256 === undefined ? {} : { imageFileSha256: sha(environment.imageFileSha256, "environment.imageFileSha256") }),
+      ...(environment.imageSource === undefined ? {} : { imageSource: str(environment.imageSource, "environment.imageSource", 300) }),
     },
     execution: {
       runnerId: str(execution.runnerId, "execution.runnerId", 80),
@@ -1356,7 +1398,10 @@ function decodeBase64(value: string) {
 }
 
 /** Re-applies the dataset egress policy. Decisions may only get stricter:
- * published → held (or rejected for unsafe paths), never the reverse. */
+ * published → held (or rejected for unsafe paths), never the reverse.
+ * R03 (held by default): a runner's `published` claim stands only for
+ * `metrics.json` passing `checkMetricsEgress`, or for a path the dataset policy
+ * lists in `autoPublishPaths`; the stored reason is then the platform's own basis. */
 async function planArtifacts(manifest: RunManifest, policy: EgressPolicy, publishedFiles: unknown): Promise<ArtifactPlan[]> {
   const inline = new Map<string, string>();
   if (publishedFiles !== undefined && publishedFiles !== null) {
@@ -1380,6 +1425,15 @@ async function planArtifacts(manifest: RunManifest, policy: EgressPolicy, publis
       if (decision === "published" || (to === "rejected" && decision === "held")) { decision = to; reason = why; }
     };
     if (!safePath) downgrade("rejected", "平台复核：路径越界或不规范");
+    let basis = "";
+    if (decision === "published") {
+      if (artifact.relativePath === METRICS_EGRESS_PATH) basis = "平台复核：可信指标 metrics.json";
+      else {
+        const pattern = matchAutoPublishPath(artifact.relativePath, policy);
+        if (pattern) basis = `平台复核：数据持有方授权外发（autoPublishPaths 命中 "${pattern}"）`;
+        else downgrade("held", `平台复核：${EGRESS_HELD_DEFAULT_REASON}`);
+      }
+    }
     if (decision === "published") {
       const extension = extensionOf(artifact.relativePath);
       if (!policy.allowedExtensions.includes(extension)) downgrade("held", `平台复核：扩展名 ${extension || "(无)"} 不在白名单`);
@@ -1395,10 +1449,13 @@ async function planArtifacts(manifest: RunManifest, policy: EgressPolicy, publis
         if (!bytes || bytes.byteLength !== artifact.sizeBytes || await sha256Hex(bytes) !== artifact.sha256) {
           bytes = null;
           downgrade("held", "平台复核：文件内容与 manifest 哈希不一致");
+        } else if (artifact.relativePath === METRICS_EGRESS_PATH) {
+          const checked = checkMetricsEgress(bytes);
+          if (!checked.ok) { bytes = null; downgrade("held", `平台复核：metrics.json 未通过可信指标校验（${checked.error}）`); }
         }
       }
     }
-    if (decision === "published") publishedTotal += artifact.sizeBytes;
+    if (decision === "published") { publishedTotal += artifact.sizeBytes; reason = basis; }
     else bytes = null;
     plans.push({ ...artifact, id: newId("art"), finalDecision: decision, finalReason: reason, bytes, safePath });
   }

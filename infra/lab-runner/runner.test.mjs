@@ -1,11 +1,12 @@
 // End-to-end runner tests against a FAKE platform and FAKE schedulers/container
 // (simulation only: no Apptainer, no Slurm, no GPU, no network).
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync, chmodSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync, chmodSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
 import { createRunner } from "./runner.mjs";
+import { computeDataDigest } from "./lib/dataset.mjs";
 import { createLogger } from "./lib/log.mjs";
 import { createScheduler } from "./schedulers/index.mjs";
 import { installFakeSlurm, readFakeSlurm, setFakeSlurmControl } from "./test-support/fake-slurm.mjs";
@@ -60,6 +61,8 @@ test("happy path: executes, gates outputs, reports manifest and metrics (T18, D5
   assert.equal(manifest.approvalId, work.approvalId);
   assert.deepEqual(manifest.repository, { repositoryId: 4242, executedCommitSha: env.repo.sha });
   assert.equal(manifest.inputs.manifestSha256, env.dataset.manifestSha256);
+  assert.equal(manifest.inputs.dataVerification, "full", "R02: every input file re-hashed before submit");
+  assert.equal(manifest.inputs.dataDigest, computeDataDigest(env.dataset.files), "R02: digest of the verified listing");
   assert.equal(manifest.inputs.evaluationProtocolSha256, PROTOCOL_SHA);
   assert.deepEqual(manifest.inputs.seeds, [7]);
   assert.equal(manifest.environment.imageDigest, `sha256:${"a".repeat(64)}`);
@@ -74,7 +77,9 @@ test("happy path: executes, gates outputs, reports manifest and metrics (T18, D5
   const byPath = Object.fromEntries(manifest.artifacts.map((artifact) => [artifact.relativePath, artifact]));
   assert.equal(byPath["metrics.json"].egressDecision, "published");
   assert.equal(byPath["metrics.json"].kind, "metrics");
-  assert.equal(byPath["table.csv"].egressDecision, "published");
+  // R03: held by default; only the validated metrics.json leaves the lab.
+  assert.equal(byPath["table.csv"].egressDecision, "held");
+  assert.match(byPath["table.csv"].egressReason, /需数据持有方授权后外发/);
   assert.equal(byPath["table.csv"].kind, "table");
   assert.equal(byPath["figure.png"].egressDecision, "held");
   assert.equal(byPath["figure.png"].kind, "figure");
@@ -98,7 +103,7 @@ test("happy path: executes, gates outputs, reports manifest and metrics (T18, D5
   assert.ok(!call.flags.includes("--nv"), "no GPU requested");
   assert.equal(call.binds["/src"].mode, "ro");
   assert.equal(call.binds["/data"].mode, "ro");
-  assert.equal(call.binds["/data"].source, env.dataset.dataPath);
+  assert.equal(call.binds["/data"].source, realpathSync(env.dataset.dataPath), "the verified real path is mounted");
   assert.equal(call.binds["/out"].mode, "rw");
   assert.deepEqual(call.entry.slice(2), ["--mode=ok", "--seed=7"]);
   assert.equal(call.containerEnv.TANYAN_OUT_DIR, "/out");
@@ -231,11 +236,14 @@ test("invalid metrics are still reported so the platform marks them invalid (T19
   env.platform.enqueue(work);
   const state = await env.newRunner().runOnce();
   const [complete] = env.platform.requestsFor(work.runId, "complete");
-  // Contract: metricsArtifactPath names a published metrics.json even when it is
-  // invalid; withholding it would make the platform record "unknown", not "invalid".
+  // Contract: metricsArtifactPath names metrics.json even when it is invalid;
+  // withholding it would make the platform record "unknown", not "invalid".
+  // R03: an invalid metrics.json is held (not uploaded); the platform records invalid.
   assert.equal(complete.manifest.metricsArtifactPath, "metrics.json");
-  assert.ok(complete.publishedFiles.some((file) => file.relativePath === "metrics.json"), "the invalid file is uploaded for platform validation");
-  assert.match(state.metricsNote, /failed validation/);
+  const artifact = complete.manifest.artifacts.find((item) => item.relativePath === "metrics.json");
+  assert.equal(artifact.egressDecision, "held");
+  assert.ok(!(complete.publishedFiles ?? []).some((file) => file.relativePath === "metrics.json"), "an untrusted metrics file is not uploaded");
+  assert.match(state.metricsNote, /not published: metrics\.json 未通过可信指标校验/);
 });
 
 test("no metrics.json: metricsArtifactPath stays null (platform: unknown)", async (t) => {
@@ -324,6 +332,34 @@ test("T11: execute mode after a lost submit also adopts by submitTag", async (t)
   assert.equal(second.outcome, "completed");
   assert.equal(env.shim.calls().length, 1);
   assert.ok(env.lines.some((line) => line.includes("adopting existing scheduler job")));
+});
+
+test("R05/T11: restart after a crash before the job id, job not visible → never resubmits, SUBMIT_OUTCOME_UNKNOWN", async (t) => {
+  const env = await setup(t, { limits: { submitVisibilitySeconds: 0.5, submitVisibilityPollSeconds: 0.05 } });
+  const work = makeWork({ spec: makeSpec({ sha: env.repo.sha, dataset: env.dataset }) });
+  env.platform.enqueue(work);
+  const first = await env.newRunner({ afterSubmit: () => { throw new Error("simulated crash"); } }).runOnce();
+  assert.ok(first.submitStartedAt);
+  assert.equal(first.schedulerJobId, null);
+  // The scheduler does not (yet) list the job: an empty findByTag is not proof of absence.
+  const registry = join(env.config.workRoot, ".local-scheduler");
+  const status = await waitFor(() => {
+    const path = join(env.config.workRoot, work.runId, "status.json");
+    const value = existsSync(path) && JSON.parse(readFileSync(path, "utf8"));
+    return value && value.state === "finished" && value;
+  });
+  assert.equal(status.exitCode, 0);
+  for (const name of readdirSync(registry)) rmSync(join(registry, name));
+
+  env.platform.enqueue({ ...work });
+  const second = await env.newRunner().runOnce();
+  assert.equal(second.submit, "unknown_reported");
+  assert.deepEqual(readdirSync(registry), [], "no second scheduler job");
+  assert.equal(env.shim.calls().length, 1, "container ran once");
+  const [complete] = env.platform.requestsFor(work.runId, "complete");
+  assert.equal(complete.outcome, "failed");
+  assert.match(complete.failureReason, /^SUBMIT_OUTCOME_UNKNOWN: /);
+  assert.equal(complete.manifest, null, "outputs of an unattributed job are not collected");
 });
 
 test("T11 (Slurm fake): sbatch response lost → squeue/sacct by name finds the job, sbatch called once", async (t) => {

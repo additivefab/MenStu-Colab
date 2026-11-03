@@ -120,10 +120,15 @@ test("run registry: approval binding, lab lease protocol, egress and result revi
       entrypoint = (await admin(entry)).entrypoint;
       assert.equal(entrypoint.githubRepositoryId, 5001, "repository resolved server-side from the student's link");
 
-      const policy = { schema: "tanyan.egress/v1", allowedExtensions: [".json", ".txt", ".png", ".csv"], maxFileBytes: 1000, maxTotalBytes: 5000, allowImages: false, blockDatasetHashMatches: true };
+      // R03: held by default. The data steward opts these paths in so the
+      // re-check below still exercises extension/image/size/hash downgrades.
+      const policy = { schema: "tanyan.egress/v1", allowedExtensions: [".json", ".txt", ".png", ".csv"], maxFileBytes: 1000, maxTotalBytes: 5000, allowImages: false, blockDatasetHashMatches: true,
+        autoPublishPaths: ["tables/*.csv", "summary.json", "plot.png", "big.json", "weights.bin", "forged.txt"] };
       const ds = { action: "register_dataset", label: "合成数据 v1", runnerId: runner, manifestSha256: DATA_MANIFEST, splitManifestSha256: SPLIT_MANIFEST, egressPolicy: policy };
       await admin({ ...ds, egressPolicy: { ...policy, blockDatasetHashMatches: false } }, "root", 400);
       await admin({ ...ds, egressPolicy: { ...policy, allowedExtensions: ["JSON"] } }, "root", 400);
+      await admin({ ...ds, egressPolicy: { ...policy, autoPublishPaths: ["*.csv"] } }, "root", 400);
+      await admin({ ...ds, egressPolicy: { ...policy, autoPublishPaths: ["**/*.log"] } }, "root", 400);
       await admin({ ...ds, runnerId: "rnr_agentseed" }, "root", 400);
       await admin({ ...ds, manifestSha256: "short" }, "root", 400);
       dataset = (await admin(ds)).dataset;
@@ -347,6 +352,22 @@ test("run registry: approval binding, lab lease protocol, egress and result revi
       assert.equal(notFound.status, "dispatching");
       await lab(runnerToken, { action: "complete", runId: second.runId, leaseEpoch: recon.leaseEpoch, outcome: "failed", exitCode: 2, manifest: null });
       await lab(runnerToken, { action: "complete", runId: work.runId, leaseEpoch: again.leaseEpoch, outcome: "failed", exitCode: 2, manifest: null });
+      // R05: a submit with an unknown outcome is never "proven absent": the run fails for an operator.
+      const unsure = await claimed();
+      await expireLease(unsure.runId);
+      const unsureRecon = (await claim()).work;
+      const unknownBody = { action: "reconcile", runId: unsure.runId, leaseEpoch: unsureRecon.leaseEpoch };
+      assert.equal((await lab(runnerToken, { ...unknownBody, found: true, schedulerJobId: "5", schedulerState: "running", submitOutcome: "unknown" }, 400)).error, "submitOutcome 无效");
+      assert.equal((await lab(runnerToken, { ...unknownBody, found: false, submitOutcome: "lost" }, 400)).error, "submitOutcome 无效");
+      const failed = await lab(runnerToken, { ...unknownBody, found: false, submitOutcome: "unknown" });
+      assert.equal(failed.status, "failed");
+      assert.equal(failed.repository, undefined, "no read token: nothing may be submitted");
+      const unsureRow = await db.prepare("SELECT status, failure_reason, lease_expires_at FROM runs WHERE id = ?").bind(unsure.runId).first();
+      assert.equal(unsureRow.status, "failed");
+      assert.match(unsureRow.failure_reason, /^SUBMIT_OUTCOME_UNKNOWN: /);
+      assert.equal(unsureRow.lease_expires_at, null);
+      assert.ok(!(await events(unsure.runId)).some((event) => event.from_status === "reconciling" && event.to_status === "dispatching"));
+      assert.deepEqual(await claim(), { work: null }, "never re-dispatched");
     });
 
     await t.test("cancel before dispatch, in flight, and after disconnect never revives a run (T13)", async () => {
@@ -449,6 +470,25 @@ test("run registry: approval binding, lab lease protocol, egress and result revi
       assert.equal((await lab(runnerToken, { action: "complete", runId: missing.runId, leaseEpoch: missing.leaseEpoch, outcome: "completed", exitCode: 0, manifest: null }, 422)).code, "MANIFEST_REQUIRED");
     });
 
+    await t.test("batch 7 (G02): SIF file hash and image source are stored and exposed by run detail", async () => {
+      const imageFileSha256 = "5".repeat(64);
+      const imageSource = "apptainer build lab/train.def@3f2a by admin";
+      const work = await claimed();
+      const items = [file("metrics.json", metricsContent(), { kind: "metrics" })];
+      const base = manifestFor(work, items);
+      const done = await complete(work, items, { manifest: { ...base, environment: { ...base.environment, imageFileSha256, imageSource } } });
+      assert.equal(done.status, "completed");
+      const view = await detail(work.runId);
+      assert.equal(view.result.manifest.environment.imageFileSha256, imageFileSha256);
+      assert.equal(view.result.manifest.environment.imageSource, imageSource);
+      assert.equal(view.result.manifest.environment.imageDigest, IMAGE_DIGEST, "the OCI digest is kept alongside");
+      // An OCI-style digest is not a file hash: rejected, nothing stored.
+      const bad = await claimed();
+      const badBase = manifestFor(bad, items);
+      const rejected = await complete(bad, items, { manifest: { ...badBase, environment: { ...badBase.environment, imageFileSha256: `sha256:${imageFileSha256}` } } }, 422);
+      assert.equal(rejected.code, "MANIFEST_INVALID");
+    });
+
     await t.test("egress is re-applied: only downgrades, traversal rejected, nothing held reaches R2 (T17)", async () => {
       const work = await claimed();
       const ok = file("summary.json", "{\"ok\":true}");
@@ -464,13 +504,14 @@ test("run registry: approval binding, lab lease protocol, egress and result revi
         file("forged.txt", "real content", { sha: sha256("other content") }),
         file("held.json", "{}", { decision: "held" }),
         file("dataset-copy.csv", "raw", { decision: "rejected" }),
+        file("unlisted.json", "{}"),
       ];
       const done = await complete(work, items);
       const decisions = Object.fromEntries(done.artifacts.map((item) => [item.relativePath, item.egressDecision]));
       assert.deepEqual(decisions, {
         "metrics.json": "published", "summary.json": "published", "../escape.json": "rejected", "/etc/passwd.txt": "rejected",
         "a/./b.json": "rejected", "plot.png": "held", "big.json": "held", "weights.bin": "held", "forged.txt": "held",
-        "held.json": "held", "dataset-copy.csv": "rejected",
+        "held.json": "held", "dataset-copy.csv": "rejected", "unlisted.json": "held",
       });
       const stored = (await bucket.list({ prefix: `runs/${work.runId}/` })).objects.map((object) => object.key).sort();
       assert.deepEqual(stored, [`runs/${work.runId}/metrics.json`, `runs/${work.runId}/summary.json`]);
@@ -480,6 +521,9 @@ test("run registry: approval binding, lab lease protocol, egress and result revi
         await expectJson(await call(`/api/run-artifacts?artifactId=${artifact.id}`, { actor: "root" }), 404);
       }
       assert.match(view.artifacts.find((item) => item.relativePath === "plot.png").egressReason, /图片/);
+      // R03: a published claim without an opt-in is downgraded; the basis of a kept one is recorded.
+      assert.match(view.artifacts.find((item) => item.relativePath === "unlisted.json").egressReason, /平台复核：需数据持有方授权后外发/);
+      assert.match(view.artifacts.find((item) => item.relativePath === "summary.json").egressReason, /autoPublishPaths 命中 "summary\.json"/);
     });
 
     await t.test("contract: hashless entries only when rejected; unknown exit code is null and compared null-aware", async () => {
