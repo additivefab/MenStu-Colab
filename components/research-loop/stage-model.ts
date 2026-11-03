@@ -101,8 +101,8 @@ export const OWNER_LABELS: Record<Exclude<StageOwner, null>, string> = {
  * the per-task creation-order number from numbering.ts. Owners are the role
  * expected to act; the server's `permissions` still decide who actually may.
  *
- * task    draft, never confirmed       → active · student "第 N 版待确认" (学生或导师均可确认)
- *         draft, confirmedVersion set  → active · student "第 N 版待重新确认"
+ * task    draft, never confirmed       → active · student + coOwner mentor "第 N 版待确认"
+ *         draft, confirmedVersion set  → active · student + coOwner mentor "第 N 版待重新确认"
  *         confirmed                    → done "第 N 版已确认"; closed / canceled → done
  * code    attempts or changeRequests null → partial: a run used a change request → done,
  *           other runs → skipped, otherwise idle (details unknown, nothing claimed)
@@ -126,12 +126,14 @@ export const OWNER_LABELS: Record<Exclude<StageOwner, null>, string> = {
  *           separately; nothing here is a combined "success".
  * next    task closed → done. A follow-up already created from the newest reviewed run
  *           (followupTaskIdByRun) → done. Newest run completed with a final review and no code/run stage
- *           active or working → active · student (text names 学生或导师):
+ *           active or working → active · student + coOwner mentor (text names 学生或导师):
  *           needs_followup "转为下一轮任务" · accepted "决定：转为下一轮任务或完成并关闭" ·
  *           rejected "决定：修订任务、转为下一轮或关闭". Otherwise idle.
  * terminal task (closed/canceled): later stages that would be active or idle → skipped; next = null.
  * next step: the first active stage; else the first working stage (waiting on agent/lab); else the
  *   first failed stage (its owner must handle it); else null.
+ * coOwner: only where student and mentor may equally act — task confirmation and the next-round
+ *   decision. Set on the stage and its next step together; dropped when a terminal task skips it.
  * current: the next step's stage, else the last stage that is neither idle nor skipped, else "task".
  */
 
@@ -143,6 +145,11 @@ const FINAL_REVIEW = new Set(["accepted", "rejected", "needs_followup"]);
 
 function make(key: StageKey, state: StageState, summary: string, owner: StageOwner = null): Stage {
   return { key, label: STAGE_LABELS[key], state, summary, owner };
+}
+
+/** Student and mentor may equally act: mark the stage and its next step. */
+function shared({ stage, next }: Derived): Derived {
+  return { stage: { ...stage, coOwner: "mentor" }, next: next && { ...next, coOwner: "mentor" } };
 }
 
 function only(stage: Stage): Derived {
@@ -163,10 +170,10 @@ function taskStage(task: TaskSummary): Derived {
   if (task.status === "draft") {
     const version = task.currentVersion;
     const again = task.confirmedVersion !== null;
-    return {
+    return shared({
       stage: make("task", "active", `第 ${version} 版待${again ? "重新" : ""}确认`, "student"),
-      next: { text: `学生需${again ? "重新" : ""}确认第 ${version} 版任务（导师也可确认）`, owner: "student", target },
-    };
+      next: { text: `学生或导师需${again ? "重新" : ""}确认第 ${version} 版任务`, owner: "student", target },
+    });
   }
   if (task.status === "confirmed") return only(make("task", "done", `第 ${task.confirmedVersion ?? task.currentVersion} 版已确认`));
   if (task.status === "closed") return only(make("task", "done", "任务已关闭"));
@@ -375,7 +382,7 @@ function nextStage(task: TaskSummary, runs: readonly RunSummary[], numbers: Map<
     : latest.reviewState === "accepted"
       ? ["决定：转为下一轮任务或完成并关闭", `${label} 已验收，学生或导师决定：转为下一轮任务或完成并关闭`]
       : ["决定：修订任务、转为下一轮或关闭", `${label} 未采纳，学生或导师决定：修订任务、转为下一轮或关闭`];
-  return { stage: make("next", "active", summary, "student"), next: { text, owner: "student", target } };
+  return shared({ stage: make("next", "active", summary, "student"), next: { text, owner: "student", target } });
 }
 
 export function computeTaskStages(input: StageInput): TaskStages {
@@ -394,7 +401,7 @@ export function computeTaskStages(input: StageInput): TaskStages {
   if (terminal) {
     const summary = task.status === "canceled" ? "任务已取消" : "任务已关闭";
     derived = derived.map((item, index) => index > 0 && (item.stage.state === "active" || item.stage.state === "idle")
-      ? only({ ...item.stage, state: "skipped", owner: null, summary })
+      ? only({ key: item.stage.key, label: item.stage.label, state: "skipped", owner: null, summary })
       : item);
   }
 

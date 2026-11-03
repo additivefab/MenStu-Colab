@@ -31,6 +31,18 @@
 .stage[data-state="skipped"] .label strong { color: #8290a3; text-decoration: line-through; text-decoration-color: #c3ccd8; }
 .stage[data-current] { box-shadow: inset 0 0 0 1px #245fc2; border-color: #245fc2; }
 
+/* Folded run of done stages: a narrow-card summary row only (see the container query). */
+.doneGroup { display: none; }
+.doneGroup > button.doneToggle {
+  display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; margin: 0;
+  padding: 5px 8px; border: 0; border-radius: 0; background: #fbfcfe; color: #42516a; font-size: 13px; text-align: left; line-height: 1.5;
+}
+.doneGroup > button.doneToggle:hover:not(:disabled) { background: #f3f7fe; border-color: transparent; }
+.doneGroup > button.doneToggle:focus-visible { outline: 2px solid #245fc2; outline-offset: -2px; }
+.doneGroup .mark { background: #e9f7f0; color: #23785a; }
+.doneText { flex: 1 1 auto; min-width: 0; color: #23785a; overflow-wrap: anywhere; }
+.doneAction { flex: none; color: #245fc2; font-size: 12px; }
+
 .next { margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 13px; color: #203047; min-width: 0; }
 .nextLabel { flex: none; padding: 0 7px; border-radius: 999px; background: #eaf2ff; color: #245fc2; font-size: 12px; font-weight: 600; line-height: 1.7; }
 .nextText { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
@@ -58,7 +70,9 @@
 @container (max-width: 560px) {
   .stages { grid-template-columns: minmax(0, 1fr); gap: 0; border: 1px solid #e5eaf1; border-radius: 7px; overflow: hidden; }
   .stage { border: 0; border-radius: 0; padding: 5px 8px; align-items: center; }
-  .stage + .stage { border-top: 1px solid #edf1f6; }
+  .stages > li + li { border-top: 1px solid #edf1f6; }
+  .doneGroup { display: block; min-width: 0; }
+  .stage[data-folded] { display: none; }
   .stage[data-current] { box-shadow: inset 3px 0 0 #245fc2; }
   .text { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 8px; }
 }

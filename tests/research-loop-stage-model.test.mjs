@@ -42,7 +42,7 @@ const cases = [
     input: input({ task: task({ status: "draft", currentVersion: 1, confirmedVersion: null }) }),
     shape: { task: "active/student", code: "idle/-", run: "idle/-", result: "idle/-", next: "idle/-" },
     summary: { task: "第 1 版待确认" },
-    next: { text: "学生需确认第 1 版任务（导师也可确认）", owner: "student", target: { kind: "task", taskId: "task_1" } },
+    next: { text: "学生或导师需确认第 1 版任务", owner: "student", coOwner: "mentor", target: { kind: "task", taskId: "task_1" } },
     current: "task",
   },
   {
@@ -50,7 +50,7 @@ const cases = [
     input: input({ task: task({ status: "draft", currentVersion: 3, confirmedVersion: 2 }) }),
     shape: { task: "active/student", code: "idle/-" },
     summary: { task: "第 3 版待重新确认" },
-    next: { text: "学生需重新确认第 3 版任务（导师也可确认）", owner: "student", target: { kind: "task", taskId: "task_1" } },
+    next: { text: "学生或导师需重新确认第 3 版任务", owner: "student", coOwner: "mentor", target: { kind: "task", taskId: "task_1" } },
     current: "task",
   },
   {
@@ -60,7 +60,7 @@ const cases = [
       runs: [run("r1", 10, "completed", { technicalValidity: "valid", reviewState: "accepted" })],
     }),
     shape: { task: "active/student", code: "skipped/-", run: "done/-", result: "done/-", next: "active/student" },
-    nextText: "学生需重新确认第 3 版任务（导师也可确认）",
+    nextText: "学生或导师需重新确认第 3 版任务",
     current: "task",
   },
   {
@@ -325,7 +325,7 @@ const cases = [
     input: input({ runs: [run("r1", 10, "completed", { technicalValidity: "valid", reviewState: "accepted" })] }),
     shape: { run: "done/-", result: "done/-", next: "active/student" },
     summary: { result: "运行 #1 技术有效 · 导师已验收", next: "决定：转为下一轮任务或完成并关闭" },
-    next: { text: "运行 #1 已验收，学生或导师决定：转为下一轮任务或完成并关闭", owner: "student", target: { kind: "run", taskId: "task_1", runId: "r1" } },
+    next: { text: "运行 #1 已验收，学生或导师决定：转为下一轮任务或完成并关闭", owner: "student", coOwner: "mentor", target: { kind: "run", taskId: "task_1", runId: "r1" } },
     current: "next",
   },
   {
@@ -422,7 +422,7 @@ const cases = [
     input: input({ task: task({ status: "draft", confirmedVersion: null, currentVersion: 1 }), attempts: null, changeRequests: null }),
     partial: true,
     shape: { task: "active/student", code: "idle/-" },
-    nextText: "学生需确认第 1 版任务（导师也可确认）",
+    nextText: "学生或导师需确认第 1 版任务",
   },
 ];
 
@@ -506,4 +506,103 @@ test("a follow-up already created from the reviewed run settles the next stage",
   assert.equal(next.owner, null);
   assert.match(next.summary, /运行 #1/);
   assert.equal(withFollowup.next, null);
+});
+
+// coOwner (batch 2): only task confirmation and the next-round decision may be done by either the
+// student or a reviewing mentor. `owner` stays "student"; the stage and its next step agree.
+test("coOwner: draft confirmation (first or revised) is shared with the mentor", () => {
+  for (const [over, text] of [
+    [{ status: "draft", currentVersion: 1, confirmedVersion: null }, "学生或导师需确认第 1 版任务"],
+    [{ status: "draft", currentVersion: 3, confirmedVersion: 2 }, "学生或导师需重新确认第 3 版任务"],
+  ]) {
+    for (const partial of [false, true]) {
+      const result = computeTaskStages(input({ task: task(over), ...(partial ? { attempts: null, changeRequests: null } : {}) }));
+      const taskStage = stage(result, "task");
+      assert.equal(taskStage.owner, "student");
+      assert.equal(taskStage.coOwner, "mentor");
+      assert.equal(result.next.owner, "student");
+      assert.equal(result.next.coOwner, "mentor");
+      assert.equal(result.next.text, text);
+      assert.doesNotMatch(result.next.text, /（导师也可确认）/);
+    }
+  }
+});
+
+test("coOwner: every next-round decision is shared with the mentor", () => {
+  for (const reviewState of ["accepted", "needs_followup", "rejected"]) {
+    const result = computeTaskStages(input({ runs: [run("r1", 10, "completed", { technicalValidity: "valid", reviewState })] }));
+    const next = stage(result, "next");
+    assert.equal(next.state, "active", reviewState);
+    assert.equal(next.owner, "student", reviewState);
+    assert.equal(next.coOwner, "mentor", reviewState);
+    assert.equal(result.current, "next", reviewState);
+    assert.equal(result.next.owner, "student", reviewState);
+    assert.equal(result.next.coOwner, "mentor", reviewState);
+    assert.match(result.next.text, /学生或导师/, reviewState);
+    for (const other of result.stages.filter((s) => s.key !== "next")) assert.equal(other.coOwner, undefined, `${reviewState}: ${other.key}`);
+  }
+});
+
+test("coOwner: a revised draft with a pending next-round decision marks both stages, next follows the task", () => {
+  const result = computeTaskStages(input({
+    task: task({ status: "draft", currentVersion: 3, confirmedVersion: 2 }),
+    runs: [run("r1", 10, "completed", { technicalValidity: "valid", reviewState: "accepted" })],
+  }));
+  assert.equal(stage(result, "task").coOwner, "mentor");
+  assert.equal(stage(result, "next").coOwner, "mentor");
+  assert.equal(result.current, "task");
+  assert.deepEqual(result.next.target, { kind: "task", taskId: "task_1" });
+  assert.equal(result.next.coOwner, "mentor");
+});
+
+test("coOwner: single-owner steps never carry one", () => {
+  const single = [
+    ["confirmed, code open to the student", input()],
+    ["agent working", input({ attempts: [attempt("a1", 1, "running")] })],
+    ["student publishes a change", input({ attempts: [attempt("a1", 1, "change_ready")], changeRequests: [cr("cr1", "a1", "pending_review")] })],
+    ["mentor extra review", input({ attempts: [attempt("a1", 1, "change_ready")], changeRequests: [cr("cr1", "a1", "pending_review", { requiresExtraReview: true })] })],
+    ["failed attempt", input({ attempts: [attempt("a1", 1, "failed", { errorMessage: "boom" })] })],
+    ["register a run", input({ attempts: [attempt("a1", 1, "change_ready")], changeRequests: [cr("cr1", "a1", "merged", { prNumber: 3 })] })],
+    ["mentor approves a run", input({ runs: [run("r1", 10, "awaiting_approval")] })],
+    ["lab running", input({ runs: [run("r1", 10, "running")] })],
+    ["failed run", input({ runs: [run("r1", 10, "failed", { failureReason: "oom" })] })],
+    ["mentor reviews a result", input({ runs: [run("r1", 10, "completed", { technicalValidity: "valid", reviewState: "pending" })] })],
+    ["mentor reviews an invalid result", input({ runs: [run("r1", 10, "completed", { technicalValidity: "invalid" })] })],
+  ];
+  for (const [name, item] of single) {
+    const result = computeTaskStages(item);
+    for (const s of result.stages) assert.ok(!("coOwner" in s), `${name}: ${s.key} has coOwner`);
+    assert.ok(result.next, name);
+    assert.ok(!("coOwner" in result.next), `${name}: next has coOwner`);
+  }
+});
+
+test("coOwner: settled or terminal next-round stages drop it", () => {
+  const reviewed = [run("r1", 10, "completed", { technicalValidity: "valid", reviewState: "needs_followup" })];
+  const settled = [
+    ["follow-up already created", input({ runs: reviewed, followupTaskIdByRun: { r1: "task_2" } })],
+    ["task closed", input({ task: task({ status: "closed" }), runs: reviewed })],
+    ["task canceled", input({ task: task({ status: "canceled" }), runs: reviewed })],
+    ["newer run awaiting approval", input({ runs: [...reviewed, run("r2", 11, "awaiting_approval")] })],
+  ];
+  for (const [name, item] of settled) {
+    const result = computeTaskStages(item);
+    assert.notEqual(stage(result, "next").state, "active", name);
+    for (const s of result.stages) assert.ok(!("coOwner" in s), `${name}: ${s.key} has coOwner`);
+    assert.equal(result.next?.coOwner, undefined, name);
+  }
+});
+
+test("coOwner: invariants across every table case", () => {
+  for (const item of cases) {
+    const result = computeTaskStages(item.input);
+    for (const s of result.stages) {
+      if (s.coOwner === undefined) continue;
+      assert.equal(s.coOwner, "mentor", `${item.name}: ${s.key}`);
+      assert.equal(s.state, "active", `${item.name}: ${s.key} coOwner on a ${s.state} stage`);
+      assert.equal(s.owner, "student", `${item.name}: ${s.key} primary owner`);
+      assert.ok(["task", "next"].includes(s.key), `${item.name}: ${s.key} should not be shared`);
+    }
+    if (result.next) assert.equal(result.next.coOwner, stage(result, result.current).coOwner, `${item.name}: next coOwner matches its stage`);
+  }
 });
