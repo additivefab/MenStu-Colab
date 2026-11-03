@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type SyntheticEvent } from "react";
 import { DEFAULT_PROTECTED_PATHS } from "../../lib/research-loop/contracts";
 import {
   getJson, newKey, postJson, type ChangeRequest, type Dataset, type Entrypoint, type RunSummary, type TaskDetail, type TaskSummary, type TaskVersion,
@@ -8,11 +8,17 @@ import {
 import { AttemptCard } from "./attempt-card";
 import { ChangeRequestCard } from "./change-request-card";
 import { dateLabel, label, providerLabels, shortSha, taskStatusLabels } from "./labels";
+import { TaskSourceLinks } from "./lineage";
+import { anchorId, useLoopNavigation } from "./navigation";
+import { sequenceNumbers } from "./numbering";
 import { RunCard } from "./run-card";
 import { RunForm } from "./run-form";
+import { StageBar, stageLine } from "./stage-bar";
+import { computeTaskStages, type StageKey, type StageTarget } from "./stage-model";
 import { TaskForm, type TaskContentDraft } from "./task-form";
 import { Blocked, ConfirmButton, ErrorNote, Notice, Pill } from "./ui";
 import styles from "./research-loop.module.css";
+import stageStyles from "./stage-bar.module.css";
 
 const defaults = new Set<string>(DEFAULT_PROTECTED_PATHS);
 
@@ -76,7 +82,42 @@ function StartAttempt({ detail, onStarted }: { detail: TaskDetail; onStarted: ()
   </form>;
 }
 
-/** One research task with its versions, agent attempts, change requests and runs. */
+type SectionKey = "task" | "attempts" | "changes" | "runs";
+const SECTION_ORDER: SectionKey[] = ["task", "attempts", "changes", "runs"];
+/** Section each stage opens at; result and next round live with the runs. */
+const STAGE_SECTION: Record<StageKey, SectionKey> = { task: "task", code: "attempts", run: "runs", result: "runs", next: "runs" };
+const TARGET_SECTION: Record<StageTarget["kind"], SectionKey> = { task: "task", attempt: "attempts", changeRequest: "changes", run: "runs" };
+
+function targetAnchor(target: StageTarget) {
+  switch (target.kind) {
+    case "attempt": return anchorId.attempt(target.attemptId);
+    case "changeRequest": return anchorId.changeRequest(target.changeRequestId);
+    case "run": return anchorId.run(target.runId);
+    default: return anchorId.task(target.taskId);
+  }
+}
+
+/** One stage section of an expanded task; collapsed it is a one-line summary. */
+function StageSection({ label, title, line, open, onToggle, children }: {
+  label: string;
+  title: ReactNode;
+  line: string;
+  open: boolean;
+  onToggle: (open: boolean) => void;
+  children: ReactNode;
+}) {
+  return <section className={styles.block} aria-label={label}>
+    <details className={stageStyles.section} open={open} onToggle={(event: SyntheticEvent<HTMLDetailsElement>) => {
+      // React-driven changes already match `open`; record only the user's own toggles.
+      if (event.currentTarget.open !== open) onToggle(event.currentTarget.open);
+    }}>
+      <summary className={stageStyles.sectionSummary}><h4>{title}</h4>{line ? <span className={stageStyles.sectionLine}>{line}</span> : null}</summary>
+      {children}
+    </details>
+  </section>;
+}
+
+/** One research task with its stage bar, versions, agent attempts, change requests and runs. */
 export function TaskCard({ summary, runs, options, defaultOpen, onChanged }: {
   summary: TaskSummary;
   runs: RunSummary[];
@@ -84,6 +125,7 @@ export function TaskCard({ summary, runs, options, defaultOpen, onChanged }: {
   defaultOpen: boolean;
   onChanged: () => void;
 }) {
+  const { focus } = useLoopNavigation();
   const [open, setOpen] = useState(defaultOpen);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [changeRequests, setChangeRequests] = useState<ChangeRequest[]>([]);
@@ -93,6 +135,11 @@ export function TaskCard({ summary, runs, options, defaultOpen, onChanged }: {
   const [editing, setEditing] = useState(false);
   const [runFormOpen, setRunFormOpen] = useState(false);
   const [showVersion, setShowVersion] = useState<number | null>(null);
+  const [sectionOpen, setSectionOpen] = useState<Partial<Record<SectionKey, boolean>>>({});
+  const [focusKey, setFocusKey] = useState<number | null>(null);
+  const [pendingFocus, setPendingFocus] = useState<(StageTarget & { key: number }) | null>(null);
+  const scrolledKey = useRef<number | null>(null);
+  const cardRef = useRef<HTMLElement>(null);
 
   const load = useCallback((signal?: AbortSignal) => Promise.all([
     getJson<TaskDetail>(`/api/research-tasks?taskId=${encodeURIComponent(summary.id)}`, "任务详情读取失败", signal),
@@ -104,12 +151,35 @@ export function TaskCard({ summary, runs, options, defaultOpen, onChanged }: {
     setError(null);
   }, (failure: unknown) => { if (!signal?.aborted) setError(failure); }), [summary.id]);
 
+  // Active tasks load eagerly so the stage bar is complete while collapsed;
+  // closed and canceled tasks still load when opened. Depending on one boolean
+  // keeps opening/closing an active card from refetching.
+  const shouldLoad = open || summary.status === "draft" || summary.status === "confirmed";
   useEffect(() => {
-    if (!open) return;
+    if (!shouldLoad) return;
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [open, load, summary.updatedAt]);
+  }, [shouldLoad, load, summary.updatedAt]);
+
+  // A navigation request aimed at this task opens the card and the section
+  // holding the target (state adjusted during render, once per focus key).
+  if (focus && focus.taskId === summary.id && focus.key !== focusKey) {
+    setFocusKey(focus.key);
+    setOpen(true);
+    setSectionOpen((current) => ({ ...current, [TARGET_SECTION[focus.kind]]: true }));
+    setPendingFocus(focus);
+  }
+
+  // Then scroll the target's anchor (or the card itself) into view once it has rendered.
+  useEffect(() => {
+    if (!pendingFocus || !open || scrolledKey.current === pendingFocus.key) return;
+    const anchor = pendingFocus.kind === "task" ? null : document.getElementById(targetAnchor(pendingFocus));
+    if (!anchor && pendingFocus.kind !== "task" && !detail && !error) return; // wait for the detail
+    scrolledKey.current = pendingFocus.key;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    (anchor ?? cardRef.current)?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+  }, [pendingFocus, open, detail, error]);
 
   const refresh = useCallback(() => { void load(); onChanged(); }, [load, onChanged]);
 
@@ -131,6 +201,19 @@ export function TaskCard({ summary, runs, options, defaultOpen, onChanged }: {
   }
 
   const task = detail?.task ?? summary;
+  const stages = useMemo(() => computeTaskStages({
+    task, attempts: detail?.attempts ?? null, changeRequests: detail ? changeRequests : null, runs,
+  }), [task, detail, changeRequests, runs]);
+  const lineOf = (...keys: StageKey[]) => stages.stages
+    .filter((stage) => keys.includes(stage.key) && (stage.summary || stage.state !== "idle"))
+    .map(stageLine).join("；");
+  // Sections before the current stage collapse to one line; any can still be opened.
+  const currentRank = SECTION_ORDER.indexOf(STAGE_SECTION[stages.current]);
+  const isOpen = (key: SectionKey) => sectionOpen[key] ?? SECTION_ORDER.indexOf(key) >= currentRank;
+  const toggle = (key: SectionKey) => (value: boolean) => setSectionOpen((current) => ({ ...current, [key]: value }));
+  const attemptNumbers = useMemo(() => sequenceNumbers(detail?.attempts ?? []), [detail]);
+  const runNumbers = useMemo(() => sequenceNumbers(runs), [runs]);
+
   const [statusText, statusTone] = label(taskStatusLabels, task.status);
   const versions = detail?.versions ?? [];
   const latest = versions[versions.length - 1];
@@ -138,21 +221,22 @@ export function TaskCard({ summary, runs, options, defaultOpen, onChanged }: {
   const viewing = versions.find((item) => item.version === (showVersion ?? latest?.version));
   const permissions = detail?.permissions;
   const attemptCrIds = new Set(changeRequests.map((item) => item.attemptId));
-  return <article className={styles.task} id={`research-task-${summary.id}`}>
+  return <article className={styles.task} id={anchorId.task(summary.id)} ref={cardRef}>
     <button type="button" className={styles.taskHead} aria-expanded={open} onClick={() => setOpen(!open)}>
-      <span className={styles.taskTitle}><strong>{task.title}</strong><small>第 {task.currentVersion} 版{task.confirmedVersion ? ` · 已确认第 ${task.confirmedVersion} 版` : ""} · 更新于 {dateLabel(task.updatedAt)}{task.sourceGuidanceNoteId ? " · 来自导师意见" : task.sourceRunId ? " · 来自上一轮运行" : ""}</small></span>
+      <span className={styles.taskTitle}><strong>{task.title}</strong><small>第 {task.currentVersion} 版{task.confirmedVersion ? ` · 已确认第 ${task.confirmedVersion} 版` : ""} · 更新于 {dateLabel(task.updatedAt)}</small></span>
       <span className={styles.itemMeta}><Pill tone={statusTone}>{statusText}</Pill>{runs.length ? <small>{runs.length} 次运行</small> : null}</span>
     </button>
+    <div className={stageStyles.head}>
+      <TaskSourceLinks task={task} />
+      <StageBar stages={stages} />
+    </div>
     {open ? <div className={styles.taskBody}>
       {!detail && !error ? <p className={styles.muted} role="status">正在读取任务…</p> : null}
       <ErrorNote error={error} />
       <Notice>{notice}</Notice>
       {detail ? <>
-        <section className={styles.block} aria-label="任务内容">
-          <header className={styles.blockHead}>
-            <h4>任务内容</h4>
-            {versions.length > 1 ? <label className={styles.versionPick}><span className={styles.srOnly}>查看版本</span><select value={viewing?.version ?? ""} onChange={(event) => setShowVersion(Number(event.target.value))}>{[...versions].reverse().map((item) => <option key={item.version} value={item.version}>第 {item.version} 版{item.version === task.confirmedVersion ? "（已确认）" : item.version === task.currentVersion && task.status === "draft" ? "（待确认）" : ""}</option>)}</select></label> : null}
-          </header>
+        <StageSection label="任务内容" title="任务内容" line={lineOf("task")} open={isOpen("task")} onToggle={toggle("task")}>
+          {versions.length > 1 ? <div className={stageStyles.sectionTools}><label className={styles.versionPick}><span className={styles.srOnly}>查看版本</span><select value={viewing?.version ?? ""} onChange={(event) => setShowVersion(Number(event.target.value))}>{[...versions].reverse().map((item) => <option key={item.version} value={item.version}>第 {item.version} 版{item.version === task.confirmedVersion ? "（已确认）" : item.version === task.currentVersion && task.status === "draft" ? "（待确认）" : ""}</option>)}</select></label></div> : null}
           {task.status === "draft" && task.confirmedVersion ? <p className={styles.warning}>第 {task.currentVersion} 版是修改后的草稿，需要重新确认；确认前不能启动新的代理或运行。</p> : null}
           {viewing ? <>
             <VersionBody version={viewing} />
@@ -165,32 +249,28 @@ export function TaskCard({ summary, runs, options, defaultOpen, onChanged }: {
             {permissions?.canCancel ? <ConfirmButton label="取消任务" confirmLabel="确认取消" prompt="取消后不能恢复。" busy={busy} danger onConfirm={() => void act({ action: "cancel" }, "任务已取消。")} /> : null}
           </div>}
           {task.status === "draft" && !permissions?.canConfirm ? <Blocked>只有学生本人或有审核权限的导师可以确认任务。</Blocked> : null}
-        </section>
+        </StageSection>
 
-        <section className={styles.block} aria-label="代理尝试">
-          <header className={styles.blockHead}><h4>代理尝试 <small>{detail.attempts.length}</small></h4></header>
+        <StageSection label="代理尝试" title={<>代理尝试 <small>{detail.attempts.length}</small></>} line={lineOf("code")} open={isOpen("attempts")} onToggle={toggle("attempts")}>
           {task.status === "confirmed" || task.status === "draft" ? <StartAttempt key={`${task.status}-${task.confirmedVersion}`} detail={detail} onStarted={refresh} /> : null}
-          {detail.attempts.map((attempt) => <AttemptCard key={attempt.id} attempt={attempt} onChanged={refresh} />)}
+          {detail.attempts.map((attempt) => <AttemptCard key={attempt.id} attempt={attempt} number={attemptNumbers.get(attempt.id) ?? null} onChanged={refresh} />)}
           {!detail.attempts.length ? <p className={styles.muted}>还没有代理尝试。</p> : null}
           {detail.attempts.some((attempt) => attempt.status === "change_ready" && !attemptCrIds.has(attempt.id)) ? <p className={styles.muted}>部分已完成的尝试尚未生成变更请求。</p> : null}
-        </section>
+        </StageSection>
 
-        <section className={styles.block} aria-label="变更请求">
-          <header className={styles.blockHead}><h4>变更请求 <small>{changeRequests.length}</small></h4></header>
+        <StageSection label="变更请求" title={<>变更请求 <small>{changeRequests.length}</small></>} line={lineOf("code")} open={isOpen("changes")} onToggle={toggle("changes")}>
           {changeRequests.map((item) => <ChangeRequestCard key={item.id} item={item} onChanged={refresh} />)}
           {!changeRequests.length ? <p className={styles.muted}>代理产出修改后，会在这里生成变更请求，审阅后发布为 Draft PR。</p> : null}
-        </section>
+        </StageSection>
 
-        <section className={styles.block} aria-label="运行与结果">
-          <header className={styles.blockHead}><h4>运行与结果 <small>{runs.length}</small></h4>
-            {task.status === "confirmed" && !runFormOpen ? <button type="button" onClick={() => setRunFormOpen(true)}>登记运行</button> : null}
-          </header>
+        <StageSection label="运行与结果" title={<>运行与结果 <small>{runs.length}</small></>} line={lineOf("run", "result", "next")} open={isOpen("runs")} onToggle={toggle("runs")}>
+          {task.status === "confirmed" && !runFormOpen ? <div className={stageStyles.sectionTools}><button type="button" onClick={() => setRunFormOpen(true)}>登记运行</button></div> : null}
           {task.status !== "confirmed" && task.status !== "closed" && task.status !== "canceled" ? <Blocked>任务确认后才能登记运行。</Blocked> : null}
           {runFormOpen && confirmed ? <RunForm taskId={task.id} budget={confirmed.budget} changeRequests={changeRequests} entrypoints={options.entrypoints} datasets={options.datasets}
             onCreated={() => { setRunFormOpen(false); setNotice("运行已登记，等待导师批准。"); refresh(); }} onCancel={() => setRunFormOpen(false)} /> : null}
-          {runs.map((run) => <RunCard key={run.id} run={run} taskContent={contentOf(confirmed ?? latest)} onChanged={refresh} />)}
+          {runs.map((run) => <RunCard key={run.id} run={run} number={runNumbers.get(run.id) ?? null} taskContent={contentOf(confirmed ?? latest)} onChanged={refresh} />)}
           {!runs.length ? <p className={styles.muted}>还没有运行。失败和取消的运行也会保留在这里。</p> : null}
-        </section>
+        </StageSection>
       </> : null}
     </div> : null}
   </article>;

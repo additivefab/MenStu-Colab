@@ -1,0 +1,68 @@
+/* Task stage bar (frontend plan F1). Palette follows research-loop.module.css. */
+.bar { container-type: inline-size; display: grid; gap: 8px; min-width: 0; }
+
+.stages { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.stage {
+  display: flex; align-items: flex-start; gap: 6px; min-width: 0;
+  padding: 6px 8px; border: 1px solid #e5eaf1; border-radius: 7px; background: #fbfcfe; color: #42516a;
+}
+.mark {
+  flex: none; display: inline-grid; place-items: center; width: 18px; height: 18px; margin-top: 1px;
+  border-radius: 999px; background: #edf2f8; color: #50627a; font-size: 11px; font-weight: 700; line-height: 1;
+}
+.text { display: grid; gap: 1px; min-width: 0; }
+.label { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 6px; min-width: 0; }
+.label strong { font-size: 13px; font-weight: 650; color: #203047; }
+.state { font-size: 12px; color: #65768f; }
+.summary { font-size: 12px; color: #65768f; line-height: 1.45; overflow-wrap: anywhere; }
+.srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.stage[data-state="done"] .mark { background: #e9f7f0; color: #23785a; }
+.stage[data-state="done"] .state { color: #23785a; }
+.stage[data-state="active"] { border-color: #c9d9f2; background: #f3f7fe; }
+.stage[data-state="active"] .mark { background: #245fc2; color: #fff; }
+.stage[data-state="active"] .state { color: #245fc2; font-weight: 600; }
+.stage[data-state="working"] .mark { background: #eaf2ff; color: #245fc2; }
+.stage[data-state="working"] .state { color: #245fc2; }
+.stage[data-state="failed"] { border-color: #f3c7cc; background: #fff6f7; }
+.stage[data-state="failed"] .mark { background: #ffeaec; color: #a3434d; }
+.stage[data-state="failed"] .state { color: #a3434d; font-weight: 600; }
+.stage[data-state="idle"], .stage[data-state="skipped"] { background: #fff; }
+.stage[data-state="skipped"] .label strong { color: #8290a3; text-decoration: line-through; text-decoration-color: #c3ccd8; }
+.stage[data-current] { box-shadow: inset 0 0 0 1px #245fc2; border-color: #245fc2; }
+
+.next { margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 13px; color: #203047; min-width: 0; }
+.nextLabel { flex: none; padding: 0 7px; border-radius: 999px; background: #eaf2ff; color: #245fc2; font-size: 12px; font-weight: 600; line-height: 1.7; }
+.nextText { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.next > button.go { padding: 2px 10px; font-size: 13px; color: #245fc2; border-color: #c9d9f2; }
+
+/* Header area under the task title (outside the toggle button). */
+.head { display: grid; gap: 8px; padding: 0 14px 12px; min-width: 0; }
+
+/* Stage sections inside an expanded task: a one-line summary when collapsed. */
+.section > summary.sectionSummary {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 10px; min-width: 0;
+  padding: 2px 0; color: #203047; font-size: 14px; list-style: none;
+}
+.section > summary.sectionSummary::-webkit-details-marker { display: none; }
+.section > summary.sectionSummary::before {
+  content: ""; flex: none; align-self: center; width: 7px; height: 7px; margin: 0 3px 0 1px;
+  border-right: 2px solid #8290a3; border-bottom: 2px solid #8290a3; transform: rotate(-45deg); transition: transform .15s;
+}
+.section[open] > summary.sectionSummary::before { transform: rotate(45deg); }
+.sectionSummary h4 { display: inline; }
+.sectionLine { min-width: 0; color: #65768f; font-size: 12px; overflow-wrap: anywhere; }
+.section[open] > summary.sectionSummary { margin-bottom: 8px; }
+.sectionTools { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 8px; }
+
+@container (max-width: 560px) {
+  .stages { grid-template-columns: minmax(0, 1fr); gap: 0; border: 1px solid #e5eaf1; border-radius: 7px; overflow: hidden; }
+  .stage { border: 0; border-radius: 0; padding: 5px 8px; align-items: center; }
+  .stage + .stage { border-top: 1px solid #edf1f6; }
+  .stage[data-current] { box-shadow: inset 3px 0 0 #245fc2; }
+  .text { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 8px; }
+}
+
+@media (max-width: 640px) {
+  .head { padding: 0 10px 10px; }
+}
