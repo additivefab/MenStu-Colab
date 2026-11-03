@@ -856,6 +856,22 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     switchTab("loop");
   }
 
+  // "引用为研究任务" (design pack 02 §3/§10): only pre-fills the form on the
+  // 代码与实验 tab; the user reviews and saves a draft, which still needs confirming.
+  function progressToTask(item: StudentProgress) {
+    const nextAction = item.project?.next_action || item.paper?.next_action || "";
+    const origin = item.ai_summary_origin ? `引自 AI 组会纪要《${item.title}》（AI 生成，请核对后再确认）` : `引自进展《${item.title}》`;
+    setLoopPrefill({
+      key: Date.now(),
+      sourceProgress: { entryId: item.id, revision: item.current_revision, title: item.title, aiSummary: item.ai_summary_origin },
+      title: item.title.slice(0, 120),
+      researchQuestion: (item.summary || item.title).slice(0, 2000),
+      instructions: `${origin}\n${nextAction || item.summary}`.trim().slice(0, 20000),
+      acceptanceCriteria: (item.project?.evidence_target ?? "").slice(0, 4000),
+    });
+    switchTab("loop");
+  }
+
   function writeGuidance() {
     switchTab("guidance"); setComposeOpen(true); setFocusTarget("guidance-compose");
   }
@@ -894,7 +910,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
           {canManageAiRecords ? <DeletedAiRecords studentId={studentId} onChanged={load} refreshKey={aiRefreshKey} /> : null}
         </aside>
         {entry && draft ? <article className="sw-reader" key={entry.id} id={`progress-${entry.id}`} tabIndex={-1}>
-          <header className="sw-reader-head"><div><div className="sw-reader-meta"><span className={`status-pill review-${entry.review_status}`}>{reviewLabels[entry.review_status]}</span><span>{entry.ai_summary_origin ? "AI 纪要" : entry.kind} · {dateText(entry.submitted_at)}</span></div><h2>{entry.title}</h2>{entry.paper ? <p className="sw-muted">{paperStageMeta[entry.paper.stage].label} · {entry.paper.manuscript_version}</p> : null}</div>{entry.ai_summary_origin && canManageAiRecords ? <AiRecordActions record={entry} onChanged={load} /> : null}</header>
+          <header className="sw-reader-head"><div><div className="sw-reader-meta"><span className={`status-pill review-${entry.review_status}`}>{reviewLabels[entry.review_status]}</span><span>{entry.ai_summary_origin ? "AI 纪要" : entry.kind} · {dateText(entry.submitted_at)}</span></div><h2>{entry.title}</h2>{entry.paper ? <p className="sw-muted">{paperStageMeta[entry.paper.stage].label} · {entry.paper.manuscript_version}</p> : null}</div><div className="sw-actions"><button type="button" onClick={() => progressToTask(entry)} title="带入本条内容创建研究任务草稿，保存前可修改">引用为研究任务</button>{entry.ai_summary_origin && canManageAiRecords ? <AiRecordActions record={entry} onChanged={load} /> : null}</div></header>
           {isPending(entry) && isCurrentEntry(entry) ? <div className="sw-review-bar" aria-label="审核操作">
             {entry.can_decide ? <div className="student-formal-binary"><button type="button" className="primary" disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "substantive")}>{reviewBusy === entry.id ? "处理中…" : "确认本次进展"}</button><button type="button" className="review-return-secondary" disabled={reviewBusy === entry.id} aria-expanded={draft.open} onClick={() => updateGuidanceDraft(entry, { open: !draft.open })}>本次材料不完整，退回补充</button></div> : entry.can_finalize && (entry.review_status === "submitted" || entry.claim_stale) ? <button className="primary" disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "start_review")}>{entry.claim_stale ? "重新接手审核" : "接手审核"}</button> : <span>{entry.reviewer_name ? `${entry.reviewer_name} 正在审核` : "当前账号无审核权限"}</span>}
             {entry.can_decide || entry.can_release ? <details className="sw-review-more"><summary>更多操作</summary><div><label>审核备注<textarea rows={3} maxLength={3000} value={reviewNotes[entry.id] || ""} onChange={(event) => setReviewNotes((current) => ({ ...current, [entry.id]: event.target.value }))} placeholder="判定为非进展时，请说明理由" /></label><div className="sw-actions">{entry.can_decide ? <><button disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "supporting")}>记为支持性工作</button><button disabled={reviewBusy === entry.id || !(reviewNotes[entry.id] || "").trim()} onClick={() => void reviewProgress(entry, "rejected")}>判定为非进展</button></> : null}{entry.can_finalize && entry.review_status === "submitted" ? <button disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "start_review")}>接手审核</button> : null}{entry.can_release ? <button disabled={reviewBusy === entry.id} onClick={() => void reviewProgress(entry, "release_review")}>释放审核</button> : null}</div></div></details> : null}

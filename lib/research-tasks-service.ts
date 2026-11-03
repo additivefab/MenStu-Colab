@@ -1,3 +1,4 @@
+import { aiRecordCondition } from "./ai-record-deletion";
 import { canReviewStudent, canViewStudent } from "./authorization";
 import type { AppUser } from "./feishu-auth";
 import { notifyLoopEvent } from "./loop-notifications";
@@ -122,7 +123,19 @@ type EventRow = {
 const TASK_COLUMNS = `id, student_id, source_guidance_note_id, source_run_id, parent_task_id, title, status,
   current_version, confirmed_version, created_by_user_id, last_mutation_id, created_at, updated_at`;
 
-export function taskSummary(row: TaskRow) {
+/** Progress entry (including an AI meeting summary) a task was quoted from.
+ * Read from the task's `created` event payload; no column exists for it. */
+export type TaskSourceProgress = {
+  entryId: number;
+  revision: number;
+  /** Empty when the entry is no longer available (e.g. a deleted AI record). */
+  title: string;
+  kind: string;
+  aiSummary: boolean;
+  available: boolean;
+};
+
+export function taskSummary(row: TaskRow, sourceProgress: TaskSourceProgress | null = null) {
   return {
     id: row.id,
     studentId: row.student_id,
@@ -133,6 +146,7 @@ export function taskSummary(row: TaskRow) {
     sourceGuidanceNoteId: row.source_guidance_note_id,
     sourceRunId: row.source_run_id,
     parentTaskId: row.parent_task_id,
+    sourceProgress,
     createdByUserId: row.created_by_user_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -212,20 +226,99 @@ export async function loadTaskVersionSnapshot(d1: D1Database, taskId: string, ve
 }
 
 // ---------------------------------------------------------------------------
+// Quoted progress entries (design pack 02 §3/§10: 消息可"引用为任务")
+// ---------------------------------------------------------------------------
+
+type SourceProgressRow = {
+  task_id: string;
+  entry_id: number;
+  revision: number;
+  title: string | null;
+  kind: string | null;
+  ai_summary: number | null;
+  available: number | null;
+};
+
+/** Source progress of every quoted task of one student, or of one task. The
+ * entry must still belong to the task's student; a deleted record keeps its id
+ * but loses its title so the reference never resurrects hidden content. */
+async function loadSourceProgress(d1: D1Database, scope: { studentId: string } | { taskId: string }) {
+  const where = "studentId" in scope ? "t.student_id = ?" : "t.id = ?";
+  const { results } = await d1.prepare(`SELECT q.task_id, q.entry_id, q.revision, p.title, p.kind,
+      CASE WHEN p.id IS NULL THEN 0 WHEN ${aiRecordCondition} THEN 1 ELSE 0 END AS ai_summary,
+      CASE WHEN p.id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM progress_deletions d WHERE d.progress_entry_id = p.id)
+        THEN 1 ELSE 0 END AS available
+    FROM (SELECT e.task_id, t.student_id,
+        CAST(json_extract(e.payload_json, '$.sourceProgressEntryId') AS INTEGER) AS entry_id,
+        CAST(json_extract(e.payload_json, '$.sourceProgressRevision') AS INTEGER) AS revision
+      FROM research_task_events e JOIN research_tasks t ON t.id = e.task_id
+      WHERE ${where} AND e.action = 'created' AND json_valid(e.payload_json)
+        AND json_extract(e.payload_json, '$.sourceProgressEntryId') IS NOT NULL) q
+    LEFT JOIN progress_entries p ON p.id = q.entry_id AND p.student_id = q.student_id`)
+    .bind("studentId" in scope ? scope.studentId : scope.taskId).all<SourceProgressRow>();
+  const byTask = new Map<string, TaskSourceProgress>();
+  for (const row of results) {
+    const available = Boolean(row.available);
+    byTask.set(row.task_id, {
+      entryId: Number(row.entry_id),
+      revision: Number(row.revision),
+      title: available ? row.title ?? "" : "",
+      kind: available ? row.kind ?? "" : "",
+      aiSummary: available && Boolean(row.ai_summary),
+      available,
+    });
+  }
+  return byTask;
+}
+
+function parsePositiveInt(value: unknown, label: string) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) throw inputError(`${label}参数无效`);
+  return value;
+}
+
+/** Validates a quoted progress entry: same student, not deleted, with a stored
+ * current revision (the dashboard's visibility rule; the caller already passed
+ * canViewStudent). Missing, foreign and deleted entries look the same. */
+async function resolveSourceProgress(d1: D1Database, studentId: string, body: Record<string, unknown>) {
+  const hasRevision = body.sourceProgressRevision !== undefined && body.sourceProgressRevision !== null;
+  if (body.sourceProgressEntryId === undefined || body.sourceProgressEntryId === null) {
+    if (hasRevision) throw inputError("进展版本需与进展记录一起提供");
+    return null;
+  }
+  const entryId = parsePositiveInt(body.sourceProgressEntryId, "进展记录");
+  const requested = hasRevision ? parsePositiveInt(body.sourceProgressRevision, "进展版本") : null;
+  const entry = await d1.prepare(`SELECT p.id, p.current_revision FROM progress_entries p
+    WHERE p.id = ? AND p.student_id = ?
+      AND NOT EXISTS (SELECT 1 FROM progress_deletions d WHERE d.progress_entry_id = p.id)
+      AND EXISTS (SELECT 1 FROM progress_revisions r WHERE r.progress_entry_id = p.id AND r.revision_number = p.current_revision)`)
+    .bind(entryId, studentId).first<{ id: number; current_revision: number }>();
+  if (!entry) throw notFoundError("进展记录不存在、已删除或不属于该学生");
+  if (requested !== null && requested !== Number(entry.current_revision)) {
+    const stored = await d1.prepare("SELECT 1 AS ok FROM progress_revisions WHERE progress_entry_id = ? AND revision_number = ?")
+      .bind(entryId, requested).first();
+    if (!stored) throw notFoundError("引用的进展版本不存在，请刷新后重试");
+  }
+  return { sourceProgressEntryId: entryId, sourceProgressRevision: requested ?? Number(entry.current_revision) };
+}
+
+// ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------
 
 export async function listResearchTasks(d1: D1Database, studentId: string) {
-  const { results } = await d1.prepare(`SELECT ${TASK_COLUMNS} FROM research_tasks
-    WHERE student_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 200`).bind(studentId).all<TaskRow>();
-  return results.map(taskSummary);
+  const [{ results }, sources] = await Promise.all([
+    d1.prepare(`SELECT ${TASK_COLUMNS} FROM research_tasks
+      WHERE student_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 200`).bind(studentId).all<TaskRow>(),
+    loadSourceProgress(d1, { studentId }),
+  ]);
+  return results.map((row) => taskSummary(row, sources.get(row.id) ?? null));
 }
 
 export async function researchTaskDetail(d1: D1Database, user: AppUser, taskId: string) {
   // Delegated peer reviewers may read; every permission below still derives
   // from canViewStudent / canDecideTask, so they stay false for them.
   const task = await requireReadableTask(d1, user, taskId);
-  const [versions, events, attempts, changeRequests, profiles] = await Promise.all([
+  const [versions, events, attempts, changeRequests, profiles, sources] = await Promise.all([
     d1.prepare("SELECT * FROM research_task_versions WHERE task_id = ? ORDER BY version").bind(taskId).all<VersionRow>(),
     d1.prepare("SELECT * FROM research_task_events WHERE task_id = ? ORDER BY id").bind(taskId).all<EventRow>(),
     d1.prepare(`SELECT id, task_version, provider, model_id, status, base_commit_sha, error_code, error_message,
@@ -238,12 +331,15 @@ export async function researchTaskDetail(d1: D1Database, user: AppUser, taskId: 
     d1.prepare(`SELECT p.provider FROM agent_credential_profiles p JOIN lab_runners r ON r.id = p.worker_id
       WHERE p.user_id = ? AND p.active = 1 AND r.status = 'active' AND r.kind = 'agent' ORDER BY p.provider`)
       .bind(user.id).all<{ provider: string }>(),
+    loadSourceProgress(d1, { taskId }),
   ]);
+  const sourceProgress = sources.get(taskId) ?? null;
   const canEdit = await canViewStudent(user, task.student_id);
   const canDecide = await canDecideTask(user, task.student_id);
   const open = task.status === "draft" || task.status === "confirmed";
   return {
-    task: taskSummary(task),
+    task: taskSummary(task, sourceProgress),
+    sourceProgress,
     versions: versions.results.map((row) => ({
       version: Number(row.version),
       title: row.title,
@@ -328,6 +424,7 @@ export async function createTask(d1: D1Database, user: AppUser, body: Record<str
     if (!note) throw notFoundError("导师意见不存在或不属于该学生");
     sourceGuidanceNoteId = body.sourceGuidanceNoteId;
   }
+  const sourceProgress = await resolveSourceProgress(d1, studentId, body);
   const content = parseContent(body);
   const existing = await d1.prepare(`SELECT ${TASK_COLUMNS} FROM research_tasks WHERE create_mutation_id = ?`)
     .bind(mutationId).first<TaskRow>();
@@ -335,10 +432,14 @@ export async function createTask(d1: D1Database, user: AppUser, body: Record<str
     if (existing.student_id !== studentId || existing.created_by_user_id !== user.id) {
       throw conflictError("该提交标识已被使用，请刷新页面后重试");
     }
-    return { task: taskSummary(existing), replayed: true };
+    const sources = await loadSourceProgress(d1, { taskId: existing.id });
+    return { task: taskSummary(existing, sources.get(existing.id) ?? null), replayed: true };
   }
   try {
-    await createResearchTask(d1, { studentId, authorUserId: user.id, mutationId, content, sourceGuidanceNoteId });
+    await createResearchTask(d1, {
+      studentId, authorUserId: user.id, mutationId, content, sourceGuidanceNoteId,
+      ...(sourceProgress ? { eventPayloadExtra: sourceProgress } : {}),
+    });
   } catch (error) {
     if (!isConstraintError(error)) throw error;
   }
@@ -348,7 +449,8 @@ export async function createTask(d1: D1Database, user: AppUser, body: Record<str
     throw conflictError("研究任务创建冲突，请刷新页面后重试");
   }
   await notifyLoopEvent(d1, { kind: "task_draft", taskId: row.id, actorUserId: user.id });
-  return { task: taskSummary(row), replayed: false };
+  const sources = sourceProgress ? await loadSourceProgress(d1, { taskId: row.id }) : null;
+  return { task: taskSummary(row, sources?.get(row.id) ?? null), replayed: false };
 }
 
 function replayOf(task: TaskRow, mutationId: string | null) {
