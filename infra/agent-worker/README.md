@@ -35,7 +35,9 @@ claim ──► verify contextSnapshotSha256 = sha256(canonicalJson({task, baseC
           (base64 + sha256 + mode 100644/100755), `git diff --binary` → unifiedDiff
       ──► local evaluatePathPolicy: outside allowed → failed POLICY_VIOLATION (no files sent);
           protected touched → change_ready + status event (platform sets requires_extra_review)
-      ──► result (tests = real commands with provider-reported exit codes; usage)
+      ──► result (tests = real commands with provider-reported exit codes; usage):
+          persisted to the outbox first, then sent with bounded retries; the workspace
+          and the outbox entry are removed only after a definitive answer (see "Result outbox")
 ```
 
 Result error codes: `CONTEXT_MISMATCH`, `POLICY_VIOLATION`, `BUDGET_EXCEEDED`, `AGENT_UNRESPONSIVE`,
@@ -47,6 +49,57 @@ Result error codes: `CONTEXT_MISMATCH`, `POLICY_VIOLATION`, `BUDGET_EXCEEDED`, `
 `NO_PLAN`.
 
 A platform cancel gives outcome `canceled`.
+
+## Result outbox (R04)
+
+A finished result must survive a network error, a lost response and a worker
+crash. `outbox.mjs` does this:
+
+1. **Persist before sending.** The normalized `AgentResultRequest` (already
+   redacted; it never contains the worker token) is written to
+   `<outbox>/pending/<attemptId>.<leaseEpoch>.json` with `attemptId`,
+   `leaseEpoch`, `payload`, `sha256` (of the payload JSON), `createdAt` and the
+   workspace path. The worker writes a temp file, fsyncs it, renames it into
+   place and fsyncs the directory. Directories are 0700 and files 0600. The
+   default directory is `<stateDir>/outbox`; `stateDir` defaults to the parent
+   of `workRoot`.
+2. **Send with bounded retries.** Transient failures are retried with
+   exponential backoff and jitter (`outbox.resultAttempts`, `retryBaseMs`,
+   `retryMaxMs`). Transient means no answer, a timeout or reset, 5xx, 429 or
+   408. 401 and 403 also count, since an operator can fix the credentials. The
+   heartbeat keeps running during these retries, so a failing result endpoint
+   does not also expire the lease.
+3. **Settle only on a definitive answer:**
+   - **2xx:** delivered. The entry and the workspace are removed.
+   - **2xx `replayed: true`:** the platform's answer to a same-epoch replay of
+     a result it already recorded (`submitAgentResult` returns the stored
+     attempt; see `requireLease` in `lib/agent-attempts-service.ts`). The
+     worker treats it as delivered, and the platform records no second
+     result. The exception is `errorCode: "LEASE_EXPIRED"`: the maintenance
+     sweep expired the lease before our result arrived, so the worker treats
+     it like `LEASE_LOST`.
+   - **409 `LEASE_LOST`:** the lease moved on. The entry is dropped and never
+     resent, so a stale epoch never overwrites a newer result.
+   - **Other 4xx (validation):** dead-lettered. The entry moves to
+     `<outbox>/dead/` with `deadLetter: {status, code, message, at}`. Its
+     workspace is kept for an operator.
+   - **No definitive answer:** the entry stays in `pending/` and the workspace
+     is kept.
+4. **Replay.** `runWorker` replays `pending/` at startup and every
+   `outbox.replaySeconds`, before it claims new work. Each replay pass tries
+   each entry once. A crash between persisting and sending, or between sending
+   and deleting, therefore converges to exactly one recorded result.
+   Unreadable or tampered entries (sha256 mismatch) are never sent; they move
+   to `dead/*.corrupt`.
+5. **Retention.** Pending and dead entries older than `outbox.retentionDays`
+   (default 14) are pruned. Each one gets an error-level log line
+   (`outbox entry is past retention; pruning it`, with attemptId, epoch, age),
+   and its workspace is removed. A workspace is only removed when it is
+   `<workRoot>/<attemptId>` and that attempt is not running on this worker.
+
+Operator: to retry a dead-lettered result after fixing the cause, move its
+file from `dead/` back to `pending/`. At startup the worker logs how many dead
+letters are waiting.
 
 ## Plan-first attempts (FB2)
 
@@ -102,7 +155,8 @@ adapter invocation and result are byte-for-byte what they were before FB2.
 | File | Purpose |
 |---|---|
 | `worker.mjs` | Config, main loop, `runAttempt`, event sink, result |
-| `platform-client.mjs` | `POST /api/lab/agent-attempts` (claim, heartbeat, events, result) and `LeaseLostError` |
+| `platform-client.mjs` | `POST /api/lab/agent-attempts` (claim, heartbeat, events, result), `LeaseLostError`, error classification and bounded retry |
+| `outbox.mjs` | Durable result outbox: persist, deliver, dead-letter, replay, retention (R04) |
 | `workspace.mjs` | Fetch and checkout, credential stripping, binary-safe change collection, plan-mode dirty check and discard |
 | `prompt.mjs` | `buildAgentPolicy`, `buildPrompt` and `buildPlanPrompt` (task snapshot + config only) |
 | `profiles.mjs` | Profile paths, permission checks, per-profile lock |
@@ -251,6 +305,11 @@ config file. The worker token comes from `AGENT_WORKER_TOKEN` or from
   provider.
 - `maxConcurrentAttempts` lets different profiles run in parallel. Runs on the
   same profile always queue.
+- `stateDir` and `outbox` configure the result outbox. `outbox.dir: null`
+  means `<stateDir>/outbox`. The other settings are `retentionDays`,
+  `replaySeconds`, `resultAttempts`, `retryBaseMs` and `retryMaxMs` (see
+  "Result outbox"). The worker refuses to start if it cannot create the outbox
+  directory.
 
 ```sh
 cd infra/agent-worker && npm ci                # installs @openai/codex-sdk 0.166.0 (+ codex binary)
