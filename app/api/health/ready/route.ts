@@ -73,7 +73,7 @@ export async function GET() {
         label: "数据库结构",
         status: schema.version === CURRENT_SCHEMA_VERSION && !schema.missingTables.length ? "pass" : "fail",
         detail: schema.missingTables.length
-          ? `缺少 ${schema.missingTables.length} 张核心表`
+          ? `缺少 ${schema.missingTables.length} 项核心表或列`
           : `schema v${schema.version ?? "未记录"} / 期望 v${CURRENT_SCHEMA_VERSION}`,
       },
       {

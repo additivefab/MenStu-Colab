@@ -181,6 +181,12 @@ export type TaskBudget = {
   maxAgentMinutes?: number;
   maxGpuCount?: number;
   maxWalltimeMinutes?: number;
+  /** Batch 6 (pack 02 §9): max formal evaluation runs per task version and
+   * evaluation protocol; absent = no limit. Reruns of a spec count too. */
+  maxFormalEvaluations?: number;
+  /** Batch 6 (T22): absolute metric tolerance for reproduction checks
+   * between executions of the same run spec; absent = 0.01. */
+  reproTolerance?: number;
 };
 
 export type ResearchTaskSnapshot = {

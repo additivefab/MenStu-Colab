@@ -58,6 +58,15 @@ export function parseTaskContent(body: Record<string, unknown>): TaskContent {
   if (maxAgentMinutes !== undefined) budget.maxAgentMinutes = maxAgentMinutes;
   if (maxGpuCount !== undefined) budget.maxGpuCount = maxGpuCount;
   if (maxWalltimeMinutes !== undefined) budget.maxWalltimeMinutes = maxWalltimeMinutes;
+  const maxFormalEvaluations = bounded(budgetInput.maxFormalEvaluations, "正式评测次数上限", 100);
+  if (maxFormalEvaluations !== undefined) budget.maxFormalEvaluations = maxFormalEvaluations;
+  const tolerance = budgetInput.reproTolerance;
+  if (tolerance !== undefined && tolerance !== null) {
+    if (typeof tolerance !== "number" || !Number.isFinite(tolerance) || tolerance < 0 || tolerance > 1) {
+      throw new TaskInputError("复现容差需为 0–1 之间的数");
+    }
+    budget.reproTolerance = tolerance;
+  }
   return {
     title: text(body.title, "任务标题", 120),
     researchQuestion: text(body.researchQuestion, "研究问题", 2000),
@@ -99,6 +108,9 @@ export async function createResearchTask(d1: D1Database, input: {
   sourceGuidanceNoteId?: number | null;
   sourceRunId?: string | null;
   parentTaskId?: string | null;
+  /** Extra provenance merged into the `created` event payload (e.g. the quoted
+   * progress entry). Core fields always win over keys given here. */
+  eventPayloadExtra?: Record<string, unknown>;
 }) {
   const existing = await d1.prepare("SELECT id, current_version FROM research_tasks WHERE create_mutation_id = ?")
     .bind(input.mutationId).first<{ id: string; current_version: number }>();
@@ -123,7 +135,10 @@ export async function createResearchTask(d1: D1Database, input: {
         snapshotSha256, input.authorUserId),
     d1.prepare(`INSERT INTO research_task_events (task_id, version, action, actor_type, actor_user_id, payload_json)
       VALUES (?, 1, 'created', 'user', ?, ?)`)
-      .bind(taskId, input.authorUserId, JSON.stringify({ snapshotSha256, sourceRunId: input.sourceRunId ?? null, parentTaskId: input.parentTaskId ?? null })),
+      .bind(taskId, input.authorUserId, JSON.stringify({
+        ...(input.eventPayloadExtra ?? {}),
+        snapshotSha256, sourceRunId: input.sourceRunId ?? null, parentTaskId: input.parentTaskId ?? null,
+      })),
   ]);
   return { taskId, version: 1, replayed: false };
 }

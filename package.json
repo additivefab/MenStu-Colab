@@ -15,6 +15,11 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "WRANGLER_LOG_PATH=.wrangler/wrangler.log WRANGLER_SEND_METRICS=false wrangler d1 migrations apply DB --local --persist-to .wrangler/state --config scripts/local-dev/wrangler.local.jsonc",
     "dev:admin": "node --experimental-strip-types scripts/local-dev/create-local-admin.mjs",
+    "demo:loop": "node --experimental-strip-types scripts/local-dev/demo-loop.mjs",
+    "ops:backup": "node scripts/ops/backup.mjs",
+    "ops:restore": "node scripts/ops/restore.mjs",
+    "ops:reissue-runner-token": "node scripts/ops/reissue-runner-token.mjs",
+    "test:acceptance": "npm run build && node scripts/acceptance/report.mjs",
     "feishu:bridge": "node --experimental-strip-types scripts/feishu-long-connection.mjs"
   },
   "dependencies": {

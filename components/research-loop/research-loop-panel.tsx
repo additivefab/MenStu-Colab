@@ -12,7 +12,34 @@ import { emptyTaskContent, TaskForm, type TaskContentDraft } from "./task-form";
 import { ErrorNote, Notice } from "./ui";
 import styles from "./research-loop.module.css";
 
-export type TaskPrefill = Partial<TaskContentDraft> & { sourceGuidanceNoteId?: number; key: number };
+/** Quoted progress entry ("引用为研究任务"); the server re-validates it. */
+export type TaskPrefillProgress = { entryId: number; revision: number; title: string; aiSummary: boolean };
+
+export type TaskPrefill = Partial<TaskContentDraft> & {
+  sourceGuidanceNoteId?: number;
+  sourceProgress?: TaskPrefillProgress;
+  key: number;
+};
+
+type Creating = {
+  initial: TaskContentDraft;
+  sourceGuidanceNoteId?: number;
+  sourceProgress?: TaskPrefillProgress;
+  key: string;
+};
+
+function creatingCopy(creating: Creating) {
+  if (creating.sourceProgress) {
+    const { title, aiSummary } = creating.sourceProgress;
+    const noun = aiSummary ? "组会纪要" : "进展";
+    return {
+      title: `由${noun}创建研究任务`,
+      note: `已带入${noun}《${title}》的内容${aiSummary ? "（AI 生成，请核对后再保存）" : ""}。请审阅修改后保存；保存后为草稿，任务会记录来源，需学生本人或有审核权限的导师确认后才会执行。`,
+    };
+  }
+  if (creating.sourceGuidanceNoteId) return { title: "由导师意见创建研究任务", note: "已带入导师意见的内容，可修改后保存；任务会记录来源意见。" };
+  return { title: "新建研究任务", note: "保存后为草稿，需学生本人或有审核权限的导师确认。" };
+}
 
 type LoopData = { tasks: TaskSummary[]; runs: RunList };
 
@@ -50,7 +77,7 @@ function PanelContent({ studentId, mode, prefill, guidanceHref }: {
   const [data, setData] = useState<LoopData | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState("");
-  const [creating, setCreating] = useState<{ initial: TaskContentDraft; sourceGuidanceNoteId?: number; key: string } | null>(null);
+  const [creating, setCreating] = useState<Creating | null>(null);
   const [filter, setFilter] = useState<"open" | "all">("open");
   const [highlight, setHighlight] = useState<string | null>(null);
   const request = useRef<AbortController | null>(null);
@@ -73,13 +100,14 @@ function PanelContent({ studentId, mode, prefill, guidanceHref }: {
     return () => request.current?.abort();
   }, [reload]);
 
-  // A guidance note's "转为研究任务" opens the create form pre-filled.
+  // A guidance note's "转为研究任务" or a progress entry's "引用为研究任务"
+  // opens the create form pre-filled; nothing is saved until the user submits.
   useEffect(() => {
     if (!prefill || handledPrefill.current === prefill.key) return;
     handledPrefill.current = prefill.key;
-    const { key: _key, sourceGuidanceNoteId, ...content } = prefill;
+    const { key: _key, sourceGuidanceNoteId, sourceProgress, ...content } = prefill;
     void _key;
-    const timer = window.setTimeout(() => setCreating({ initial: { ...emptyTaskContent, ...content }, sourceGuidanceNoteId, key: newKey() }), 0);
+    const timer = window.setTimeout(() => setCreating({ initial: { ...emptyTaskContent, ...content }, sourceGuidanceNoteId, sourceProgress, key: newKey() }), 0);
     return () => window.clearTimeout(timer);
   }, [prefill]);
 
@@ -88,6 +116,9 @@ function PanelContent({ studentId, mode, prefill, guidanceHref }: {
     const payload = await postJson<{ task: TaskSummary }>("/api/research-tasks", {
       action: "create", studentId, mutationId: creating.key, ...content,
       ...(creating.sourceGuidanceNoteId ? { sourceGuidanceNoteId: creating.sourceGuidanceNoteId } : {}),
+      ...(creating.sourceProgress ? {
+        sourceProgressEntryId: creating.sourceProgress.entryId, sourceProgressRevision: creating.sourceProgress.revision,
+      } : {}),
     }, "任务创建失败，请重试");
     setCreating(null);
     setFilter("open");
@@ -192,9 +223,10 @@ function PanelContent({ studentId, mode, prefill, guidanceHref }: {
     </header>
     <Readiness studentId={studentId} mode={mode} />
     {creating ? <TaskForm
-      title={creating.sourceGuidanceNoteId ? "由导师意见创建研究任务" : "新建研究任务"}
+      key={creating.key}
+      title={creatingCopy(creating).title}
       submitLabel="保存为草稿"
-      note={creating.sourceGuidanceNoteId ? "已带入导师意见的内容，可修改后保存；任务会记录来源意见。" : "保存后为草稿，需学生本人或有审核权限的导师确认。"}
+      note={creatingCopy(creating).note}
       initial={creating.initial}
       onSubmit={create}
       onCancel={() => setCreating(null)}

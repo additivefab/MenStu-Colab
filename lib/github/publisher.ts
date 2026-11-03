@@ -350,6 +350,7 @@ async function publish(d1: D1Database, bucket: R2Bucket, row: PublishRow): Promi
   const status: PublishOutcome["status"] = pull.merged_at ? "merged" : pull.state === "closed" ? "closed" : "open";
   const prUrl = typeof pull.html_url === "string" && pull.html_url.startsWith("https://github.com/") ? pull.html_url : "";
   await d1.prepare(`UPDATE change_requests SET status = ?, head_commit_sha = ?, pr_number = ?, pr_url = ?,
+      published_at = COALESCE(published_at, CURRENT_TIMESTAMP),
       version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'publishing'`)
     .bind(status, headSha, pull.number, prUrl, row.id).run();
   return { status, headCommitSha: headSha, prNumber: pull.number, prUrl, reusedRef, reusedPullRequest };

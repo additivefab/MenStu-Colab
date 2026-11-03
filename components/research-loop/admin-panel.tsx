@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { getJson, postJson, type Dataset, type Entrypoint } from "./api";
 import { bytesLabel, dateLabel, providerLabels, shortSha } from "./labels";
 import { Blocked, ConfirmButton, CopyButton, ErrorNote, Notice, Pill } from "./ui";
+import { PilotMetricsSection } from "./pilot-metrics";
 import styles from "./research-loop.module.css";
 
 type StudentOption = { id: string; name: string };
@@ -321,5 +322,6 @@ export function ResearchLoopAdmin({ students }: { students: StudentOption[] }) {
     <GithubSection />
     <LabSection students={students} />
     <ProfileSection />
+    <section className={styles.adminSection} aria-label="试点流程指标"><PilotMetricsSection /></section>
   </section>;
 }

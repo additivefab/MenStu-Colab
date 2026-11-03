@@ -6,11 +6,14 @@
 // server's `permissions`; nothing here derives authorization on its own.
 
 import { useState, type FormEvent } from "react";
-import type { InterpretationInput, ProgressDraft, ResultInterpretationView, RunBaselineView } from "../../lib/research-loop/results-contract.ts";
+import type {
+  InterpretationInput, ProgressDraft, ReproductionView, ResultInterpretationView, RunBaselineView,
+} from "../../lib/research-loop/results-contract.ts";
 import { LoopRequestError, newKey, postJson, type RunDetail } from "./api";
 import { dateLabel, shortSha } from "./labels";
 import { NavLink } from "./lineage";
 import { runLabel } from "./numbering";
+import { displayNumber, reproductionDiffText, reproductionSummary } from "./research-validity";
 import {
   buildMetricComparison, deltaText, emptyInterpretation, INTERPRETATION_FIELDS, INTERPRETATION_MAX_LENGTH, interpretationHasContent,
   interpretationInput, interpretationVersionCount, metricText, progressDraftHref, progressDraftStorageKey, progressDraftText, type MetricValues,
@@ -104,6 +107,32 @@ export function BaselinePanel({ detail, onReload }: { detail: RunDetail; onReloa
     </div> : null}
     <ErrorNote error={error} />
     <Notice>{notice}</Notice>
+  </div>;
+}
+
+/** Batch 6 (T22): this execution against the most recent earlier completed
+ * execution of the same run spec. Neutral wording: within / beyond the
+ * tolerance, never "成功"; no good/bad colouring of the differences. */
+export function ReproductionPanel({ reproduction }: { reproduction: ReproductionView | null | undefined }) {
+  if (!reproduction) return null;
+  const { metrics } = reproduction;
+  return <div className={ri.baseline} aria-label="复现对比">
+    <p className={ri.baselineLine}>
+      <strong>复现对比（与第 {reproduction.comparedAttempt} 次执行）</strong>
+      <span>同一运行规范 · 绝对容差 ±{displayNumber(reproduction.tolerance)}</span>
+      <Pill tone="neutral">{reproductionSummary(reproduction)}</Pill>
+    </p>
+    {metrics.length ? <div className={styles.tableWrap}><table className={`${styles.table} ${rc.stackTable}`}>
+      <caption>只比较两次执行都有的指标</caption>
+      <thead><tr><th scope="col">指标</th><th scope="col">本次</th><th scope="col">第 {reproduction.comparedAttempt} 次</th><th scope="col">差值</th><th scope="col">容差判断</th></tr></thead>
+      <tbody>{metrics.map((item) => <tr key={item.name}>
+        <td data-label="指标">{item.name}</td>
+        <td data-label="本次" className={styles.mono}>{item.current}</td>
+        <td data-label={`第 ${reproduction.comparedAttempt} 次`} className={styles.mono}>{item.previous}</td>
+        <td data-label="差值" className={`${styles.mono} ${ri.delta}`}>{reproductionDiffText(item.diff)}</td>
+        <td data-label="容差判断"><Pill tone={item.withinTolerance ? "neutral" : "warn"}>{item.withinTolerance ? "在容差内" : "超出容差"}</Pill></td>
+      </tr>)}</tbody>
+    </table></div> : <small className={styles.muted}>两次执行没有共同的机器指标（一方缺少指标文件或指标名称不同），无法逐项比较。</small>}
   </div>;
 }
 

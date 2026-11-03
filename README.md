@@ -37,7 +37,7 @@ Management、Moodle、OSIRIS、eLabFTW 和 OpenProject 的公开产品模式。
 
 ## 科研闭环（开发中）
 
-`feature/research-loop` 分支正在实现“任务 → AI 代理 PR → 批准运行 → 实验室执行 → 结果评审”闭环。唯一契约见 [科研闭环实施规格 v1](docs/科研闭环_实施规格_v1.md)，现状审计见 [`docs/audit/`](docs/audit/baseline.md)。目前只提交了 schema 26 的表结构与共享契约代码，服务、执行器和界面尚未完成。
+平台已实现“任务 → AI 代理 PR → 批准运行 → 实验室执行 → 结果评审”闭环（外部系统目前只在模拟环境中验证）。唯一契约见 [科研闭环实施规格 v1](docs/科研闭环_实施规格_v1.md)，开发记录见 [科研闭环开发记录](docs/科研闭环_开发记录_2026-11-03.md)，设计包对照与下一步见 [设计包评估](docs/设计包评估与下一步_2026-11-03.md)，验收状态见 [`docs/acceptance/验收状态.md`](docs/acceptance/验收状态.md)。
 
 ## 本地运行
 
@@ -51,8 +51,9 @@ npm run dev                 # http://localhost:3000
 ```
 
 - **证书**：如果 `npm install` 或其他联网命令报 `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` 等证书错误（例如 Homebrew 安装的 Node 默认 CA 库不完整），可以为该命令设置 `NODE_EXTRA_CA_CERTS=<系统或 Homebrew 的 ca-certificates/cert.pem 路径>`，不要关闭 TLS 校验。
-- **数据库**：应用不会在运行时创建迁移专属表，也不会生成演示数据。本地 D1 未迁移时，接口返回 503（“科研仓库数据库迁移尚未应用”等）。`db:migrate:local` 使用 `scripts/local-dev/wrangler.local.jsonc`，把迁移写入开发服务器使用的同一个本地 D1（`.wrangler/state`，绑定 `DB`）。脚本可以重复执行，只会应用尚未应用的迁移。迁移后 schema 为 24，首次请求时运行时校验通过后会升级到 26。迁移体系出现之前留下的旧本地库，可以删除 `.wrangler/state/v3/d1` 后重新迁移。
+- **数据库**：应用不会在运行时创建迁移专属表，也不会生成演示数据。本地 D1 未迁移时，接口返回 503（“科研仓库数据库迁移尚未应用”等）。`db:migrate:local` 使用 `scripts/local-dev/wrangler.local.jsonc`，把迁移写入开发服务器使用的同一个本地 D1（`.wrangler/state`，绑定 `DB`）。脚本可以重复执行，只会应用尚未应用的迁移。迁移后首次请求时，运行时校验迁移专属表和列完整后把 schema 版本升级到 28。迁移体系出现之前留下的旧本地库，可以删除 `.wrangler/state/v3/d1` 后重新迁移。
 - **本地管理员**：`dev:admin` 在本地 D1 中创建或修复用户名为 `local-admin` 的超级管理员（只存在于本机 `.wrangler/state`，不影响托管环境）。首次执行时随机生成密码，写入已被 gitignore 的 `.local-dev-admin.txt`（权限 0600），不会打印到终端。重复执行不会更换密码。在首页选择独立账号登录即可。
+- **闭环演示**：`npm run demo:loop`（加 `--auto` 自动跑一遍）——本地 GitHub 替身 + 合成代理 + 无隔离执行器，见 [`scripts/local-dev/README-demo-loop.md`](scripts/local-dev/README-demo-loop.md)。
 - **名册**：空库中没有学生。`/api/health/ready` 会因为名册检查返回 503，这是正常现象，不影响登录和开发。
 
 ## 验证
@@ -61,7 +62,10 @@ npm run dev                 # http://localhost:3000
 npm run typecheck
 npm run lint
 npm test        # 先执行 vinext build，再运行全部 Node 测试（Miniflare 加载构建产物）
+npm run test:acceptance   # 运行测试并生成 docs/acceptance/验收状态.md（T01–T26）
 ```
+
+GitHub Actions（`.github/workflows/ci.yml`）在每个 PR 和推送到 `main` 时执行 typecheck、lint 和 test。
 
 ## 真实试用前还需配置
 

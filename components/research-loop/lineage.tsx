@@ -42,6 +42,27 @@ function GuidanceLink({ noteId, text }: { noteId: number; text: string }) {
   return href ? <a href={href} onClick={(event) => event.stopPropagation()}>{text}</a> : <span>{text} #{noteId}</span>;
 }
 
+/** Quoted progress entry, read by the server from the task's `created` event
+ * (lib/research-tasks-service.ts TaskSourceProgress). Absent on older payloads. */
+export type TaskSourceProgress = {
+  entryId: number;
+  revision: number;
+  title: string;
+  kind: string;
+  aiSummary: boolean;
+  available: boolean;
+};
+
+type TaskWithSource = TaskSummary & { sourceProgress?: TaskSourceProgress | null };
+
+/** "来自进展《…》" / "来自组会纪要《…》" linking to the entry on the student profile. */
+function ProgressSourceLink({ source, prefix }: { source: TaskSourceProgress; prefix: string }) {
+  const noun = source.aiSummary ? "组会纪要" : "进展";
+  if (!source.available) return <span className={styles.unknown}>{prefix}已删除的记录 #{source.entryId}</span>;
+  return <a href={`#progress-${source.entryId}`} onClick={(event) => event.stopPropagation()}
+    title={`记录 #${source.entryId} · 第 ${source.revision} 版`}>{prefix}{noun}《{source.title || `#${source.entryId}`}》</a>;
+}
+
 function SourceRunLink({ runId, suffix }: { runId: string; suffix: string }) {
   const { runRef } = useLoopNavigation();
   const ref = runRef(runId);
@@ -50,13 +71,15 @@ function SourceRunLink({ runId, suffix }: { runId: string; suffix: string }) {
     : <span>上一轮运行{suffix}</span>;
 }
 
-/** "来自导师意见 … / 来自运行 #n 的评审 / 上一轮：<任务>" links for a task. */
-export function TaskSourceLinks({ task }: { task: TaskSummary }) {
+/** "来自导师意见 … / 来自进展《…》 / 来自运行 #n 的评审 / 上一轮：<任务>" links for a task. */
+export function TaskSourceLinks({ task }: { task: TaskWithSource }) {
   const { taskTitle } = useLoopNavigation();
-  if (!task.sourceGuidanceNoteId && !task.sourceRunId && !task.parentTaskId) return null;
+  const sourceProgress = task.sourceProgress ?? null;
+  if (!task.sourceGuidanceNoteId && !sourceProgress && !task.sourceRunId && !task.parentTaskId) return null;
   const parentTitle = task.parentTaskId ? taskTitle(task.parentTaskId) : null;
   return <span className={styles.sources}>
     {task.sourceGuidanceNoteId ? <span className={styles.source}><GuidanceLink noteId={task.sourceGuidanceNoteId} text="来自导师意见" /></span> : null}
+    {sourceProgress ? <span className={styles.source}><ProgressSourceLink source={sourceProgress} prefix="来自" /></span> : null}
     {task.sourceRunId ? <span className={styles.source}>来自<SourceRunLink runId={task.sourceRunId} suffix="的评审" /></span> : null}
     {task.parentTaskId ? <span className={styles.source}>{parentTitle
       ? <NavLink target={{ kind: "task", taskId: task.parentTaskId }}>上一轮任务：{parentTitle}</NavLink>
@@ -67,13 +90,14 @@ export function TaskSourceLinks({ task }: { task: TaskSummary }) {
 const UNKNOWN = <span className={styles.unknown}>未记录</span>;
 
 /** 原意见 → 任务第 N 版 → PR #x → 运行 #y → 评审 → 下一轮任务 chain for one run. */
-export function ResultLineage({ task, detail }: { task: TaskSummary | null; detail: RunDetail }) {
+export function ResultLineage({ task, detail }: { task: TaskWithSource | null; detail: RunDetail }) {
   const nav = useLoopNavigation();
   const { run, spec, review } = detail;
   const taskId = spec.taskId || run.taskId;
 
   const origin = !task ? UNKNOWN
     : task.sourceGuidanceNoteId ? <GuidanceLink noteId={task.sourceGuidanceNoteId} text="导师意见" />
+    : task.sourceProgress ? <ProgressSourceLink source={task.sourceProgress} prefix="" />
     : task.sourceRunId ? <SourceRunLink runId={task.sourceRunId} suffix="的评审" />
     : <span className={styles.unknown}>无（直接创建）</span>;
 

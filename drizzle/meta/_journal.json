@@ -197,6 +197,13 @@
       "when": 1793695246709,
       "tag": "0027_research_loop_batches_4_5",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1793701519524,
+      "tag": "0028_research_loop_batch6",
+      "breakpoints": true
     }
   ]
 }

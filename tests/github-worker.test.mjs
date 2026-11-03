@@ -483,6 +483,7 @@ test("simulated GitHub: App auth, webhooks, links and the trusted publisher", { 
       assert.equal(data.changeRequest.prUrl, `https://github.com/${ORG}/study-a/pull/1`);
       assert.equal(data.changeRequest.headCommitSha, commitSha);
       assert.equal(data.changeRequest.publishedByUserId, 1001);
+      assert.match((await crRow(a.id)).published_at, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/, "the PR open time is recorded (schema 28)");
       assert.deepEqual(data.publish, { reusedRef: false, reusedPullRequest: false });
       await expectJson(await crPost({ action: "publish", changeRequestId: a.id, expectedVersion: data.changeRequest.version }, "a"), 409);
     });

@@ -5,7 +5,11 @@
 import type { BaselineCandidate, ResultInterpretationView, RunBaselineView } from "../../lib/research-loop/results-contract.ts";
 
 export type TaskStatus = "draft" | "confirmed" | "closed" | "canceled";
-export type TaskBudget = { maxAgentMinutes?: number; maxGpuCount?: number; maxWalltimeMinutes?: number };
+export type TaskBudget = {
+  maxAgentMinutes?: number; maxGpuCount?: number; maxWalltimeMinutes?: number;
+  /** Batch 6: formal evaluation runs per task version + protocol; reproduction tolerance. */
+  maxFormalEvaluations?: number; reproTolerance?: number;
+};
 
 export type TaskSummary = {
   id: string;

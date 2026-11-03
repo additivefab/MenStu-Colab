@@ -1208,6 +1208,8 @@ export const changeRequests = sqliteTable("change_requests", {
   extraReviewApprovedByUserId: integer("extra_review_approved_by_user_id").references(() => appUsers.id),
   extraReviewApprovedAt: text("extra_review_approved_at"),
   publishedByUserId: integer("published_by_user_id").references(() => appUsers.id),
+  /** Batch 6 (0028): when the PR was first opened by the publisher; null until published. */
+  publishedAt: text("published_at"),
   version: integer("version").notNull().default(1),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
