@@ -113,8 +113,8 @@
 .sw-guidance-status { font-size: 12px; padding: 3px 8px; color: #9b6a20; background: #faf2de; border-radius: 4px; white-space: nowrap; }
 .sw-guidance-status.completed { background: #eef4f0; color: #678876; }
 .sw-guidance-list .sw-detail-body { padding: 0 0 24px 70px; }
-.sw-guidance-footer { display: flex; justify-content: space-between; align-items: center; gap: 20px; border-top: 1px solid #edf0f5; padding-top: 16px; font-size: 13px; color: #718096; }
-.sw-guidance-footer > span { min-width: 0; overflow-wrap: anywhere; }
+.sw-guidance-footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px 20px; border-top: 1px solid #edf0f5; padding-top: 16px; font-size: 13px; color: #718096; }
+.sw-guidance-footer > span { min-width: 0; overflow-wrap: anywhere; margin-right: auto; }
 .sw-guidance-footer > button { flex-shrink: 0; }
 .sw-linked-output { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin: 12px 0; font-size: 13px; }
 .sw-linked-output span { color: #718096; }
@@ -152,4 +152,9 @@
   .sw-progress-layout { grid-template-columns: 260px minmax(0, 1fr); gap: 16px; }
   .sw-reader { padding: 22px; }
   .sw-profile-actions { gap: 16px; }
+}
+@media (max-width: 640px) {
+  /* Five profile tabs: scroll inside the tab bar instead of widening the page. */
+  .sw-tabs { gap: 20px; overflow-x: auto; scrollbar-width: thin; }
+  .sw-tabs button { flex-shrink: 0; white-space: nowrap; font-size: 15px; }
 }

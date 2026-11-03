@@ -21,6 +21,8 @@ import type { MonthlyDeliverySummary } from "../lib/monthly-delivery";
 import type { ProblemRecordStudent } from "../lib/problem-records";
 import { clearMutationKey, mutationKeyForForm } from "../lib/client-idempotency";
 import { StudentRepositoryCard } from "./components/student-repository-card";
+import { ResearchLoopPanel } from "../components/research-loop/research-loop-panel";
+import { ResearchLoopAdmin } from "../components/research-loop/admin-panel";
 
 declare global {
   interface Window {
@@ -1671,6 +1673,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
           </nav>
         </StudentViewIntro>
         <StudentResearchTracks scope={researchTrack} student={student} papers={papers} selectedPaperId={researchPaperId} onSelectPaper={(paperId) => navigateStudent({ view: "research", researchTrack: "paper", paperId })} onOpenComposer={openComposer} />
+        <ResearchLoopPanel studentId={student.id} mode="student" />
       </> : null}
 
       {view === "progress" ? <StudentViewIntro id="student-view-progress-title" title="我的进展" metric={`${waitingCount}`} metricLabel="条等待导师">
@@ -3136,8 +3139,9 @@ function SettingsView({ viewer, onFeishu, students, onRosterImported }: {
     {viewer.role === "superadmin" ? <ProductionReadinessPanel /> : null}
     {viewer.role === "superadmin" ? <RosterImport students={students} onImported={onRosterImported} /> : null}
     {viewer.role === "superadmin" ? <StudentAccessSetup /> : null}
+    {viewer.role === "superadmin" ? <ResearchLoopAdmin students={students.map((student) => ({ id: student.id, name: student.name }))} /> : null}
     <section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、提醒与 AI 会议总结导入" /><div className="setting-body"><span className="status-pill safe">智能拆分已启用</span><p>普通聊天即时过滤；智能纪要会按学生姓名和汇报分段生成个人进展，归属不明确时才进入备用人工区。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section>
-    <section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><small>当前不启用在线 GitHub 授权；仓库访问由导师本地工作区单独管理。</small></div></section>
+    <section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><small>科研闭环需要的仓库授权通过 GitHub App 逐个开通，见“科研闭环配置”；未开通的仓库仍由导师本地工作区管理。</small></div></section>
     <section className="panel setting-card"><PanelHeader title="开源流程参考" subtitle="TUM · Moodle · OSIRIS · eLabFTW" /><div className="setting-body"><p>设计参考了以下开源项目的方案管理、权限和审核流程。</p><div className="reference-links"><a href="https://github.com/ls1intum/thesis-management" target="_blank" rel="noreferrer">TUM</a><a href="https://github.com/moodle/moodle" target="_blank" rel="noreferrer">Moodle</a><a href="https://github.com/OSIRIS-Solutions/osiris" target="_blank" rel="noreferrer">OSIRIS</a><a href="https://github.com/elabftw/elabftw" target="_blank" rel="noreferrer">eLabFTW</a></div></div></section>
     <AccountManagement viewer={viewer} students={students} />
     <section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section>

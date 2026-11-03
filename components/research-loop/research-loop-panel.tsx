@@ -1,0 +1,110 @@
+"use client";
+
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { getJson, newKey, postJson, type RunList, type TaskSummary } from "./api";
+import { TaskCard } from "./task-card";
+import { emptyTaskContent, TaskForm, type TaskContentDraft } from "./task-form";
+import { ErrorNote, Notice } from "./ui";
+import styles from "./research-loop.module.css";
+
+export type TaskPrefill = Partial<TaskContentDraft> & { sourceGuidanceNoteId?: number; key: number };
+
+type LoopData = { tasks: TaskSummary[]; runs: RunList };
+
+function fetchLoop(studentId: string, signal: AbortSignal): Promise<LoopData> {
+  const id = encodeURIComponent(studentId);
+  return Promise.all([
+    getJson<{ tasks: TaskSummary[] }>(`/api/research-tasks?studentId=${id}`, "研究任务读取失败", signal),
+    getJson<RunList>(`/api/runs?studentId=${id}`, "运行记录读取失败", signal),
+  ]).then(([tasks, runs]) => ({ tasks: tasks.tasks, runs }));
+}
+
+/** Research loop: task → agent attempt → change request → run → result review.
+ * `mode` only changes wording; every action is gated by server permissions. */
+export function ResearchLoopPanel({ studentId, mode, prefill }: { studentId: string; mode: "staff" | "student"; prefill?: TaskPrefill }) {
+  return <PanelContent key={studentId} studentId={studentId} mode={mode} prefill={prefill} />;
+}
+
+function PanelContent({ studentId, mode, prefill }: { studentId: string; mode: "staff" | "student"; prefill?: TaskPrefill }) {
+  const titleId = useId();
+  const [data, setData] = useState<LoopData | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [notice, setNotice] = useState("");
+  const [creating, setCreating] = useState<{ initial: TaskContentDraft; sourceGuidanceNoteId?: number; key: string } | null>(null);
+  const [filter, setFilter] = useState<"open" | "all">("open");
+  const [highlight, setHighlight] = useState<string | null>(null);
+  const request = useRef<AbortController | null>(null);
+  const handledPrefill = useRef<number | null>(null);
+
+  const reload = useCallback(() => {
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    return fetchLoop(studentId, controller.signal).then((payload) => {
+      if (!controller.signal.aborted) { setData(payload); setError(null); }
+    }, (failure: unknown) => { if (!controller.signal.aborted) setError(failure); });
+  }, [studentId]);
+
+  useEffect(() => {
+    void reload();
+    return () => request.current?.abort();
+  }, [reload]);
+
+  // A guidance note's "转为研究任务" opens the create form pre-filled.
+  useEffect(() => {
+    if (!prefill || handledPrefill.current === prefill.key) return;
+    handledPrefill.current = prefill.key;
+    const { key: _key, sourceGuidanceNoteId, ...content } = prefill;
+    void _key;
+    const timer = window.setTimeout(() => setCreating({ initial: { ...emptyTaskContent, ...content }, sourceGuidanceNoteId, key: newKey() }), 0);
+    return () => window.clearTimeout(timer);
+  }, [prefill]);
+
+  async function create(content: TaskContentDraft) {
+    if (!creating) return;
+    const payload = await postJson<{ task: TaskSummary }>("/api/research-tasks", {
+      action: "create", studentId, mutationId: creating.key, ...content,
+      ...(creating.sourceGuidanceNoteId ? { sourceGuidanceNoteId: creating.sourceGuidanceNoteId } : {}),
+    }, "任务创建失败，请重试");
+    setCreating(null);
+    setFilter("open");
+    setHighlight(payload.task.id);
+    setNotice("任务已保存为草稿。确认后才能交给代理或登记运行。");
+    await reload();
+  }
+
+  const tasks = data?.tasks ?? [];
+  const visible = filter === "open" ? tasks.filter((task) => task.status === "draft" || task.status === "confirmed") : tasks;
+  const runs = data?.runs.runs ?? [];
+  const options = data?.runs.options ?? { entrypoints: [], datasets: [] };
+  const openCount = tasks.filter((task) => task.status === "draft" || task.status === "confirmed").length;
+  return <section className={styles.panel} aria-labelledby={titleId}>
+    <header className={styles.panelHead}>
+      <div>
+        <h2 id={titleId}>科研闭环</h2>
+        <p>{mode === "student" ? "把确认过的任务交给代理改代码，审阅后在实验室运行，结果由导师评审。" : "任务确认 → 代理修改 → 审阅发布 → 批准运行 → 评审结果。"}</p>
+      </div>
+      {!creating ? <button type="button" className={styles.primary} onClick={() => setCreating({ initial: emptyTaskContent, key: newKey() })}>新建研究任务</button> : null}
+    </header>
+    {creating ? <TaskForm
+      title={creating.sourceGuidanceNoteId ? "由导师意见创建研究任务" : "新建研究任务"}
+      submitLabel="保存为草稿"
+      note={creating.sourceGuidanceNoteId ? "已带入导师意见的内容，可修改后保存；任务会记录来源意见。" : "保存后为草稿，需学生本人或有审核权限的导师确认。"}
+      initial={creating.initial}
+      onSubmit={create}
+      onCancel={() => setCreating(null)}
+    /> : null}
+    <Notice>{notice}</Notice>
+    {error ? <div className={styles.errorRow}><ErrorNote error={error} /><button type="button" onClick={() => void reload()}>重新加载</button></div> : null}
+    {!data && !error ? <p className={styles.muted} role="status">正在读取研究任务…</p> : null}
+    {data ? <>
+      <div className={styles.filters} role="group" aria-label="筛选任务">
+        <button type="button" aria-pressed={filter === "open"} onClick={() => setFilter("open")}>进行中 <span>{openCount}</span></button>
+        <button type="button" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>全部 <span>{tasks.length}</span></button>
+      </div>
+      {visible.map((task, index) => <TaskCard key={task.id} summary={task} runs={runs.filter((run) => run.taskId === task.id)} options={options}
+        defaultOpen={highlight ? highlight === task.id : index === 0} onChanged={() => void reload()} />)}
+      {!visible.length ? <p className={styles.empty}>{tasks.length ? "没有进行中的任务。可以查看全部任务。" : mode === "student" ? "还没有研究任务。可以自己新建，或请导师把指导意见转为任务。" : "还没有研究任务。可以新建，或在“指导”中把意见转为任务。"}</p> : null}
+    </> : null}
+  </section>;
+}

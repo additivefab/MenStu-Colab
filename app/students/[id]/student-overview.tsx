@@ -15,6 +15,7 @@ import { paperDeadlineState, paperStageMeta, paperStages, type PaperStage } from
 import { progressFollowUpNotice } from "../../../lib/progress-follow-up";
 import { calendarDayDiff, instantTimestamp, shanghaiDateKey } from "../../../lib/dashboard-overview/dates";
 import { StudentRepositoryCard } from "../../components/student-repository-card";
+import { ResearchLoopPanel, type TaskPrefill } from "../../../components/research-loop/research-loop-panel";
 
 type ProgressStatus = "pending" | "substantive" | "supporting" | "supplement" | "rejected";
 type ReviewStatus = "submitted" | "in_review" | "accepted" | "changes_requested" | "rejected";
@@ -349,7 +350,9 @@ function DetailBlock({ label, value }: { label: string; value: string }) {
 }
 
 export default function StudentOverview({ studentId }: { studentId: string }) {
-  const [tab, setTab] = useState<"progress" | "guidance" | "research" | "tasks">("progress");
+  const [tab, setTab] = useState<"progress" | "guidance" | "research" | "tasks" | "loop">("progress");
+  const [loopVisited, setLoopVisited] = useState(false);
+  const [loopPrefill, setLoopPrefill] = useState<TaskPrefill>();
   const [taskFilterRequest, setTaskFilterRequest] = useState<{ filter: "open" | "pending" | "completed"; key: number }>();
   const [taskOpenRequest, setTaskOpenRequest] = useState<ProgressResolutionTarget & { key: number }>();
   const [progressFilter, setProgressFilter] = useState<"pending" | "all" | "ai" | "returned" | "results">("pending");
@@ -790,6 +793,8 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       } else if (hash === "tasks" || hash === "tasks-completed" || hash === "tasks-pending") {
         setTab("tasks"); setTasksVisited(true);
         setTaskFilterRequest({ filter: hash === "tasks-completed" ? "completed" : hash === "tasks-pending" ? "pending" : "open", key: Date.now() });
+      } else if (hash === "research-loop" || hash.startsWith("research-task-")) {
+        setTab("loop"); setLoopVisited(true);
       } else if (hash.startsWith("guidance")) {
         setTab("guidance");
       } else if (["papers", "outputs", "proposal", "workflow", "audit", "milestones"].includes(hash) || hash.startsWith("milestone-")) {
@@ -824,9 +829,10 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
   function switchTab(next: typeof tab) {
     setTab(next); setFocusTarget("");
     if (next === "tasks") setTasksVisited(true);
+    if (next === "loop") setLoopVisited(true);
     setTaskOpenRequest(undefined);
     setTaskFilterRequest(next === "tasks" ? { filter: "open", key: Date.now() } : undefined);
-    window.history.replaceState(null, "", `#${next === "progress" ? "evidence" : next === "guidance" ? "guidance" : next === "tasks" ? "tasks" : "papers"}`);
+    window.history.replaceState(null, "", `#${next === "progress" ? "evidence" : next === "guidance" ? "guidance" : next === "tasks" ? "tasks" : next === "loop" ? "research-loop" : "papers"}`);
   }
 
   function viewCompletedTasks() {
@@ -835,6 +841,18 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
     setTaskFilterRequest({ filter: "completed", key: Date.now() });
     setFocusTarget("sw-tasks");
     window.history.replaceState(null, "", "#tasks-completed");
+  }
+
+  function guidanceToTask(note: GuidanceNote) {
+    setLoopPrefill({
+      key: Date.now(),
+      sourceGuidanceNoteId: note.id,
+      title: (note.title || note.next_action || note.content.split("\n")[0]).slice(0, 120),
+      researchQuestion: note.content.slice(0, 2000),
+      instructions: note.next_action.slice(0, 20000),
+      acceptanceCriteria: note.acceptance_criteria.slice(0, 4000),
+    });
+    switchTab("loop");
   }
 
   function writeGuidance() {
@@ -859,6 +877,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       <button aria-current={tab === "tasks" ? "page" : undefined} onClick={() => switchTab("tasks")}>任务与结果</button>
       <button aria-current={tab === "guidance" ? "page" : undefined} onClick={() => switchTab("guidance")}>指导{openGuidanceCount ? <span>{openGuidanceCount} 进行中</span> : null}</button>
       <button aria-current={tab === "research" ? "page" : undefined} onClick={() => switchTab("research")}>研究资料</button>
+      <button aria-current={tab === "loop" ? "page" : undefined} onClick={() => switchTab("loop")}>科研闭环</button>
     </nav>
     {error ? <p className="sw-message" role="alert">{error} <button onClick={() => void load()}>重试</button></p> : null}
     {detailsLoading ? <p className="sw-muted" role="status">正在读取指导记录和科研成果…</p> : null}
@@ -899,6 +918,10 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
       {tasksVisited ? <ProgressResolutionPanel studentId={studentId} mode="staff" openRequest={taskOpenRequest} filterRequest={taskFilterRequest} refreshKey={aiRefreshKey} onChanged={load} /> : null}
     </section>
 
+    <section id="sw-loop" tabIndex={-1} hidden={tab !== "loop"} aria-label="科研闭环">
+      {loopVisited ? <ResearchLoopPanel studentId={studentId} mode={viewerRole === "student" ? "student" : "staff"} prefill={loopPrefill} /> : null}
+    </section>
+
     <section id="sw-guidance" tabIndex={-1} hidden={tab !== "guidance"} className="sw-panel" aria-label="指导">
       <header className="sw-section-head" id="guidance"><div><h2>指导记录</h2><p>{openGuidanceCount} 项进行中 · {guidanceNotes.length - openGuidanceCount} 项已完成</p></div><button onClick={() => { setComposeOpen(!composeOpen); if (!composeOpen) setFocusTarget("guidance-compose"); }}>{composeOpen ? "收起表单" : "写指导"}</button></header>
       <form id="guidance-compose" tabIndex={-1} hidden={!composeOpen} className="sw-compose" onSubmit={createGuidance}>
@@ -907,7 +930,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
         <details><summary>主题、关联纪要与验收设置</summary><div className="sw-form-grid"><label>指导主题（可选）<input name="title" maxLength={200} /></label><label>关联 AI 纪要<select name="sourceProgressEntryId" defaultValue=""><option value="">不关联</option>{meetingSummaries.map((item) => <option key={item.progress_entry_id} value={item.progress_entry_id}>{dateText(item.message_created_at)} · {item.title}</option>)}</select></label><label>完成确认方式<select name="verificationMode" defaultValue="self_report"><option value="self_report">学生自行确认完成</option><option value="mentor_verify">学生提交，导师验收</option></select></label><label>验收标准<textarea name="acceptanceCriteria" rows={2} maxLength={1200} placeholder="需要导师验收时，请写清完成标准" /></label></div></details>
         <div className="sw-actions"><button className="primary" disabled={guidanceSaveBusy}>{guidanceSaveBusy ? "保存中…" : "保存指导"}</button><button type="button" onClick={() => setComposeOpen(false)}>收起</button></div>
       </form>
-      <div className="sw-guidance-list">{activeGuidance.map((note) => <details key={note.id} id={`guidance-${note.id}`} tabIndex={-1}><summary><span className={`sw-guidance-status ${note.status}`}>{note.status === "completed" ? "已完成" : note.student_reported_at ? "待验收" : "进行中"}</span><div><strong>{note.title || note.next_action || note.content.split("\n")[0]}</strong><small>{note.mentor_name} · {dateText(note.created_at)}{note.due_date && note.status === "open" ? ` · 期限 ${note.due_date}` : ""}</small></div></summary><div className="sw-detail-body"><p>{note.content}</p>{note.research_output_title ? <p className="sw-linked-output"><span>关联科研成果</span><a href="#outputs">{note.research_output_title} · {note.research_output_type === "patent" ? "专利" : "论文/成果"} ↗</a></p> : null}{note.next_action ? <DetailBlock label="下一步" value={note.next_action} /> : null}{note.due_date ? <DetailBlock label="完成期限" value={note.due_date} /> : null}{note.acceptance_criteria ? <DetailBlock label="验收标准" value={note.acceptance_criteria} /> : null}<p className="sw-muted">{note.status === "open" ? note.student_reported_at ? "学生已提交完成说明，等待验收" : note.acknowledged_at ? `学生已于 ${dateText(note.acknowledged_at)} 确认收到` : "等待学生确认收到" : `${note.completed_by_name || "学生"}已完成 · ${dateText(note.completed_at)}`}</p>{note.completion_note ? <DetailBlock label="完成说明" value={note.completion_note} /> : null}<footer className="sw-guidance-footer"><span>{note.source_title ? <a href={`#progress-${note.source_progress_entry_id}`}>关联进展：{note.source_title}</a> : note.verification_mode === "mentor_verify" ? "需导师验收" : "学生自行确认"}</span><button disabled={guidanceStatusBusy === note.id || (note.status === "open" && note.verification_mode === "mentor_verify" && !note.student_reported_at)} onClick={() => void updateGuidanceStatus(note, note.status === "open" ? "complete" : "reopen")}>{note.status === "completed" ? "重新打开" : note.student_reported_at ? "确认验收" : "标记完成"}</button></footer></div></details>)}{!detailsLoading && !detailsError && !guidanceNotes.length ? <p className="sw-empty">暂无指导记录。点击“写指导”即可添加。</p> : null}</div>
+      <div className="sw-guidance-list">{activeGuidance.map((note) => <details key={note.id} id={`guidance-${note.id}`} tabIndex={-1}><summary><span className={`sw-guidance-status ${note.status}`}>{note.status === "completed" ? "已完成" : note.student_reported_at ? "待验收" : "进行中"}</span><div><strong>{note.title || note.next_action || note.content.split("\n")[0]}</strong><small>{note.mentor_name} · {dateText(note.created_at)}{note.due_date && note.status === "open" ? ` · 期限 ${note.due_date}` : ""}</small></div></summary><div className="sw-detail-body"><p>{note.content}</p>{note.research_output_title ? <p className="sw-linked-output"><span>关联科研成果</span><a href="#outputs">{note.research_output_title} · {note.research_output_type === "patent" ? "专利" : "论文/成果"} ↗</a></p> : null}{note.next_action ? <DetailBlock label="下一步" value={note.next_action} /> : null}{note.due_date ? <DetailBlock label="完成期限" value={note.due_date} /> : null}{note.acceptance_criteria ? <DetailBlock label="验收标准" value={note.acceptance_criteria} /> : null}<p className="sw-muted">{note.status === "open" ? note.student_reported_at ? "学生已提交完成说明，等待验收" : note.acknowledged_at ? `学生已于 ${dateText(note.acknowledged_at)} 确认收到` : "等待学生确认收到" : `${note.completed_by_name || "学生"}已完成 · ${dateText(note.completed_at)}`}</p>{note.completion_note ? <DetailBlock label="完成说明" value={note.completion_note} /> : null}<footer className="sw-guidance-footer"><span>{note.source_title ? <a href={`#progress-${note.source_progress_entry_id}`}>关联进展：{note.source_title}</a> : note.verification_mode === "mentor_verify" ? "需导师验收" : "学生自行确认"}</span><button type="button" onClick={() => guidanceToTask(note)}>转为研究任务</button><button disabled={guidanceStatusBusy === note.id || (note.status === "open" && note.verification_mode === "mentor_verify" && !note.student_reported_at)} onClick={() => void updateGuidanceStatus(note, note.status === "open" ? "complete" : "reopen")}>{note.status === "completed" ? "重新打开" : note.student_reported_at ? "确认验收" : "标记完成"}</button></footer></div></details>)}{!detailsLoading && !detailsError && !guidanceNotes.length ? <p className="sw-empty">暂无指导记录。点击“写指导”即可添加。</p> : null}</div>
     </section>
 
     <section id="sw-research" tabIndex={-1} hidden={tab !== "research"} className="sw-research" aria-label="研究资料">
