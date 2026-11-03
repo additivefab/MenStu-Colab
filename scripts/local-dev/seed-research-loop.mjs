@@ -84,6 +84,7 @@ const SCENARIOS = [
   ["S18", "task_synthS18", "导师本人登记的运行待批准", "运行：运行 #1 待导师批准（导师）；由 synthetic-mentor 登记，须由另一位导师/管理员批准"],
   ["S19", "task_synthS19", "导师起草的任务草稿", "任务：第 1 版草稿待确认（学生）；导师起草，等学生确认"],
   ["S20", "task_synthS20", "导师发起的代理触及受保护路径", "代码：变更待额外审查（导师）；代理由 synthetic-mentor 发起，须由另一位导师/管理员审查"],
+  ["S22", "task_synthS22", "先出计划：计划待审阅", "代码：代理 #1 的修改计划待审阅（学生 / 导师，发起人除外）"],
   ["S21", "task_synthS21", "已停用学生的待批准运行", "运行：运行 #1 待导师批准（导师）；学生 synthetic-loop-03 已停用，不进任何收件箱"],
 ];
 
@@ -148,6 +149,9 @@ async function reset(db, bucket) {
   const ids = `('${STUDENT_A}', '${STUDENT_B}', '${STUDENT_C}')`;
   const users = `(SELECT id FROM app_users WHERE student_id IN ${ids} OR feishu_open_id LIKE 'local-dev-only:synthetic-%')`;
   const statements = [
+    `DELETE FROM run_baselines WHERE run_id IN (SELECT id FROM runs WHERE student_id IN ${ids}) OR baseline_run_id IN (SELECT id FROM runs WHERE student_id IN ${ids})`,
+    `DELETE FROM result_interpretations WHERE run_id IN (SELECT id FROM runs WHERE student_id IN ${ids})`,
+    `DELETE FROM review_delegations WHERE student_id IN ${ids}`,
     `DELETE FROM result_comments WHERE run_id IN (SELECT id FROM runs WHERE student_id IN ${ids})`,
     `DELETE FROM result_reviews WHERE run_id IN (SELECT id FROM runs WHERE student_id IN ${ids})`,
     `DELETE FROM run_results WHERE run_id IN (SELECT id FROM runs WHERE student_id IN ${ids})`,
@@ -158,6 +162,7 @@ async function reset(db, bucket) {
     `DELETE FROM runs WHERE student_id IN ${ids}`,
     `DELETE FROM run_specs WHERE student_id IN ${ids}`,
     `DELETE FROM change_requests WHERE student_id IN ${ids}`,
+    `DELETE FROM agent_attempt_plans WHERE attempt_id IN (SELECT id FROM agent_attempts WHERE student_id IN ${ids})`,
     `DELETE FROM agent_attempt_events WHERE attempt_id IN (SELECT id FROM agent_attempts WHERE student_id IN ${ids})`,
     `DELETE FROM agent_attempts WHERE student_id IN ${ids}`,
     `DELETE FROM research_task_events WHERE task_id IN (SELECT id FROM research_tasks WHERE student_id IN ${ids})`,
@@ -692,6 +697,19 @@ async function main() {
   {
     const { cr } = await publishedTask("S21", agoOf(21), { student: STUDENT_C, owner: studentCUser });
     await addRun(cr, { epochs: 10, status: "awaiting_approval", ago: 200 });
+  }
+
+  // S22 plan-first: the agent submitted a plan, waiting for a human decision.
+  {
+    const task = await addTask({ code: "S22", versions: [{ title: titleOf("S22") }], confirmed: 1, ago: agoOf(3) - 5 });
+    const { id } = await addAttempt(task, { status: "waiting_approval", ago: 40, events: [
+      ["status", { phase: "claimed" }], ["status", { phase: "workspace_ready" }],
+      ["message", { text: "计划：只改 src/train.py 的采样，加 tests/test_sampler.py（合成）" }], ["status", { phase: "result", outcome: "plan_ready" }],
+    ] });
+    await db.prepare(`INSERT INTO agent_attempt_plans (attempt_id, plan_text, plan_sha256, decision, submitted_at)
+      VALUES (?, ?, ?, 'pending', ?)`).bind(id,
+      "1. 在 src/train.py 中为小缺陷类别加入过采样（只改采样函数）。\n2. 新增 tests/test_sampler.py 验证采样比例。\n3. 不修改评价协议和数据划分。\n风险：过采样可能提高误检，需在验证集上看误检率。（合成）",
+      "a".repeat(64), ts(30)).run();
   }
 
   console.log(`Seeded synthetic research-loop data for ${STUDENT_A} (and ${STUDENT_B} without a repository link, inactive ${STUDENT_C}).`);

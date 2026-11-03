@@ -122,7 +122,7 @@ export function AttemptCard({ attempt, number, onChanged }: { attempt: AttemptSu
       {detail?.changedPaths.length ? <details className={styles.subtle}><summary>改动文件 {detail.changedPaths.length} 个</summary><ul className={styles.pathList}>{detail.changedPaths.map((path) => <li key={path}>{path}</li>)}</ul></details> : null}
       {detail?.tests.length ? <details className={styles.subtle}><summary>代理自测 {detail.tests.length} 项</summary><ul className={styles.pathList}>{detail.tests.map((item, index) => <li key={index}><code>{item.command}</code> → 退出码 {item.exitCode}{item.summary ? ` · ${item.summary}` : ""}</li>)}</ul></details> : null}
       <section className={css.process} aria-label="代理过程">
-        <div className={css.processHead}><strong>代理过程</strong>{live ? <small>运行中，自动刷新</small> : null}</div>
+        <div className={css.processHead}><strong>代理过程</strong>{live ? <small>{status === "waiting_approval" ? "等待审阅计划，自动刷新" : status === "queued" ? "排队中，自动刷新" : "运行中，自动刷新"}</small> : null}</div>
         {timeline.milestones.length ? <ol className={css.timeline} aria-live={live ? "polite" : undefined}>
           {timeline.milestones.map((item) => <li key={item.sequence} className={`${css.milestone} ${css[`tone_${item.tone}`] ?? ""}`}>
             <span className={css.dot} aria-hidden="true" />
