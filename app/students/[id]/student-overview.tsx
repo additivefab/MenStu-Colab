@@ -16,6 +16,7 @@ import { progressFollowUpNotice } from "../../../lib/progress-follow-up";
 import { calendarDayDiff, instantTimestamp, shanghaiDateKey } from "../../../lib/dashboard-overview/dates";
 import { StudentRepositoryCard } from "../../components/student-repository-card";
 import { ResearchLoopPanel, type TaskPrefill } from "../../../components/research-loop/research-loop-panel";
+import { EvidenceList } from "../../../components/research-loop/evidence-list";
 
 type ProgressStatus = "pending" | "substantive" | "supporting" | "supplement" | "rejected";
 type ReviewStatus = "submitted" | "in_review" | "accepted" | "changes_requested" | "rejected";
@@ -912,6 +913,7 @@ export default function StudentOverview({ studentId }: { studentId: string }) {
           <details className="sw-record-history"><summary>记录详情与操作记录</summary><div className="sw-detail-body"><p>记录 #{entry.id} · 第 {entry.current_revision} 版{entry.reviewed_at ? ` · 审核于 ${dateText(entry.reviewed_at)}` : ""}</p>{entry.paper?.title && entry.paper.title !== entry.title ? <DetailBlock label="所属论文" value={entry.paper.title} /> : null}{entry.paper?.submission_identifier ? <DetailBlock label="稿件编号 / DOI" value={entry.paper.submission_identifier} /> : null}{entry.literature_ref ? <DetailBlock label="文献" value={entry.literature_ref} /> : null}{entry.git_url ? <a href={entry.git_url} target="_blank" rel="noreferrer">代码仓库 ↗</a> : null}{imported ? <><DetailBlock label="纪要来源" value={imported.source_label || "飞书智能纪要"} /><DetailBlock label="导入说明" value={imported.detected_reason} /><p>纪要时间 {dateText(imported.message_created_at)} · 保存于 {dateText(imported.saved_at)}</p>{imported.summary !== entry.summary ? <DetailBlock label="原始纪要" value={imported.summary} /> : null}</> : null}{entry.attachments.map((attachment) => <p className="sw-fingerprint" key={attachment.id}>{attachment.file_name} · SHA256 {attachment.content_sha256}</p>)}{entry.evidence_sources.filter((source) => source.content_sha256).map((source) => <p className="sw-fingerprint" key={source.id}>{source.label} · SHA256 {source.content_sha256}</p>)}{entry.audit.map((event) => <div className="sw-audit-row" key={event.id}><strong>{event.actor_name || (event.actor_type === "system" ? "系统" : "未知人员")} · {reviewLabels[event.to_status as ReviewStatus] || event.action}</strong><small>{dateText(event.created_at)}</small>{event.note ? <p>{event.note}</p> : null}</div>)}</div></details>
         </article> : <div className="sw-reader sw-empty-state"><span aria-hidden="true">✓</span><h2>{progressFilter === "pending" ? "当前没有待审核进展" : "暂无记录"}</h2><p>{progressFilter === "pending" ? "可以查看历史进展，或给学生写一条指导。" : "学生提交或导入的记录会显示在这里。"}</p><div className="sw-actions"><button onClick={() => setProgressFilter("all")}>查看全部进展</button><button onClick={writeGuidance}>写指导</button></div></div>}
       </div>
+      {viewerRole ? <EvidenceList studentId={studentId} mode={viewerRole === "student" ? "student" : "staff"} inPage /> : null}
     </section>
 
     <section id="sw-tasks" tabIndex={-1} hidden={tab !== "tasks"} aria-label="任务与结果">

@@ -25,6 +25,11 @@ import { ResearchLoopPanel } from "../components/research-loop/research-loop-pan
 import type { LoopInboxItem, LoopInboxKind } from "../lib/research-loop-inbox";
 import loopStyles from "./components/loop-inbox.module.css";
 import { ResearchLoopAdmin } from "../components/research-loop/admin-panel";
+import { EvidenceList, ProgressDraftNotice } from "../components/research-loop/evidence-list";
+import { draftNoticeText, draftRunParam, parseProgressDraft, progressDraftPrefill, type ProgressDraftPrefill } from "../components/research-loop/evidence-model";
+import { progressDraftStorageKey } from "../components/research-loop/result-insights-model";
+import { postJson } from "../components/research-loop/api";
+import type { ProgressDraft } from "../lib/research-loop/results-contract";
 
 declare global {
   interface Window {
@@ -1514,7 +1519,24 @@ type StudentNavigationIntent = {
   milestoneId?: number;
   guidanceId?: number;
   meetingId?: number;
+  /** Run whose progress draft prefills the project composer (FA4). */
+  draftRunId?: string;
 };
+
+/** Progress draft handed over from a run's result card (FA4). */
+type StudentProgressDraftState = { runId: string; status: "loading" | "ready"; draft: ProgressDraft | null };
+
+function readStoredProgressDraft(runId: string) {
+  try {
+    return parseProgressDraft(window.sessionStorage.getItem(progressDraftStorageKey(runId)));
+  } catch {
+    return null;
+  }
+}
+
+function clearStoredProgressDraft(runId: string) {
+  try { window.sessionStorage.removeItem(progressDraftStorageKey(runId)); } catch { /* storage unavailable */ }
+}
 
 const studentViewMeta: Record<StudentView, { label: string; icon: string }> = {
   today: { label: "下一步", icon: "⌂" },
@@ -1537,12 +1559,14 @@ function studentNavigationHref(intent: StudentNavigationIntent) {
   if (intent.milestoneId) params.set("milestone", String(intent.milestoneId));
   if (intent.guidanceId) params.set("guidance", String(intent.guidanceId));
   if (intent.meetingId) params.set("meeting", String(intent.meetingId));
+  if (intent.draftRunId && intent.composerKind === "项目") params.set("draftRun", intent.draftRunId);
   return params.size ? `/?${params.toString()}` : "/";
 }
 
 function studentNavigationFromLocation(href: string): StudentNavigationIntent {
   const params = new URL(href).searchParams;
-  const rawView = params.get("studentView");
+  // The result card links with `view=progress` (FA4); `studentView` wins when both exist.
+  const rawView = params.get("studentView") ?? params.get("view");
   const view: StudentView = rawView === "research" || rawView === "progress" || rawView === "library" || rawView === "mentor" ? rawView : "today";
   const rawEntry = Number(params.get("entry"));
   const rawPaper = Number(params.get("paper"));
@@ -1562,6 +1586,7 @@ function studentNavigationFromLocation(href: string): StudentNavigationIntent {
     milestoneId: Number.isInteger(rawMilestone) && rawMilestone > 0 ? rawMilestone : undefined,
     guidanceId: Number.isInteger(rawGuidance) && rawGuidance > 0 ? rawGuidance : undefined,
     meetingId: Number.isInteger(rawMeeting) && rawMeeting > 0 ? rawMeeting : undefined,
+    draftRunId: compose === "project" ? draftRunParam(params.get("draftRun")) ?? undefined : undefined,
   };
 }
 
@@ -1605,6 +1630,8 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
   const [taskFilterRequest, setTaskFilterRequest] = useState<{ filter: "open" | "pending" | "completed"; key: number }>();
   const [resolutionRequest, setResolutionRequest] = useState<{ progressEntryId: number; itemKind: ProgressResolutionKind; key: number }>();
   const [pendingNavigation, setPendingNavigation] = useState<StudentNavigationIntent | null>(null);
+  const [progressDraft, setProgressDraft] = useState<StudentProgressDraftState | null>(null);
+  const progressDraftRunRef = useRef<string | null>(null);
   const student = data.students.find((item) => item.id === data.viewer.studentId);
   const papers = student ? data.papers.filter((paper) => paper.student_id === student.id) : [];
   const projectEntries = student?.progress.filter((entry) => entry.kind === "项目") ?? [];
@@ -1612,6 +1639,27 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
   const paperReturned = currentEntries.filter((entry) => entry.kind === "论文" && entry.review_status === "changes_requested").length;
   const projectReturned = currentEntries.filter((entry) => entry.kind === "项目" && entry.review_status === "changes_requested").length;
   const waitingCount = currentEntries.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
+
+  // Prefill from the draft the result card stored; if it is missing (another
+  // tab, storage blocked), ask the server to rebuild it (no write). Never submits.
+  const loadProgressDraft = useCallback((runId: string) => {
+    if (progressDraftRunRef.current === runId) return;
+    progressDraftRunRef.current = runId;
+    const stored = readStoredProgressDraft(runId);
+    if (stored) {
+      setProgressDraft({ runId, status: "ready", draft: stored });
+      return;
+    }
+    setProgressDraft({ runId, status: "loading", draft: null });
+    postJson<{ draft?: unknown }>("/api/run-results", { action: "progress_draft", runId }, "进展草稿生成失败")
+      .then((payload) => parseProgressDraft(payload.draft), () => null)
+      .then((draft) => {
+        if (draft) {
+          try { window.sessionStorage.setItem(progressDraftStorageKey(runId), JSON.stringify(draft)); } catch { /* storage unavailable */ }
+        }
+        setProgressDraft((current) => current?.runId === runId ? { runId, status: "ready", draft } : current);
+      });
+  }, []);
 
   const applyStudentNavigation = useCallback((intent: StudentNavigationIntent) => {
     const nextResearchTrack = intent.researchTrack || "paper";
@@ -1623,11 +1671,14 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
     setComposerTargetId(intent.composerKind === "论文" ? intent.paperId ?? null
       : intent.composerKind === "项目" ? intent.milestoneId ?? null : null);
     setComposerVisible(Boolean(intent.composerKind));
+    if (intent.composerKind === "项目" && intent.draftRunId) loadProgressDraft(intent.draftRunId);
     setPendingNavigation(intent);
-  }, []);
+  }, [loadProgressDraft]);
 
   function navigateStudent(intent: StudentNavigationIntent) {
-    const nextIntent = intent.view === "progress" && !intent.composerKind && composer && composerVisible ? { ...intent, composerKind: composer } : intent;
+    const nextIntent = intent.view === "progress" && !intent.composerKind && composer && composerVisible
+      ? { ...intent, composerKind: composer, draftRunId: composer === "项目" ? progressDraft?.runId : undefined }
+      : intent;
     window.history.pushState({ studentView: nextIntent.view }, "", studentNavigationHref(nextIntent));
     applyStudentNavigation(nextIntent);
   }
@@ -1697,7 +1748,15 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
 
   if (!student) return <main className="student-portal-shell"><div className="error-state"><strong>学生档案尚未绑定</strong><span>请联系管理员核对账号与学生记录。</span></div></main>;
 
+  function closeProgressDraft() {
+    if (progressDraft) clearStoredProgressDraft(progressDraft.runId);
+    progressDraftRunRef.current = null;
+    setProgressDraft(null);
+  }
+
   function openComposer(kind: "论文" | "项目", targetId?: number) {
+    progressDraftRunRef.current = null;
+    setProgressDraft(null);
     navigateStudent({
       view: "progress",
       composerKind: kind,
@@ -1762,8 +1821,10 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
       {view === "progress" ? <StudentViewIntro id="student-view-progress-title" title="我的进展" metric={`${waitingCount}`} metricLabel="条等待导师">
         <div className="student-view-intro-actions"><button className="primary" type="button" onClick={() => openComposer("论文")}>记论文进展</button><button type="button" onClick={() => openComposer("项目")}>记课题进展</button></div>
       </StudentViewIntro> : null}
-      {composer ? <div className="student-persistent-composer" hidden={view !== "progress" || !composerVisible}><StudentQuickProgressComposer key={`${composer}-${composerTargetId ?? "default"}`} kind={composer} initialTargetId={composerTargetId} student={student} papers={papers} onCancel={() => { setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); }} onSaved={async () => { const savedKind = composer; setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); onToast(`${savedKind === "论文" ? "论文" : "课题"}进展已提交，记录已更新`); await onRefresh(); }} /></div> : null}
-      {view === "progress" ? <><StudentProgressOverview student={student} onChanged={onRefresh} onSupplement={openSupplement} currentEntryIds={new Set(currentEntries.map((entry) => entry.id))} />{paperReturned + projectReturned > 0 ? <details className="quiet-details student-supplement-section"><summary>待补充材料<span>{paperReturned + projectReturned} 条</span></summary><StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} returnedOnly /><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} returnedOnly /></details> : null}</> : null}
+      {composer ? <div className="student-persistent-composer" hidden={view !== "progress" || !composerVisible}>{composer === "项目" && progressDraft?.status === "loading"
+        ? <section className="student-quick-progress" id="student-quick-progress" tabIndex={-1} aria-busy="true"><header><h2>记录课题进展</h2></header><form onSubmit={(event) => event.preventDefault()}><p role="status">正在载入运行生成的进展草稿…</p></form></section>
+        : <StudentQuickProgressComposer key={`${composer}-${composerTargetId ?? "default"}-${composer === "项目" && progressDraft ? `draft-${progressDraft.runId}` : "blank"}`} kind={composer} initialTargetId={composerTargetId} student={student} papers={papers} progressDraft={composer === "项目" ? progressDraft : null} onCancel={() => { closeProgressDraft(); setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); }} onSaved={async () => { const savedKind = composer; closeProgressDraft(); setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); onToast(`${savedKind === "论文" ? "论文" : "课题"}进展已提交，记录已更新`); await onRefresh(); }} />}</div> : null}
+      {view === "progress" ? <><EvidenceList studentId={student.id} mode="student" /><StudentProgressOverview student={student} onChanged={onRefresh} onSupplement={openSupplement} currentEntryIds={new Set(currentEntries.map((entry) => entry.id))} />{paperReturned + projectReturned > 0 ? <details className="quiet-details student-supplement-section"><summary>待补充材料<span>{paperReturned + projectReturned} 条</span></summary><StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} returnedOnly /><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} returnedOnly /></details> : null}</> : null}
 
       {view === "library" ? <><StudentViewIntro id="student-view-library-title" title="我的资料" /><StudentResearchLibrary student={student} onOpenSource={openResearchSource} /></> : null}
 
@@ -1875,11 +1936,13 @@ function formDataHasVerifiableEvidence(formData: FormData) {
   return Boolean(evidence || gitUrl || hasAttachment);
 }
 
-function StudentQuickProgressComposer({ kind, initialTargetId, student, papers, onCancel, onSaved }: {
+function StudentQuickProgressComposer({ kind, initialTargetId, student, papers, progressDraft = null, onCancel, onSaved }: {
   kind: "论文" | "项目";
   initialTargetId: number | null;
   student: Student;
   papers: StudentPaper[];
+  /** FA4: project progress prefilled from a run's draft; the student edits and submits it. */
+  progressDraft?: StudentProgressDraftState | null;
   onCancel: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -1895,6 +1958,7 @@ function StudentQuickProgressComposer({ kind, initialTargetId, student, papers, 
   const [projectMilestoneSelection, setProjectMilestoneSelection] = useState(initialMilestone ? String(initialMilestone.id) : "");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
+  const [prefill] = useState<ProgressDraftPrefill | null>(() => kind === "项目" && progressDraft?.draft ? progressDraftPrefill(progressDraft.draft) : null);
   const [{ minimumDate, nextWeek }] = useState(() => {
     const formatter = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" });
     const today = new Date();
@@ -1943,6 +2007,7 @@ function StudentQuickProgressComposer({ kind, initialTargetId, student, papers, 
       const details = (event.target as HTMLElement).closest("details");
       if (details) details.open = true;
     }}>
+      {kind === "项目" && progressDraft?.status === "ready" ? <ProgressDraftNotice found={Boolean(progressDraft.draft)} text={draftNoticeText(progressDraft.draft)} detail={progressDraft.draft ? "草稿只是起点，不会自动提交；请写明这次结果意味着什么、下一步如何判断。" : undefined} /> : null}
       {kind === "论文" ? <>
         <div className="student-quick-row"><label>哪篇论文<select value={paperSelection} onChange={(event) => { const value = event.target.value; setPaperSelection(value); setPaperStage(activePapers.find((paper) => String(paper.id) === value)?.current_stage ?? "planning"); }}>{activePapers.map((paper) => <option key={paper.id} value={paper.id}>{paper.title}</option>)}<option value="new">新建一篇论文</option></select></label><label>现在写到哪一步<select value={paperStage} onChange={(event) => setPaperStage(event.target.value as PaperStage)}>{paperStages.map((stage) => <option key={stage} value={stage}>{paperStageMeta[stage].label}</option>)}</select></label></div>
         {!selectedPaper ? <div className="student-quick-row new-paper"><label>论文题目<input name="paperTitle" required placeholder="暂定题目也可以" /></label><label>类型<select name="paperType" defaultValue="期刊论文">{paperTypes.map((type) => <option key={type}>{type}</option>)}</select></label><label>计划投稿<input name="plannedSubmissionDate" type="date" min={minimumDate} required /></label></div> : null}
@@ -1955,16 +2020,16 @@ function StudentQuickProgressComposer({ kind, initialTargetId, student, papers, 
           <label>关联培养节点<select name="linkedMilestoneId" value={projectMilestoneSelection} onChange={(event) => setProjectMilestoneSelection(event.target.value)} required={activeMilestones.length > 0} disabled={!activeMilestones.length}><option value="">{activeMilestones.length ? "请选择" : "暂无可关联节点"}</option>{activeMilestones.map((milestone) => <option key={milestone.id} value={milestone.id}>{milestone.title} · {milestoneStatusLabels[milestone.status]}</option>)}</select></label>
           {!activeMilestones.length ? <input type="hidden" name="linkedMilestoneId" value="" /> : null}
         </div>
-        <label className="wide">这次做完了什么<textarea name="summary" rows={4} required placeholder="例如：完成第一轮测试，结果表和异常样本已整理。" /></label>
+        <label className="wide">这次做完了什么<textarea name="summary" rows={prefill ? 7 : 4} required defaultValue={prefill?.summary} placeholder="例如：完成第一轮测试，结果表和异常样本已整理。" /></label>
         <div className="student-quick-row"><label>下一行动<input name="nextAction" required placeholder="例如：补做低温组对照实验" /></label><label>计划完成日期<input name="nextActionDueDate" type="date" min={minimumDate} defaultValue={nextWeek} required /></label></div>
         <label htmlFor="student-project-completion-request" className={`student-completion-request ${projectMilestoneSelection ? "" : "disabled"}`}><input id="student-project-completion-request" name="completionRequested" type="checkbox" value="1" disabled={!projectMilestoneSelection} /><span>申请完成所选节点<small>申请不会直接改状态；导师确认为实质性进展后才完成。</small></span></label>
       </>}
-      <label className="wide student-evidence-field">材料说明<textarea name="evidence" rows={3} placeholder={kind === "论文" ? "例如：稿件第 4–6 页、图 3/4，或评审记录位置。如果上传了附件可不填。" : "例如：实验批次 EXP-024、结果表 Sheet-2、验收记录位置。如果上传了附件可不填。"} /><small>填写证据位置、链接或编号，也可直接上传文件。</small></label>
-      <details className="quiet-details student-optional-fields">
+      <label className="wide student-evidence-field">材料说明<textarea name="evidence" rows={prefill?.evidence ? 6 : 3} defaultValue={prefill?.evidence} placeholder={kind === "论文" ? "例如：稿件第 4–6 页、图 3/4，或评审记录位置。如果上传了附件可不填。" : "例如：实验批次 EXP-024、结果表 Sheet-2、验收记录位置。如果上传了附件可不填。"} /><small>填写证据位置、链接或编号，也可直接上传文件。</small></label>
+      <details className="quiet-details student-optional-fields" open={prefill?.gitUrl ? true : undefined}>
         <summary>补充信息<span>阻塞、Git 链接{kind === "论文" ? "、稿件编号" : ""}</span></summary>
         <div>
           <label className="wide">本次新增问题（可选）<textarea name="blocker" rows={2} placeholder="填写新遇到、需要支持的问题；没有可留空。" /><small>已记录的问题会继续保留，不影响本次提交，无需重复填写。</small></label>
-          <label className="wide">私有 GitHub 链接（可选）<input name="gitUrl" type="url" placeholder="https://github.com/…" /></label>
+          <label className="wide">私有 GitHub 链接（可选）<input name="gitUrl" type="url" defaultValue={prefill?.gitUrl || undefined} placeholder="https://github.com/…" /></label>
           {kind === "论文" ? <label className="wide">稿件编号 / DOI（可选）<input name="submissionIdentifier" placeholder="投稿后填写稿件号或 DOI" /></label> : null}
         </div>
       </details>
