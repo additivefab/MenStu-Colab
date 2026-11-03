@@ -1,0 +1,22 @@
+.section { min-width: 0; }
+.section > summary { cursor: pointer; }
+.title { display: inline; margin: 0 10px 0 0; font-size: 15px; }
+.root { display: grid; gap: 10px; min-width: 0; margin-top: 10px; }
+.note { margin: 0; padding: 8px 10px; border-radius: 6px; background: #f3f7fc; color: #2d3e57; font-size: 13px; line-height: 1.6; }
+.period { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; }
+.period label { display: grid; gap: 2px; font-size: 12px; color: #5d6c82; }
+.period input { min-height: 32px; }
+.presets { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.muted { margin: 0; color: #718096; font-size: 12px; }
+.tableWrap { max-width: 100%; overflow-x: auto; }
+.table { width: 100%; min-width: 640px; border-collapse: collapse; font-size: 13px; }
+.table caption { text-align: left; color: #5d6c82; font-size: 12px; padding-bottom: 4px; }
+.table th, .table td { padding: 6px 8px; border-bottom: 1px solid #edf1f6; text-align: left; vertical-align: top; line-height: 1.55; }
+.table thead th { color: #718096; font-weight: 600; font-size: 12px; }
+.table tbody th { font-weight: 600; color: #1f2d3d; min-width: 9em; }
+.table small { display: block; color: #718096; font-size: 12px; font-weight: 400; }
+.value { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.value small { white-space: normal; max-width: 18em; }
+.sample { font-variant-numeric: tabular-nums; text-align: right; }
+.unavailable { color: #8a6d1f; }
+.caveat { margin-top: 2px; }
