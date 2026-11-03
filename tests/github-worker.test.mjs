@@ -279,6 +279,7 @@ test("simulated GitHub: App auth, webhooks, links and the trusted publisher", { 
       { path: "src/model.py", action: "modify", contentBase64: b64(modelPy), sha256: createHash("sha256").update(modelPy).digest("hex") },
       { path: "scripts/run.sh", action: "add", contentBase64: b64("#!/bin/sh\necho run\n"), mode: "100755" },
       { path: "old/obsolete.txt", action: "delete" },
+      { path: "assets/weights.bin", action: "add", contentBase64: Buffer.from([0, 1, 2, 255]).toString("base64") },
     ];
 
     await t.test("admin endpoints are superadmin-only and never accept client repository IDs (T03)", async () => {
@@ -425,7 +426,7 @@ test("simulated GitHub: App auth, webhooks, links and the trusted publisher", { 
       assert.equal(JSON.stringify(await crRow(a.id)), before);
       const own = await expectJson(await crGet(`changeRequestId=${a.id}`, "a"));
       assert.equal(own.changeRequest.status, "pending_review");
-      assert.deepEqual(own.change.paths.map((item) => item.path), ["src/model.py", "scripts/run.sh", "old/obsolete.txt"]);
+      assert.deepEqual(own.change.paths.map((item) => item.path), ["src/model.py", "scripts/run.sh", "old/obsolete.txt", "assets/weights.bin"]);
       assert.equal(own.permissions.canPublish, true);
       assert.equal((await expectJson(await crGet(`taskId=${a.taskId}`, "reviewer"))).changeRequests.length, 1);
     });
@@ -439,7 +440,6 @@ test("simulated GitHub: App auth, webhooks, links and the trusted publisher", { 
         "POST /app/installations/77/access_tokens",
         `GET ${repo}/git/commits/${BASE_A}`,
         `POST ${repo}/git/blobs`,
-        `POST ${repo}/git/blobs`,
         `POST ${repo}/git/trees`,
         `POST ${repo}/git/commits`,
         `GET ${repo}/git/ref/heads/${a.branch}`,
@@ -447,18 +447,19 @@ test("simulated GitHub: App auth, webhooks, links and the trusted publisher", { 
         `GET ${repo}/pulls?state=all&per_page=20&head=${encodeURIComponent(`${ORG}:${a.branch}`)}`,
         `POST ${repo}/pulls`,
       ]);
-      const [token, , blob1, blob2, tree, commit, , ref, , pull] = gh.calls;
+      const [token, , blob, tree, commit, , ref, , pull] = gh.calls;
       assert.equal(token.auth, "jwt");
       assert.ok(gh.calls.slice(1).every((call) => call.auth === "token"));
       assert.deepEqual(token.body, { repository_ids: [9001], permissions: { contents: "write", pull_requests: "write" } });
-      assert.deepEqual(blob1.body, { content: b64("#!/bin/sh\necho run\n"), encoding: "base64" });
-      assert.deepEqual(blob2.body, { content: b64(modelPy), encoding: "base64" });
+      // Only the binary file needs a blob call; UTF-8 text is inlined in the tree.
+      assert.deepEqual(blob.body, { content: Buffer.from([0, 1, 2, 255]).toString("base64"), encoding: "base64" });
       assert.deepEqual(tree.body, {
         base_tree: TREE_A,
         tree: [
+          { path: "assets/weights.bin", mode: "100644", type: "blob", sha: sha1(`blob:${blob.body.content}`) },
           { path: "old/obsolete.txt", mode: "100644", type: "blob", sha: null },
-          { path: "scripts/run.sh", mode: "100755", type: "blob", sha: sha1(`blob:${blob1.body.content}`) },
-          { path: "src/model.py", mode: "100644", type: "blob", sha: sha1(`blob:${blob2.body.content}`) },
+          { path: "scripts/run.sh", mode: "100755", type: "blob", content: "#!/bin/sh\necho run\n" },
+          { path: "src/model.py", mode: "100644", type: "blob", content: modelPy },
         ],
       });
       assert.deepEqual(commit.body.parents, [BASE_A]);

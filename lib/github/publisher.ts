@@ -195,6 +195,21 @@ type PullRequest = { number: number; html_url: string; state: string; merged_at:
  * `closed`; on failure it is `failed`, `rejected` (policy) or back to
  * `pending_review` (newly detected protected paths), and the error is thrown.
  */
+const INLINE_TEXT_MAX_BYTES = 256 * 1024;
+
+/** Returns the file as text only when it is NUL-free UTF-8 that re-encodes to
+ * the identical bytes (BOM kept), so inlining never alters file content. */
+function inlineText(contentBase64: string): string | null {
+  const binary = atob(contentBase64);
+  if (binary.length > INLINE_TEXT_MAX_BYTES || binary.includes("\u0000")) return null;
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  let text: string;
+  try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); } catch { return null; }
+  const roundTrip = new TextEncoder().encode(text);
+  if (roundTrip.length !== bytes.length || roundTrip.some((byte, index) => byte !== bytes[index])) return null;
+  return text;
+}
+
 export async function publishChangeRequest(d1: D1Database, files: R2Bucket, changeRequestId: string): Promise<PublishOutcome> {
   const row = await loadRow(d1, changeRequestId);
   if (!row) throw new PublishBlockedError("变更请求不存在");
@@ -257,13 +272,20 @@ async function publish(d1: D1Database, bucket: R2Bucket, row: PublishRow): Promi
   const repo = `/repos/${encodePathSegments(fullName)}`;
   const bearer = access.token;
 
-  // 4. Base tree → blobs → tree → commit.
+  // 4. Base tree → (blobs for binary files) → tree → commit. UTF-8 text files
+  // are inlined as tree `content`, so a publish costs a handful of
+  // subrequests instead of one per file (Workers subrequest limits).
   const base = await githubJson<{ sha: string; tree: { sha: string } }>(`${repo}/git/commits/${row.base_commit_sha}`, { bearer, context: "读取基准提交" });
   if (base.sha !== row.base_commit_sha || !isCommitSha(base.tree?.sha)) throw new GithubApiError(502, "base commit mismatch", "读取基准提交");
-  const entries: { path: string; mode: string; type: "blob"; sha: string | null }[] = [];
+  const entries: ({ path: string; mode: string; type: "blob"; sha: string | null } | { path: string; mode: string; type: "blob"; content: string })[] = [];
   for (const file of [...changed].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))) {
     if (file.action === "delete") {
       entries.push({ path: file.path, mode: "100644", type: "blob", sha: null });
+      continue;
+    }
+    const text = inlineText(file.contentBase64 ?? "");
+    if (text !== null) {
+      entries.push({ path: file.path, mode: file.mode, type: "blob", content: text });
       continue;
     }
     const blob = await githubJson<{ sha: string }>(`${repo}/git/blobs`, {
