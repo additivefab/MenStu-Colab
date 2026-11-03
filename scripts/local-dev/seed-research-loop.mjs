@@ -7,9 +7,13 @@
 //
 // - Writes only to .wrangler/state (local Miniflare state). Never hosted data.
 // - All names are clearly synthetic ("合成"); no real student data.
-// - Creates local logins `synthetic-student` (student) and `synthetic-mentor`
-//   (mentor/admin assigned to the synthetic students); their random passwords
-//   are appended to the gitignored .local-dev-admin.txt (never printed).
+// - Creates local logins `synthetic-student` (student), `synthetic-mentor`
+//   (mentor/admin who reviews the synthetic students), `synthetic-mentor-readonly`
+//   (assigned to synthetic-loop-01 with can_review = 0) and `synthetic-mentor-other`
+//   (not assigned to synthetic-loop-01); their random passwords are appended to
+//   the gitignored .local-dev-admin.txt (never printed).
+// - Also seeds the mentor decision inbox cases (lib/research-loop-inbox.ts):
+//   S18-S21 and the per-viewer expected inbox printed at the end.
 // - GitHub/PR identifiers are fake. GitHub App stays unconfigured locally, so
 //   starting an agent or publishing a PR returns GITHUB_NOT_CONFIGURED.
 // - Idempotent: when the current seed is present it only prints the expected
@@ -32,14 +36,20 @@ const LOCAL_DATABASE_ID = "00000000-0000-4000-8000-000000000000";
 const ADMIN_OPEN_ID = "local-dev-only:superadmin";
 const STUDENT_A = "synthetic-loop-01";
 const STUDENT_B = "synthetic-loop-02";
+/** Inactive student (students.active = 0): its pending run is in nobody's inbox. */
+const STUDENT_C = "synthetic-loop-03";
 const STUDENT_USERNAME = "synthetic-student";
 const MENTOR_USERNAME = "synthetic-mentor";
 const MENTOR_OPEN_ID = "local-dev-only:synthetic-mentor";
+const READONLY_USERNAME = "synthetic-mentor-readonly";
+const READONLY_OPEN_ID = "local-dev-only:synthetic-mentor-readonly";
+const OTHER_USERNAME = "synthetic-mentor-other";
+const OTHER_OPEN_ID = "local-dev-only:synthetic-mentor-other";
 const REPO_ID = 880001;
 const INSTALLATION_ID = 90000001;
 const REPO = "synthetic-lab-org/loop-demo";
 /** Present only when this version of the seed ran (older seeds lack it). */
-const SEED_MARKER_TASK = "task_synthS15b";
+const SEED_MARKER_TASK = "task_synthS21";
 
 const hex = (bytes) => randomBytes(bytes).toString("hex");
 const sha40 = () => hex(20);
@@ -71,6 +81,32 @@ const SCENARIOS = [
   ["S15b", "task_synthS15b", "跟进任务（来自运行 #1 的评审）", "任务：第 1 版草稿待确认（学生）；来源：S15 运行 #1 的评审"],
   ["S16", "task_synthS16", "已关闭", "全部完成：任务已关闭（无人需处理）"],
   ["S17", "task_synthS17", "已取消", "任务：已取消，其余阶段不适用（无人需处理）"],
+  ["S18", "task_synthS18", "导师本人登记的运行待批准", "运行：运行 #1 待导师批准（导师）；由 synthetic-mentor 登记，须由另一位导师/管理员批准"],
+  ["S19", "task_synthS19", "导师起草的任务草稿", "任务：第 1 版草稿待确认（学生）；导师起草，等学生确认"],
+  ["S20", "task_synthS20", "导师发起的代理触及受保护路径", "代码：变更待额外审查（导师）；代理由 synthetic-mentor 发起，须由另一位导师/管理员审查"],
+  ["S21", "task_synthS21", "已停用学生的待批准运行", "运行：运行 #1 待导师批准（导师）；学生 synthetic-loop-03 已停用，不进任何收件箱"],
+];
+
+// ---------------------------------------------------------------------------
+// Expected mentor decision inbox per viewer (rules: lib/research-loop-inbox.ts
+// header). Mirrored in the README.
+// ---------------------------------------------------------------------------
+const INBOX = [
+  ["synthetic-mentor", "admin；审核 01/02/03（can_review = 1），03 已停用", [
+    ["task_confirmation", ["S01", "S02"], "S15b、S19 是本人起草；S17 已取消"],
+    ["change_extra_review", ["S06"], "S20 的代理由本人发起"],
+    ["run_approval", ["S09（运行 #1）"], "S18 是本人登记；S21 学生已停用"],
+    ["result_review", ["S12", "S13（技术无效）"], "S14/S16 已采纳，S15 needs_followup"],
+  ]],
+  ["synthetic-mentor-readonly", "admin；分配 01，can_review = 0", []],
+  ["synthetic-mentor-other", "admin；只审核 02（无科研闭环数据），未分配 01", []],
+  ["local-admin", "superadmin；所有在读学生", [
+    ["task_confirmation", ["S01", "S02", "S15b", "S19"], "S17 已取消"],
+    ["change_extra_review", ["S06", "S20"], ""],
+    ["run_approval", ["S09（运行 #1）", "S18"], "S21 学生已停用"],
+    ["result_review", ["S12", "S13（技术无效）"], ""],
+  ]],
+  ["synthetic-student", "student", []],
 ];
 
 function printTable() {
@@ -78,7 +114,13 @@ function printTable() {
   for (const [code, id, title, expect] of SCENARIOS) {
     console.log(`  【${code}】${title}\n      id=${id}\n      → ${expect}`);
   }
-  console.log("\n登录：学生 synthetic-student（学生视角），导师 synthetic-mentor（导师视角），超级管理员 local-admin；密码见 .local-dev-admin.txt。");
+  console.log("\n期望导师决策收件箱（lib/research-loop-inbox.ts 规则），按登录账号：");
+  for (const [viewer, scope, items] of INBOX) {
+    const count = items.reduce((sum, [, codes]) => sum + codes.length, 0);
+    console.log(`  ${viewer}（${scope}）：${count ? `${count} 项` : "无待办"}`);
+    for (const [kind, codes, note] of items) console.log(`      ${kind.padEnd(19)} ${codes.join(", ")}${note ? `    —— 不含：${note}` : ""}`);
+  }
+  console.log("\n登录：学生 synthetic-student（学生视角），导师 synthetic-mentor / synthetic-mentor-readonly / synthetic-mentor-other，超级管理员 local-admin；密码见 .local-dev-admin.txt。");
   console.log(`学生档案：/students/${STUDENT_A}`);
 }
 
@@ -103,7 +145,7 @@ async function savePasswords(entries) {
 }
 
 async function reset(db, bucket) {
-  const ids = `('${STUDENT_A}', '${STUDENT_B}')`;
+  const ids = `('${STUDENT_A}', '${STUDENT_B}', '${STUDENT_C}')`;
   const users = `(SELECT id FROM app_users WHERE student_id IN ${ids} OR feishu_open_id LIKE 'local-dev-only:synthetic-%')`;
   const statements = [
     `DELETE FROM result_comments WHERE run_id IN (SELECT id FROM runs WHERE student_id IN ${ids})`,
@@ -181,24 +223,52 @@ async function main() {
       VALUES ('local-dev-only:synthetic-student-01', '合成学生甲', 'student', ?, 1)`).bind(STUDENT_A),
     db.prepare(`INSERT INTO app_users (feishu_open_id, display_name, role, student_id, active)
       VALUES (?, '合成导师', 'admin', NULL, 1)`).bind(MENTOR_OPEN_ID),
+    db.prepare(`INSERT INTO students (id, display_name, degree, grade_year, stage, current_focus, tracking_started_at, active)
+      VALUES (?, '合成学生丙（已停用）', '硕士', 2023, '中期', '合成数据：已停用学生，待批准运行不进收件箱', CURRENT_TIMESTAMP, 0)`).bind(STUDENT_C),
+    // No login for 丙: this user only exists as the creator of the S21 run.
+    db.prepare(`INSERT INTO app_users (feishu_open_id, display_name, role, student_id, active)
+      VALUES ('local-dev-only:synthetic-student-03', '合成学生丙（已停用）', 'student', ?, 0)`).bind(STUDENT_C),
+    db.prepare(`INSERT INTO app_users (feishu_open_id, display_name, role, student_id, active)
+      VALUES (?, '合成导师（只读）', 'admin', NULL, 1)`).bind(READONLY_OPEN_ID),
+    db.prepare(`INSERT INTO app_users (feishu_open_id, display_name, role, student_id, active)
+      VALUES (?, '合成导师（其他组）', 'admin', NULL, 1)`).bind(OTHER_OPEN_ID),
   ]);
-  const studentUser = Number((await db.prepare("SELECT id FROM app_users WHERE student_id = ?").bind(STUDENT_A).first()).id);
-  const mentorUser = Number((await db.prepare("SELECT id FROM app_users WHERE feishu_open_id = ?").bind(MENTOR_OPEN_ID).first()).id);
+  const userIdOf = async (openId) => Number((await db.prepare("SELECT id FROM app_users WHERE feishu_open_id = ?").bind(openId).first()).id);
+  const studentUser = await userIdOf("local-dev-only:synthetic-student-01");
+  const studentCUser = await userIdOf("local-dev-only:synthetic-student-03");
+  const mentorUser = await userIdOf(MENTOR_OPEN_ID);
+  const readonlyUser = await userIdOf(READONLY_OPEN_ID);
+  const otherUser = await userIdOf(OTHER_OPEN_ID);
   const studentPassword = randomBytes(18).toString("base64url");
   const mentorPassword = randomBytes(18).toString("base64url");
+  const readonlyPassword = randomBytes(18).toString("base64url");
+  const otherPassword = randomBytes(18).toString("base64url");
+  const adminCredential = async (userId, username, password) => db.prepare(`INSERT INTO local_credentials
+    (app_user_id, student_id, authorized_role, username, password_hash, must_change_password) VALUES (?, NULL, 'admin', ?, ?, 0)`)
+    .bind(userId, username, await hashPassword(password));
+  const assign = (userId, studentId, canReview) => db.prepare(
+    "INSERT INTO mentor_student_assignments (mentor_user_id, student_id, can_review, active) VALUES (?, ?, ?, 1)").bind(userId, studentId, canReview);
   await db.batch([
     db.prepare(`INSERT INTO local_credentials (app_user_id, student_id, authorized_role, username, password_hash, must_change_password)
       VALUES (?, ?, 'student', ?, ?, 0)`).bind(studentUser, STUDENT_A, STUDENT_USERNAME, await hashPassword(studentPassword)),
-    db.prepare(`INSERT INTO local_credentials (app_user_id, student_id, authorized_role, username, password_hash, must_change_password)
-      VALUES (?, NULL, 'admin', ?, ?, 0)`).bind(mentorUser, MENTOR_USERNAME, await hashPassword(mentorPassword)),
-    db.prepare("INSERT INTO mentor_student_assignments (mentor_user_id, student_id, can_review, active) VALUES (?, ?, 1, 1)").bind(mentorUser, STUDENT_A),
-    db.prepare("INSERT INTO mentor_student_assignments (mentor_user_id, student_id, can_review, active) VALUES (?, ?, 1, 1)").bind(mentorUser, STUDENT_B),
+    await adminCredential(mentorUser, MENTOR_USERNAME, mentorPassword),
+    await adminCredential(readonlyUser, READONLY_USERNAME, readonlyPassword),
+    await adminCredential(otherUser, OTHER_USERNAME, otherPassword),
+    assign(mentorUser, STUDENT_A, 1),
+    assign(mentorUser, STUDENT_B, 1),
+    // Reviewable but inactive: S21 is excluded only because 丙 is inactive.
+    assign(mentorUser, STUDENT_C, 1),
+    assign(readonlyUser, STUDENT_A, 0),
+    assign(otherUser, STUDENT_B, 1),
     db.prepare(`INSERT INTO student_repository_bindings (student_id, github_username, repository_url, repository_full_name, visibility, last_mutation_id, created_by_user_id)
       VALUES (?, 'synthetic-student-a', 'https://github.com/${REPO}', ?, 'private', 'seed_binding_a', ?)`).bind(STUDENT_A, REPO, adminId),
     db.prepare(`INSERT INTO student_repository_bindings (student_id, github_username, repository_url, repository_full_name, visibility, last_mutation_id, created_by_user_id)
       VALUES (?, 'synthetic-student-b', 'https://github.com/synthetic-lab-org/unlinked-demo', 'synthetic-lab-org/unlinked-demo', 'private', 'seed_binding_b', ?)`).bind(STUDENT_B, adminId),
   ]);
-  await savePasswords([["synthetic_student", STUDENT_USERNAME, studentPassword], ["synthetic_mentor", MENTOR_USERNAME, mentorPassword]]);
+  await savePasswords([
+    ["synthetic_student", STUDENT_USERNAME, studentPassword], ["synthetic_mentor", MENTOR_USERNAME, mentorPassword],
+    ["synthetic_mentor_readonly", READONLY_USERNAME, readonlyPassword], ["synthetic_mentor_other", OTHER_USERNAME, otherPassword],
+  ]);
 
   // Guidance notes (sources for S15 chain and S01) ------------------------------
   const note = async (title, body, nextAction, criteria, ago) => {
@@ -254,13 +324,13 @@ async function main() {
 
   /** Inserts a task with its versions and audit events. `confirmed` is the
    * confirmed version (or null); `end` closes/cancels it afterwards. */
-  async function addTask({ code, versions, confirmed = null, end = null, author = studentUser, confirmer = mentorUser,
-    sourceGuidanceNoteId = null, sourceRunId = null, parentTaskId = null, ago }) {
+  async function addTask({ code, versions, confirmed = null, end = null, student = STUDENT_A, owner = studentUser, author = owner,
+    confirmer = mentorUser, sourceGuidanceNoteId = null, sourceRunId = null, parentTaskId = null, ago }) {
     const id = `task_synth${code}`;
     const contents = versions.map((extra) => parseTaskContent({ ...baseContent, ...extra }));
     const shas = [];
     for (const [index, content] of contents.entries()) {
-      shas.push(await taskSnapshotSha256(buildTaskSnapshot({ taskId: id, version: index + 1, studentId: STUDENT_A, content })));
+      shas.push(await taskSnapshotSha256(buildTaskSnapshot({ taskId: id, version: index + 1, studentId: student, content })));
     }
     const current = contents.length;
     const status = end === "close" ? "closed" : end === "cancel" ? "canceled" : confirmed === current ? "confirmed" : "draft";
@@ -268,7 +338,7 @@ async function main() {
       (id, student_id, source_guidance_note_id, source_run_id, parent_task_id, title, status, current_version, confirmed_version,
        created_by_user_id, create_mutation_id, last_mutation_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(id, STUDENT_A, sourceGuidanceNoteId, sourceRunId, parentTaskId, contents[current - 1].title, status, current, confirmed,
+      .bind(id, student, sourceGuidanceNoteId, sourceRunId, parentTaskId, contents[current - 1].title, status, current, confirmed,
         author, `seed_${code}_create`, `seed_${code}_last`, ts(ago), ts(ago - 30 - current * 5))];
     contents.forEach((content, index) => {
       const version = index + 1;
@@ -300,7 +370,7 @@ async function main() {
       { previousStatus: confirmed === current ? "confirmed" : "draft", mutationId: `seed_${code}_last` }, ago - 30 - current * 5);
     await db.batch(statements);
     const confirmedIndex = (confirmed ?? 1) - 1;
-    return { id, code, version: confirmed ?? 1, content: contents[confirmedIndex], snapshotSha256: shas[confirmedIndex] };
+    return { id, code, studentId: student, owner, version: confirmed ?? 1, content: contents[confirmedIndex], snapshotSha256: shas[confirmedIndex] };
   }
 
   /** Stores the change blob the agent-attempts service would store; returns its key/sha. */
@@ -320,21 +390,21 @@ async function main() {
 
   const baseCommit = sha40();
   /** Agent attempt + its event stream. */
-  async function addAttempt(task, { status, ago, change = null, tests = [], changedPaths = [], errorCode = "", errorMessage = "", events = [] }) {
+  async function addAttempt(task, { status, ago, change = null, tests = [], changedPaths = [], errorCode = "", errorMessage = "", events = [], requester = task.owner }) {
     const id = `att_synth${task.code}`;
     const ended = status === "change_ready" || status === "failed" || status === "canceled";
     const running = status === "running";
     const stored = change ? await storeChange(id, change.files, change.diff) : null;
-    const contextSha = await agentContextSnapshotSha256(buildTaskSnapshot({ taskId: task.id, version: task.version, studentId: STUDENT_A, content: task.content }), baseCommit);
+    const contextSha = await agentContextSnapshotSha256(buildTaskSnapshot({ taskId: task.id, version: task.version, studentId: task.studentId, content: task.content }), baseCommit);
     const statements = [db.prepare(`INSERT INTO agent_attempts
       (id, task_id, task_version, student_id, provider, model_id, sdk_version, credential_profile_id, github_repository_id, base_commit_sha,
        context_snapshot_sha256, status, worker_id, lease_epoch, lease_expires_at, heartbeat_at, idempotency_key, diff_sha256, diff_r2_key,
        changed_paths_json, tests_json, error_code, error_message, requested_by_user_id, created_at, started_at, ended_at, updated_at)
       VALUES (?, ?, ?, ?, 'codex', 'synthetic-model', 'synthetic-sdk/0.0', 'cred_synthstudent', ?, ?, ?, ?, 'rnr_synthagent1', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(id, task.id, task.version, STUDENT_A, REPO_ID, baseCommit, contextSha, status,
+      .bind(id, task.id, task.version, task.studentId, REPO_ID, baseCommit, contextSha, status,
         running ? new Date(Date.now() + 24 * 3600_000).toISOString() : null, running ? iso(1) : null, `seed_att_${task.code}`,
         stored?.sha ?? null, stored?.key ?? null, JSON.stringify(stored?.paths ?? changedPaths), JSON.stringify(tests), errorCode, errorMessage,
-        studentUser, ts(ago), iso(ago - 1), ended ? iso(ago - 15) : null, ts(ended ? ago - 15 : 1))];
+        requester, ts(ago), iso(ago - 1), ended ? iso(ago - 15) : null, ts(ended ? ago - 15 : 1))];
     events.forEach(([kind, payload], index) => statements.push(db.prepare(
       "INSERT INTO agent_attempt_events (attempt_id, sequence, kind, payload_json, created_at) VALUES (?, ?, ?, ?, ?)")
       .bind(id, index + 1, kind, JSON.stringify(payload), ts(ago - 1 - index))));
@@ -366,8 +436,8 @@ async function main() {
     await db.prepare(`INSERT INTO change_requests (id, task_id, attempt_id, student_id, github_repository_id, base_commit_sha, branch_name,
         head_commit_sha, pr_number, pr_url, status, requires_extra_review, published_by_user_id, version, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(id, attempt.task.id, attempt.id, STUDENT_A, REPO_ID, baseCommit, `tanyan/${attempt.task.id.slice(-8)}/${attempt.id.slice(-8)}`,
-        head, pr, pr ? `https://github.com/${REPO}/pull/${pr}` : "", status, extraReview ? 1 : 0, pr ? studentUser : null,
+      .bind(id, attempt.task.id, attempt.id, attempt.task.studentId, REPO_ID, baseCommit, `tanyan/${attempt.task.id.slice(-8)}/${attempt.id.slice(-8)}`,
+        head, pr, pr ? `https://github.com/${REPO}/pull/${pr}` : "", status, extraReview ? 1 : 0, pr ? attempt.task.owner : null,
         pr ? (status === "merged" ? 4 : 3) : 1, ts(ago), ts(ago - 5)).run();
     return { id, head, task: attempt.task };
   }
@@ -382,11 +452,11 @@ async function main() {
   };
 
   /** Run (spec + approval + events). `seq` keeps ids unique within a task. */
-  async function addRun(cr, { seq = "a", epochs, status, ago, exitCode = null, failureReason = "" }) {
+  async function addRun(cr, { seq = "a", epochs, status, ago, exitCode = null, failureReason = "", creator = cr.task.owner }) {
     const task = cr.task;
     const id = `run_synth${task.code}${seq}`;
     const runSpec = {
-      schema: "tanyan.runspec/v1", taskId: task.id, taskVersion: task.version, taskSnapshotSha256: task.snapshotSha256, studentId: STUDENT_A,
+      schema: "tanyan.runspec/v1", taskId: task.id, taskVersion: task.version, taskSnapshotSha256: task.snapshotSha256, studentId: task.studentId,
       repository: { provider: "github", repositoryId: REPO_ID, fullName: REPO }, executedCommitSha: cr.head, changeRequestId: cr.id,
       entrypoint: { id: "ep_synth1", argv: ["python", "scripts/train_eval.py"], imageRef: entry.image_ref, params: { epochs } },
       dataset: { versionId: "ds_synth1", manifestSha256: dataset.manifest_sha256, splitManifestSha256: dataset.split_manifest_sha256, mount: "read_only" },
@@ -400,7 +470,7 @@ async function main() {
     const statements = [
       db.prepare(`INSERT INTO run_specs (sha256, canonical_json, task_id, task_version, student_id, github_repository_id, executed_commit_sha, entrypoint_id, dataset_version_id, change_request_id, created_by_user_id, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, 'ep_synth1', 'ds_synth1', ?, ?, ?)`)
-        .bind(sha, canonicalJson(runSpec), task.id, task.version, STUDENT_A, REPO_ID, cr.head, cr.id, studentUser, ts(ago)),
+        .bind(sha, canonicalJson(runSpec), task.id, task.version, task.studentId, REPO_ID, cr.head, cr.id, creator, ts(ago)),
     ];
     if (approved) statements.push(db.prepare("INSERT INTO run_approvals (id, run_spec_sha256, approved_by_user_id, note, approved_at) VALUES (?, ?, ?, '合成批准', ?)")
       .bind(approvalId, sha, mentorUser, ts(ago - 5)));
@@ -409,10 +479,10 @@ async function main() {
     statements.push(db.prepare(`INSERT INTO runs (id, run_spec_sha256, attempt, approval_id, task_id, student_id, status, idempotency_key, submit_tag, runner_id, lease_epoch,
         lease_expires_at, heartbeat_at, scheduler_job_id, exit_code, failure_reason, created_by_user_id, created_at, queued_at, started_at, ended_at, updated_at)
       VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(id, sha, approvalId, task.id, STUDENT_A, status, `seed_run_${task.code}${seq}`, `tanyan-${id}`,
+      .bind(id, sha, approvalId, task.id, task.studentId, status, `seed_run_${task.code}${seq}`, `tanyan-${id}`,
         approved ? "rnr_synthcompute1" : null, leaseEpoch,
         leased ? new Date(Date.now() + 3600_000).toISOString() : null, leased ? iso(1) : null,
-        approved ? `synthetic-job-${task.code}${seq}` : null, exitCode, failureReason, studentUser, ts(ago),
+        approved ? `synthetic-job-${task.code}${seq}` : null, exitCode, failureReason, creator, ts(ago),
         approved ? iso(ago - 5) : null, approved ? iso(ago - 8) : null, terminal ? iso(ago - 40) : null, ts(terminal ? ago - 40 : 1)));
     const payloadFor = (to) => {
       if (to === "queued") return { action: "approved", approvalId, runSpecSha256: sha };
@@ -425,7 +495,7 @@ async function main() {
     ["awaiting_approval", ...path].forEach((to, index) => {
       const byUser = index === 0 || to === "queued";
       statements.push(db.prepare("INSERT INTO run_events (run_id, sequence, from_status, to_status, actor_type, actor_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(id, index + 1, from, to, byUser ? "user" : "runner", index === 0 ? String(studentUser) : to === "queued" ? String(mentorUser) : "rnr_synthcompute1",
+        .bind(id, index + 1, from, to, byUser ? "user" : "runner", index === 0 ? String(creator) : to === "queued" ? String(mentorUser) : "rnr_synthcompute1",
           JSON.stringify(index === 0 ? { action: "created", runSpecSha256: sha } : payloadFor(to)), ts(ago - index * 5)));
       from = to;
     });
@@ -597,8 +667,35 @@ async function main() {
   // S17 canceled task (draft canceled before any code)
   await addTask({ code: "S17", versions: [{ title: titleOf("S17") }], end: "cancel", ago: agoOf(17) });
 
-  console.log(`Seeded synthetic research-loop data for ${STUDENT_A} (and ${STUDENT_B} without a repository link).`);
-  console.log(`Logins "${STUDENT_USERNAME}" and "${MENTOR_USERNAME}"; passwords saved to ${path.relative(process.cwd(), credentialFile) || credentialFile} (not printed).`);
+  // Mentor decision inbox cases (lib/research-loop-inbox.ts) ----------------
+  // S18 run awaiting approval, registered by synthetic-mentor itself (no self-approval)
+  {
+    const { cr } = await publishedTask("S18", agoOf(18));
+    await addRun(cr, { epochs: 15, status: "awaiting_approval", ago: 150, creator: mentorUser });
+  }
+
+  // S19 draft written by synthetic-mentor (waits on the student, not on its author)
+  await addTask({ code: "S19", versions: [{ title: titleOf("S19"), hypothesis: "加入 label smoothing 0.1 后，macro_f1 提升不少于 0.01。" }],
+    author: mentorUser, ago: agoOf(19) });
+
+  // S20 protected-path change from an attempt synthetic-mentor requested (no self-review)
+  {
+    const task = await addTask({ code: "S20", versions: [{ title: titleOf("S20") }], confirmed: 1, ago: agoOf(20) });
+    const attempt = await addAttempt(task, { status: "change_ready", ago: agoOf(20) - 30, tests: passingTests, events: readyEvents, requester: mentorUser, change: {
+      files: [{ path: "src/augment.py", content: "SMOOTHING = 0.1\n" }, { path: "src/requirements.txt", content: "torch==2.4.0\n" }],
+      diff: "--- a/src/requirements.txt\n+++ b/src/requirements.txt\n@@ -1 +1 @@\n-torch==2.2.0\n+torch==2.4.0\n--- a/src/augment.py\n+++ b/src/augment.py\n@@ -1 +1 @@\n-SMOOTHING = 0.0\n+SMOOTHING = 0.1\n",
+    } });
+    await addChangeRequest(attempt, { status: "pending_review", extraReview: true, ago: agoOf(20) - 50 });
+  }
+
+  // S21 inactive student 丙 with a run awaiting approval (reviewable, but out of scope)
+  {
+    const { cr } = await publishedTask("S21", agoOf(21), { student: STUDENT_C, owner: studentCUser });
+    await addRun(cr, { epochs: 10, status: "awaiting_approval", ago: 200 });
+  }
+
+  console.log(`Seeded synthetic research-loop data for ${STUDENT_A} (and ${STUDENT_B} without a repository link, inactive ${STUDENT_C}).`);
+  console.log(`Logins "${STUDENT_USERNAME}", "${MENTOR_USERNAME}", "${READONLY_USERNAME}", "${OTHER_USERNAME}"; passwords saved to ${path.relative(process.cwd(), credentialFile) || credentialFile} (not printed).`);
   printTable();
 }
 
