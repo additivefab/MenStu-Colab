@@ -8,13 +8,11 @@ import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { extname, join, sep } from "node:path";
 
-import { LIMITS, normalizeRepoPath } from "../../lib/research-loop/contracts.ts";
+import { EGRESS_IMAGE_EXTENSIONS, LIMITS, normalizeRepoPath } from "../../lib/research-loop/contracts.ts";
 
-/** Extensions treated as images for `allowImages`. Vector/PDF figures can
- * embed raster data, so they are conservatively included. */
-export const IMAGE_EXTENSIONS = new Set([
-  ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".svg", ".pdf", ".eps", ".ico", ".heic",
-]);
+/** Extensions treated as images for `allowImages`: the shared contract list,
+ * identical to the platform's re-check. */
+export const IMAGE_EXTENSIONS = new Set(EGRESS_IMAGE_EXTENSIONS);
 const TABLE_EXTENSIONS = new Set([".csv", ".tsv", ".parquet", ".xlsx", ".xls", ".feather", ".arrow"]);
 const LOG_EXTENSIONS = new Set([".log", ".out", ".err"]);
 const MODEL_EXTENSIONS = new Set([".pt", ".pth", ".ckpt", ".safetensors", ".onnx", ".h5", ".hdf5", ".pkl", ".joblib", ".bin", ".npz", ".npy"]);

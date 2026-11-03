@@ -106,7 +106,11 @@ also added to the blocked set.
    after a `findByTag`. If it is pending or running, the runner monitors it. If it
    has finished, the runner collects outputs and sends `complete`. If it has failed
    or been canceled, the run is terminal on the platform and nothing more is done.
-   When the reconcile response carries `status`, it takes precedence.
+   The reconcile response (`ComputeReconcileResponse = {status, leaseExpiresAt,
+   cancelRequested}`) takes precedence: its `cancelRequested` is persisted like a
+   heartbeat's, and its lease time renews the local lease clock. No heartbeat is
+   sent before the reconcile call, because the platform answers heartbeats for a
+   run in `reconciling` with `409 RECONCILE_REQUIRED`.
 4. **cancel** (`cancelRequested` in a heartbeat):
    - Before submission, the run completes as `canceled` without starting anything.
    - After submission, the runner calls `cancel(<recorded job id>)` and polls until
@@ -226,7 +230,7 @@ For each entry under `out/`, using `lstat` and never following links:
 | sha256 equals any dataset-manifest file hash, or the manifest hashes themselves | `rejected` (raw-data copy) |
 | Hard link (link count > 1) | `held` |
 | Extension not in `allowedExtensions` (or no extension) | `held` |
-| Image (`.png .jpg .jpeg .gif .bmp .tif(f) .webp .svg .pdf .eps .ico .heic`) with `allowImages=false` | `held` |
+| Image (`EGRESS_IMAGE_EXTENSIONS` in `contracts.ts`: `.png .jpg .jpeg .gif .bmp .tif(f) .webp .svg .pdf .eps .ico .heic .heif .avif`, the same list the platform re-check uses) with `allowImages=false` | `held` |
 | Size > `maxFileBytes`, or > `LIMITS.maxPublishedArtifactBytes` | `held` |
 | Running total of published bytes would exceed `maxTotalBytes` (paths in sorted order) | `held` |
 | Otherwise | `published` |
@@ -235,14 +239,19 @@ For each entry under `out/`, using `lstat` and never following links:
   files stay on lab storage. Each artifact carries an opaque
   `labLocator = lab://<runnerId>/<runId>/out/<path>`, which is not a URL.
 - `kind` is derived from path and extension only.
-- Non-regular entries are reported with `sha256: ""` and `sizeBytes: 0`.
+- Non-regular entries are reported with `sha256: ""` and `sizeBytes: 0`. The contract
+  allows an empty hash only together with `egressDecision: "rejected"`; the platform
+  records such entries and never publishes them.
 - The raw-copy check matches exact bytes only. A transformed or re-encoded copy of
   data is not detected. That case is covered by the extension, image and size rules
   and by human review of held outputs.
 
-Metrics come only from a **published** `out/metrics.json`. They must pass
-`validateMetricsFile`, and the file's `evaluationProtocolSha256` must equal the spec's. If either
-check fails, the runner sets `metricsArtifactPath` to `null` and logs the reason.
+Metrics come only from a **published** `out/metrics.json`. Whenever that file is a
+published regular file, the runner reports `metricsArtifactPath: "metrics.json"`, even if
+it fails the runner's own check (`validateMetricsFile`, protocol hash equal to the
+spec's); the reason is logged and kept in `state.metricsNote`. The platform validates
+the file again and records `technical_validity = "invalid"` (T19). Without a published
+`metrics.json` the path is `null` and the platform records `unknown`.
 
 ## Manifest
 
@@ -253,7 +262,9 @@ All fields come from the claim, from the spec, or from measurements on the execu
 
 `exitCode` is the process's exit code, or 128 plus the signal number. If the job started but no
 exit code could be determined (the launcher was SIGKILLed and the scheduler has
-no code), the manifest reports `-1`. When the job never started, the manifest is `null`.
+no code), both `manifest.execution.exitCode` and the `complete` request's `exitCode`
+are `null` (unknown); the platform compares the two with null-aware equality. When the
+job never started, the manifest is `null` and `exitCode` is `null`.
 
 ## Slurm vs local
 
@@ -276,13 +287,13 @@ no code), the manifest reports `-1`. When the job never started, the manifest is
 
 These tests simulate the platform, Slurm and Apptainer. They are not integration tests.
 
-## Open contract questions
+## Contract decisions (settled by the W8 integration)
 
-These are reported to the controller. `lib/` was not changed.
+- `ComputeReconcileResponse = {status, leaseExpiresAt, cancelRequested}` is defined in
+  `contracts.ts`; platform and runner both use it.
+- `ManifestArtifact.sha256` may be `""` only for `rejected` entries (non-regular files).
+- Unknown exit codes are `null`, never `-1`.
+- Invalid metrics are reported (path set) so the platform marks them `invalid`.
 
-- `ComputeReconcileResponse` is undefined. The runner accepts an optional `{status: RunStatus}`.
-- `ManifestArtifact.sha256` for rejected non-regular files: the runner sends `""`.
-- `RunManifest.execution.exitCode` is a non-null number. The runner uses `-1` when it
-  is unknown after the job started.
-- When metrics are invalid, the runner withholds `metricsArtifactPath`, so the platform
-  sees "no metrics" (`unknown`) instead of `invalid`.
+`tests/research-loop-e2e.test.mjs` runs this runner unmodified against the real
+platform Worker (Miniflare) with simulated GitHub and container.

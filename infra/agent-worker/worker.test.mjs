@@ -382,3 +382,16 @@ test("config.example.json loads and resolves", async () => {
   assert.equal(config.gitReadFallback.urlTemplate, "git@github.com:{fullName}.git");
   assert.ok(config.agent.testCommandPrefixes.includes("pytest"));
 });
+
+test("claim whose task snapshot does not match contextSnapshotSha256 is refused before any agent run", async (t) => {
+  const env = await setup(t);
+  const fake = new FakeAdapter({ script: async () => { throw new Error("agent must not run"); } });
+  const work = makeWork(env.repo);
+  // Same hash, tampered snapshot: e.g. a widened allowedPaths list.
+  await runAttempt({ ...work, task: { ...work.task, allowedPaths: ["**"] } }, env.ctx({ codex: fake }));
+  const [result] = env.platform.byAction("result");
+  assert.equal(result.outcome, "failed");
+  assert.equal(result.errorCode, "CONTEXT_MISMATCH");
+  assert.deepEqual(result.files, []);
+  assert.equal(fake.received.length, 0, "adapter never started");
+});

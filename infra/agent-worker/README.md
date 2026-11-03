@@ -22,7 +22,8 @@ it must run with `node --experimental-strip-types`.
 ## Flow
 
 ```
-claim ──► work/<attemptId>/repo: git fetch exactly baseCommitSha (short-lived read token via
+claim ──► verify contextSnapshotSha256 = sha256(canonicalJson({task, baseCommitSha})) (else CONTEXT_MISMATCH)
+      ──► work/<attemptId>/repo: git fetch exactly baseCommitSha (short-lived read token via
           one-shot http.extraHeader env; never in argv/.git/config), verify HEAD, no remotes
       ──► prompt + policy from the task snapshot and worker config only (repo text grants nothing)
       ──► per-profile lock (<profilesDir>/<id>/.run.lock, O_EXCL, stale-pid recovery)
@@ -37,7 +38,7 @@ claim ──► work/<attemptId>/repo: git fetch exactly baseCommitSha (short-li
       ──► result (tests = real commands with provider-reported exit codes; usage)
 ```
 
-Result error codes: `POLICY_VIOLATION`, `BUDGET_EXCEEDED`, `AGENT_UNRESPONSIVE`,
+Result error codes: `CONTEXT_MISMATCH`, `POLICY_VIOLATION`, `BUDGET_EXCEEDED`, `AGENT_UNRESPONSIVE`,
 `NO_CHANGES`, `CHANGE_TOO_LARGE`, `SECRET_IN_CHANGES`, `UNSUPPORTED_CHANGE`
 (symlink or submodule), `WORKSPACE_ERROR`, `WORKSPACE_TAMPERED`,
 `NO_READ_ACCESS`, `PROFILE_NOT_FOUND`, `PROFILE_INSECURE`, `PROFILE_INVALID`,

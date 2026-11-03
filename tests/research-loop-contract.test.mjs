@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  AGENT_ATTEMPT_TRANSITIONS, RUN_TRANSITIONS, canTransition, canonicalJson, evaluatePathPolicy,
-  normalizeRepoPath, runSpecSha256, sha256Hex, validateMetricsFile,
+  AGENT_ATTEMPT_TRANSITIONS, EGRESS_IMAGE_EXTENSIONS, RUN_TRANSITIONS, agentContextSnapshotSha256, canTransition, canonicalJson,
+  evaluatePathPolicy, normalizeRepoPath, runSpecSha256, sha256Hex, validateMetricsFile,
 } from "../lib/research-loop/contracts.ts";
 import { parseTaskContent } from "../lib/research-loop/tasks-core.ts";
 
@@ -79,4 +79,19 @@ test("task content always keeps default protected paths", () => {
   assert.ok(content.protectedPaths.includes(".github/**"));
   assert.ok(content.protectedPaths.includes("configs/eval.yaml"));
   assert.throws(() => parseTaskContent({ title: "t", researchQuestion: "q", instructions: "i", acceptanceCriteria: "a", allowedPaths: ["../x"] }));
+});
+
+test("agent context hash covers the task snapshot and the base commit", async () => {
+  const task = { schema: "tanyan.task/v1", taskId: "task_a", version: 1, studentId: "s1", title: "t", researchQuestion: "q", hypothesis: "",
+    instructions: "i", acceptanceCriteria: "a", allowedPaths: ["src/**"], protectedPaths: [".github/**"], budget: {} };
+  const base = "1".repeat(40);
+  const hash = await agentContextSnapshotSha256(task, base);
+  assert.equal(hash, await sha256Hex(canonicalJson({ task, baseCommitSha: base })));
+  assert.notEqual(hash, await agentContextSnapshotSha256({ ...task, allowedPaths: ["**"] }, base));
+  assert.notEqual(hash, await agentContextSnapshotSha256(task, "2".repeat(40)));
+});
+
+test("one image extension list for the egress gate and the platform re-check", () => {
+  for (const extension of [".png", ".pdf", ".svg", ".heif", ".avif"]) assert.ok(EGRESS_IMAGE_EXTENSIONS.includes(extension), extension);
+  assert.ok(EGRESS_IMAGE_EXTENSIONS.every((extension) => /^\.[a-z0-9]+$/.test(extension)));
 });

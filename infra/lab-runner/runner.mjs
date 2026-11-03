@@ -63,7 +63,9 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
   }
 
   async function beat(ctx) {
-    if (ctx.leaseLost || ctx.heartbeatStopped) return;
+    // The platform rejects heartbeats for a run in "reconciling" (409
+    // RECONCILE_REQUIRED); the reconcile response itself renews the lease.
+    if (ctx.leaseLost || ctx.heartbeatStopped || ctx.awaitingReconcile) return;
     try {
       const response = await platform.heartbeat({
         runId: ctx.work.runId,
@@ -293,6 +295,10 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
   // collection and completion
   // -------------------------------------------------------------------------
 
+  // Contract (RunManifest.metricsArtifactPath): the path is reported whenever
+  // metrics.json is a published regular file, even when it fails the runner's
+  // own check. The platform re-validates and records technical_validity
+  // "invalid" (T19); withholding the path would turn "invalid" into "unknown".
   async function readMetrics(ctx, published) {
     const entry = published.find((file) => file.relativePath === METRICS_RELATIVE_PATH);
     if (!entry) return { path: null, note: "no published metrics.json" };
@@ -300,12 +306,12 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
     try {
       parsed = JSON.parse(await readFile(entry.absolutePath, "utf8"));
     } catch {
-      return { path: null, note: "metrics.json is not valid JSON" };
+      return { path: METRICS_RELATIVE_PATH, note: "metrics.json is not valid JSON" };
     }
     const checked = validateMetricsFile(parsed);
-    if (!checked.ok) return { path: null, note: `metrics.json failed validation: ${checked.error}` };
+    if (!checked.ok) return { path: METRICS_RELATIVE_PATH, note: `metrics.json failed validation: ${checked.error}` };
     if (checked.metrics.evaluationProtocolSha256 !== ctx.work.spec.evaluationProtocolSha256) {
-      return { path: null, note: "metrics.json evaluationProtocolSha256 differs from the approved spec" };
+      return { path: METRICS_RELATIVE_PATH, note: "metrics.json evaluationProtocolSha256 differs from the approved spec" };
     }
     return { path: METRICS_RELATIVE_PATH, note: null };
   }
@@ -334,10 +340,12 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
       });
       if (gate.truncated) logger.warn("artifact list truncated to maxArtifacts", { runId: ctx.work.runId, omitted: gate.truncated });
       const metrics = await readMetrics(ctx, gate.published);
-      if (metrics.note) logger.info("metrics not reported", { runId: ctx.work.runId, reason: metrics.note });
+      if (metrics.note) {
+        logger.info(metrics.path ? "metrics.json failed the runner check; reported anyway so the platform marks it invalid" : "no metrics reported", { runId: ctx.work.runId, reason: metrics.note });
+      }
       ctx.state.metricsNote = metrics.note;
       const environment = (await readJsonIfExists(join(ctx.runDir, "env.json"))) ?? {};
-      if (exitCode === null) exitCode = -1;
+      // exitCode stays null when unknown (contracts: RunManifest.execution.exitCode).
       manifest = buildManifest({
         work: ctx.work,
         runnerId: config.runnerId,
@@ -434,10 +442,17 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
       request.schedulerJobId = job.jobId;
       request.schedulerState = job.state;
     }
+    /** @type {import("../../lib/research-loop/contracts.ts").ComputeReconcileResponse} */
     const response = await platform.reconcile(request);
     logger.info("reconciled", { runId: ctx.work.runId, found: Boolean(job), jobId: job?.jobId, state: job?.state, status: response?.status });
-
+    ctx.awaitingReconcile = false;
+    if (typeof response?.leaseExpiresAt === "string") ctx.leaseExpiresAt = Date.parse(response.leaseExpiresAt);
+    if (response?.cancelRequested === true && !ctx.state.cancelRequested) {
+      ctx.state.cancelRequested = true;
+      await persist(ctx);
+    }
     const status = typeof response?.status === "string" ? response.status : null;
+    if (status === "dispatching" || status === "running" || status === "collecting") ctx.phase = status;
     if (status && TERMINAL_RUN_STATUSES.includes(status)) return markTerminal(ctx, status);
     if (!job) {
       if (status === "canceled" || (!status && ctx.state.cancelRequested)) return markTerminal(ctx, "canceled");
@@ -477,6 +492,7 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
       runDir,
       phase: "dispatching",
       leaseLost: false,
+      awaitingReconcile: work.mode === "reconcile",
       leaseExpiresAt: Date.parse(work.leaseExpiresAt),
       state: {
         ...previous,
@@ -495,7 +511,8 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
     logger.info("claimed", { runId: work.runId, mode: work.mode, leaseEpoch: work.leaseEpoch });
     startHeartbeats(ctx);
     try {
-      // Confirm the lease right away and learn about a pending cancel before doing any work.
+      // Execute mode: confirm the lease right away and learn about a pending
+      // cancel before doing any work. Reconcile mode: the reconcile call does this.
       await beat(ctx);
       ensureLease(ctx);
       if (work.mode === "reconcile") await reconcile(ctx);

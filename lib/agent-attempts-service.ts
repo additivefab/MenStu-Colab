@@ -4,7 +4,7 @@ import { GithubCommitNotFoundError, resolveCommitSha } from "./github/repository
 import { GithubNotConfiguredError, mintRepositoryReadToken } from "./github/tokens";
 import type { LabRunner } from "./lab-runner-auth";
 import {
-  AGENT_ATTEMPT_TRANSITIONS, AGENT_PROVIDERS, LIMITS, PathPolicyError, TERMINAL_ATTEMPT_STATUSES,
+  AGENT_ATTEMPT_TRANSITIONS, AGENT_PROVIDERS, LIMITS, agentContextSnapshotSha256, PathPolicyError, TERMINAL_ATTEMPT_STATUSES,
   canTransition, canonicalJson, evaluatePathPolicy, isCommitSha, newId, normalizeRepoPath, sha256Hex,
   type AgentAttemptStatus, type AgentClaimResponse, type AgentEvent, type AgentHeartbeatResponse,
   type AgentProvider, type ChangedFile, type JsonValue, type RepositoryReadAccess, type ResearchTaskSnapshot,
@@ -32,11 +32,8 @@ const leaseLost = () => new ResearchLoopHttpError(409, "LEASE_LOST", "租约已�
 const tooLarge = (message: string) => new ResearchLoopHttpError(413, "PAYLOAD_TOO_LARGE", message);
 const invalidResult = (message: string) => new ResearchLoopHttpError(400, "INVALID_RESULT", message);
 
-/** Hash bound into every attempt: the confirmed task snapshot plus base SHA.
- * Workers can recompute it from the claim payload. */
-export async function agentContextSnapshotSha256(task: ResearchTaskSnapshot, baseCommitSha: string) {
-  return sha256Hex(canonicalJson({ task, baseCommitSha } as unknown as JsonValue));
-}
+/** Hash bound into every attempt (shared definition in contracts.ts). */
+export { agentContextSnapshotSha256 };
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
   if (!value) return fallback;

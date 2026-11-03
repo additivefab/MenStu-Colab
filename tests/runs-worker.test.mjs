@@ -167,7 +167,7 @@ test("run registry: approval binding, lab lease protocol, egress and result revi
       metricsArtifactPath, artifacts: items.map((item) => item.artifact), ...overrides,
     });
     const complete = (work, items, options = {}, status = 200) => lab(runnerToken, {
-      action: "complete", runId: work.runId, leaseEpoch: work.leaseEpoch, outcome: options.outcome ?? "completed", exitCode: options.exitCode ?? 0,
+      action: "complete", runId: work.runId, leaseEpoch: work.leaseEpoch, outcome: options.outcome ?? "completed", exitCode: "exitCode" in options ? options.exitCode : 0,
       manifest: options.manifest === undefined ? manifestFor(work, items, options) : options.manifest,
       publishedFiles: (options.published ?? items).map((item) => item.published),
     }, status);
@@ -480,6 +480,48 @@ test("run registry: approval binding, lab lease protocol, egress and result revi
         await expectJson(await call(`/api/run-artifacts?artifactId=${artifact.id}`, { actor: "root" }), 404);
       }
       assert.match(view.artifacts.find((item) => item.relativePath === "plot.png").egressReason, /图片/);
+    });
+
+    await t.test("contract: hashless entries only when rejected; unknown exit code is null and compared null-aware", async () => {
+      // Rejected symlink/special file: the runner never opens it, so sha256 is "".
+      const work = await claimed();
+      const symlink = { artifact: { relativePath: "data-link", sha256: "", sizeBytes: 0, kind: "other", egressDecision: "rejected", egressReason: "symbolic link (not followed)", labLocator: "lab://out/data-link" } };
+      const done = await complete(work, [file("metrics.json", metricsContent(), { kind: "metrics" }), symlink], { published: [file("metrics.json", metricsContent(), { kind: "metrics" })] });
+      assert.equal(done.status, "completed");
+      const row = await db.prepare("SELECT sha256, egress_decision, r2_key FROM run_artifacts WHERE run_id = ? AND relative_path = 'data-link'").bind(work.runId).first();
+      assert.deepEqual(row, { sha256: "", egress_decision: "rejected", r2_key: null });
+      assert.equal((await detail(work.runId)).result.technicalValidity, "valid");
+      // "" is not a hash for anything that could be published or held.
+      const held = await claimed();
+      const heldEntry = { artifact: { ...symlink.artifact, egressDecision: "held" } };
+      assert.equal((await complete(held, [heldEntry], { metricsArtifactPath: null, published: [] }, 422)).code, "MANIFEST_INVALID");
+
+      // Unknown exit code: null in both places is accepted and never valid.
+      const unknown = await claimed();
+      const metrics = file("metrics.json", metricsContent(), { kind: "metrics" });
+      const unknownDone = await complete(unknown, [metrics], { exitCode: null, manifest: manifestFor(unknown, [metrics], { exitCode: null }) });
+      assert.equal(unknownDone.technicalValidity, "invalid");
+      const view = await detail(unknown.runId);
+      assert.equal(view.run.exitCode, null);
+      assert.equal(view.result.manifest.execution.exitCode, null);
+      assert.match(view.result.validityNotes, /退出码未知/);
+      // Null-aware equality: null must not match a number either way.
+      for (const [top, inManifest] of [[0, null], [null, 0]]) {
+        const mismatch = await claimed();
+        const rejected = await complete(mismatch, [metrics], { exitCode: top, manifest: manifestFor(mismatch, [metrics], { exitCode: inManifest }) }, 422);
+        assert.equal(rejected.code, "MANIFEST_MISMATCH");
+      }
+
+      // Reconcile response (ComputeReconcileResponse): leaseExpiresAt is always a string.
+      const lost = await claimed();
+      await expireLease(lost.runId);
+      const recon = (await claim()).work;
+      assert.equal(recon.mode, "reconcile");
+      const answer = await lab(runnerToken, { action: "reconcile", runId: lost.runId, leaseEpoch: recon.leaseEpoch, found: true, schedulerJobId: "77", schedulerState: "failed" });
+      assert.deepEqual(Object.keys(answer).sort(), ["cancelRequested", "leaseExpiresAt", "status"]);
+      assert.equal(answer.status, "failed");
+      assert.equal(typeof answer.leaseExpiresAt, "string");
+      assert.equal(answer.cancelRequested, false);
     });
 
     const resultFor = async (items, options = {}) => {
