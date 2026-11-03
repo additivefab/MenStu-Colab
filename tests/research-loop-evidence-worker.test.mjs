@@ -346,8 +346,9 @@ test("evidence period parsing uses Shanghai calendar days", () => {
     start: Date.parse("2026-10-26T16:00:00Z"), end: Date.parse("2026-11-02T16:00:00Z"),
   });
   assert.equal(parseEvidencePeriod(null, null, "2026-11-01T16:30:00Z").to, "2026-11-02");
-  assert.deepEqual(parseEvidencePeriod(null, "2026-03-01", "2026-11-02T00:00:00Z").from, "2026-02-23");
-  assert.equal(parseEvidencePeriod("2026-11-01", null, "2026-11-02T00:00:00Z").to, "2026-11-02");
+  // One bound alone is ambiguous: both or neither.
+  assert.throws(() => parseEvidencePeriod(null, "2026-03-01", "2026-11-02T00:00:00Z"), /同时提供/);
+  assert.throws(() => parseEvidencePeriod("2026-11-01", null, "2026-11-02T00:00:00Z"), /同时提供/);
   assert.throws(() => parseEvidencePeriod("2026-11-03", "2026-11-02"), /开始日期不能晚于结束日期/);
   assert.throws(() => parseEvidencePeriod("2026-01-01", "2026-03-04"), /62 天/);
   assert.doesNotThrow(() => parseEvidencePeriod("2026-01-01", "2026-03-03"));

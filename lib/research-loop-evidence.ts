@@ -48,10 +48,12 @@ function shiftDays(dateKey: string, days: number) {
   return new Date((utcMidnight(dateKey) as number) + days * DAY_MS).toISOString().slice(0, 10);
 }
 
-/** Validates the query period; missing bounds default to the last 7 days ending today (Shanghai). */
+/** Validates the query period. Give both bounds or neither; neither means the
+ * last 7 days ending today (Shanghai). One bound alone is ambiguous → 400. */
 export function parseEvidencePeriod(rawFrom: string | null, rawTo: string | null, now: Date | string = new Date()): EvidencePeriod {
   const fromInput = rawFrom?.trim() || null;
   const toInput = rawTo?.trim() || null;
+  if ((fromInput === null) !== (toInput === null)) throw new EvidenceInputError("请同时提供开始和结束日期，或都不提供");
   for (const value of [fromInput, toInput]) {
     if (value !== null && utcMidnight(value) === null) throw new EvidenceInputError("日期格式无效，应为 YYYY-MM-DD");
   }
