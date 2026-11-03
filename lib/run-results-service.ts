@@ -1,10 +1,16 @@
 // Run reads, artifact access and result review (docs/科研闭环_实施规格_v1.md §6.3).
 import { canReviewStudent, canViewStudent } from "./authorization";
 import type { AppUser } from "./feishu-auth";
-import { HYPOTHESIS_OUTCOMES, REVIEW_STATES, TERMINAL_RUN_STATUSES, type HypothesisOutcome, type ReviewState } from "./research-loop/contracts.ts";
+import {
+  HYPOTHESIS_OUTCOMES, REVIEW_STATES, TERMINAL_RUN_STATUSES, type HypothesisOutcome, type ReviewState, type RunStatus,
+} from "./research-loop/contracts.ts";
+import type {
+  InterpretationInput, ProgressDraft, ProgressDraftSource, ResultInterpretationView,
+} from "./research-loop/results-contract.ts";
 import { createResearchTask, parseTaskContent, TaskInputError } from "./research-loop/tasks-core.ts";
 import {
-  RunServiceError, contentTypeFor, datasetView, entrypointView, getRunArtifactBucket, idempotencyKey, loadRun, loadSpec,
+  RunServiceError, contentTypeFor, datasetView, entrypointView, getRunArtifactBucket, idempotencyKey, isRunOwner,
+  listBaselineCandidates, loadRun, loadSpec, readBaselineView, runNumberSql, userAuditStatement,
   type RunRow,
 } from "./run-registry-service";
 
@@ -92,7 +98,13 @@ export async function readRunDetail(d1: D1Database, actor: AppUser, runIdValue: 
     d1.prepare(`SELECT c.*, u.display_name AS author_name FROM result_comments c LEFT JOIN app_users u ON u.id = c.author_user_id
       WHERE c.run_id = ? AND c.deleted_at IS NULL ORDER BY c.id`).bind(runId).all<Record<string, unknown>>(),
   ]);
+  const [baseline, baselineCandidates, interpretationVersions] = await Promise.all([
+    readBaselineView(d1, runId, spec.evaluationProtocolSha256),
+    listBaselineCandidates(d1, row, spec.evaluationProtocolSha256),
+    listInterpretations(d1, runId),
+  ]);
   const canReview = await canReviewStudent(actor, row.student_id);
+  const owner = isRunOwner(actor, row.student_id);
   const terminal = TERMINAL_RUN_STATUSES.includes(row.status);
   const selfCreated = actor.id === createdByUserId || actor.id === row.created_by_user_id;
   return {
@@ -126,6 +138,11 @@ export async function readRunDetail(d1: D1Database, actor: AppUser, runIdValue: 
       id: item.id, authorUserId: item.author_user_id, authorName: item.author_name ?? "", parentCommentId: item.parent_comment_id,
       body: item.body, createdAt: item.created_at,
     })),
+    baseline,
+    baselineCandidates,
+    interpretation: interpretationVersions[0] ?? null,
+    /** Every saved version, newest first. */
+    interpretationVersions,
     permissions: {
       canApprove: canReview && row.status === "awaiting_approval" && !selfCreated,
       canRevokeApproval: canReview && Boolean(row.approval_id) && !terminal,
@@ -133,6 +150,9 @@ export async function readRunDetail(d1: D1Database, actor: AppUser, runIdValue: 
       canRerun: terminal,
       canReview: canReview && Boolean(review),
       canComment: true,
+      canSetBaseline: owner || canReview,
+      canInterpret: owner && INTERPRETABLE_STATUSES.includes(row.status),
+      canDraftProgress: owner || canReview,
     },
   };
 }
@@ -176,6 +196,8 @@ export async function applyRunResultAction(d1: D1Database, actor: AppUser, body:
     case "review": return reviewResult(d1, actor, body);
     case "comment": return commentOnRun(d1, actor, body);
     case "followup": return createFollowup(d1, actor, body);
+    case "interpret": return interpretResult(d1, actor, body);
+    case "progress_draft": return draftProgress(d1, actor, body);
     default: throw new RunServiceError(400, "未知操作", "INVALID_INPUT");
   }
 }
@@ -256,5 +278,192 @@ async function createFollowup(d1: D1Database, actor: AppUser, body: Record<strin
   return {
     taskId: created.taskId, version: created.version, replayed: created.replayed,
     linkedOnReview: Boolean(linked.meta.changes) || review?.followup_task_id === created.taskId,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Student interpretation (batch 4, FA3) and progress drafts (FA4)
+// ---------------------------------------------------------------------------
+
+const INTERPRETABLE_STATUSES: readonly RunStatus[] = ["completed", "failed"];
+const INTERPRETATION_MAX = 4000;
+
+type InterpretationRow = {
+  run_id: string; version: number; author_user_id: number; author_name: string | null; what_it_shows: string;
+  alternative_explanations: string; limitations: string; proposed_next_step: string; request_id: string; created_at: string;
+};
+
+const INTERPRETATION_SQL = `SELECT i.*, u.display_name AS author_name FROM result_interpretations i
+  LEFT JOIN app_users u ON u.id = i.author_user_id`;
+
+function interpretationView(row: InterpretationRow): ResultInterpretationView {
+  return {
+    version: row.version, authorUserId: row.author_user_id, authorName: row.author_name ?? "", createdAt: row.created_at,
+    whatItShows: row.what_it_shows, alternativeExplanations: row.alternative_explanations,
+    limitations: row.limitations, proposedNextStep: row.proposed_next_step,
+  };
+}
+
+async function listInterpretations(d1: D1Database, runId: string) {
+  const { results } = await d1.prepare(`${INTERPRETATION_SQL} WHERE i.run_id = ? ORDER BY i.version DESC LIMIT 50`)
+    .bind(runId).all<InterpretationRow>();
+  return results.map(interpretationView);
+}
+
+function interpretationText(value: unknown, label: string, required: boolean) {
+  if (value === undefined || value === null) value = "";
+  if (typeof value !== "string") throw new RunServiceError(400, `${label}格式无效`, "INVALID_INPUT");
+  const trimmed = value.trim();
+  if (required && !trimmed) throw new RunServiceError(400, `请填写${label}`, "INVALID_INPUT");
+  if ([...trimmed].length > INTERPRETATION_MAX) throw new RunServiceError(400, `${label}不能超过 ${INTERPRETATION_MAX} 个字符`, "INVALID_INPUT");
+  return trimmed;
+}
+
+function parseInterpretation(body: Record<string, unknown>): InterpretationInput {
+  return {
+    whatItShows: interpretationText(body.whatItShows, "“本次结果说明了什么”", true),
+    alternativeExplanations: interpretationText(body.alternativeExplanations, "“其他可能的解释”", false),
+    limitations: interpretationText(body.limitations, "“限制与异常”", false),
+    proposedNextStep: interpretationText(body.proposedNextStep, "“建议的下一步”", false),
+  };
+}
+
+async function interpretationReplay(d1: D1Database, requestId: string, run: RunRow, actor: AppUser) {
+  const stored = await d1.prepare(`${INTERPRETATION_SQL} WHERE i.request_id = ?`).bind(requestId).first<InterpretationRow>();
+  if (!stored) return null;
+  if (stored.run_id !== run.id || stored.author_user_id !== actor.id) throw new RunServiceError(409, "请求编号已被使用", "IDEMPOTENCY_CONFLICT");
+  return { interpretation: interpretationView(stored) };
+}
+
+async function interpretResult(d1: D1Database, actor: AppUser, body: Record<string, unknown>): Promise<{ interpretation: ResultInterpretationView }> {
+  const run = await runForActor(d1, actor, body.runId);
+  if (!isRunOwner(actor, run.student_id)) throw new RunServiceError(403, "只有该运行所属的学生本人可以填写结果解读", "FORBIDDEN");
+  const requestId = idempotencyKey(body.requestId, "请求编号");
+  const replay = await interpretationReplay(d1, requestId, run, actor);
+  if (replay) return replay;
+  if (!INTERPRETABLE_STATUSES.includes(run.status)) {
+    throw new RunServiceError(409, "运行结束（完成或失败）后才能填写结果解读", "RUN_NOT_TERMINAL");
+  }
+  const expected = body.expectedVersion;
+  if (typeof expected !== "number" || !Number.isSafeInteger(expected) || expected < 0) {
+    throw new RunServiceError(400, "版本号无效", "INVALID_INPUT");
+  }
+  const input = parseInterpretation(body);
+  const version = expected + 1;
+  const stale = () => new RunServiceError(409, "结果解读已被更新，请刷新后重试", "STALE_VERSION");
+  try {
+    const [inserted] = await d1.batch([
+      // Compare-and-insert: only when the latest stored version is the one the client saw.
+      d1.prepare(`INSERT INTO result_interpretations (run_id, version, author_user_id, what_it_shows, alternative_explanations,
+          limitations, proposed_next_step, request_id)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE COALESCE((SELECT MAX(version) FROM result_interpretations WHERE run_id = ?), 0) = ?`)
+        .bind(run.id, version, actor.id, input.whatItShows, input.alternativeExplanations, input.limitations,
+          input.proposedNextStep, requestId, run.id, expected),
+      userAuditStatement(d1, run.id, actor.id, { action: "interpretation_saved", version }, {
+        sql: "EXISTS (SELECT 1 FROM result_interpretations WHERE run_id = ? AND version = ? AND request_id = ?)",
+        binds: [run.id, version, requestId],
+      }),
+    ]);
+    if (!inserted?.meta?.changes) throw stale();
+  } catch (error) {
+    if (error instanceof RunServiceError) throw error;
+    if (!String(error).includes("UNIQUE")) throw error;
+    // Lost a race: either the same request landed first (replay) or another version did.
+    const raced = await interpretationReplay(d1, requestId, run, actor);
+    if (raced) return raced;
+    throw stale();
+  }
+  const saved = await interpretationReplay(d1, requestId, run, actor);
+  if (!saved) throw stale();
+  return saved;
+}
+
+const RUN_STATUS_LABELS: Record<RunStatus, string> = {
+  awaiting_approval: "待批准", queued: "已排队", dispatching: "派发中", running: "运行中", collecting: "收集结果中",
+  completed: "已完成", failed: "失败", cancel_requested: "取消中", canceled: "已取消", reconciling: "对账中",
+};
+const VALIDITY_LABELS: Record<string, string> = { valid: "有效", invalid: "无效", unknown: "未知" };
+
+function clip(value: string, max: number) {
+  const chars = [...value];
+  return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : value;
+}
+
+/** Concise, factual progress draft. Every line restates stored records;
+ * nothing is saved and no conclusion is added on the student's behalf. */
+async function draftProgress(d1: D1Database, actor: AppUser, body: Record<string, unknown>): Promise<{ draft: ProgressDraft }> {
+  const run = await runForActor(d1, actor, body.runId);
+  if (!isRunOwner(actor, run.student_id) && !(await canReviewStudent(actor, run.student_id))) {
+    throw new RunServiceError(403, "只有该学生本人或可审核该学生的导师可以生成进展草稿", "FORBIDDEN");
+  }
+  const { spec } = await loadSpec(d1, run.run_spec_sha256);
+  const [facts, latest] = await Promise.all([
+    d1.prepare(`SELECT t.title AS task_title, ${runNumberSql("r")} AS number, res.technical_validity, res.metrics_json,
+        a.relative_path AS metrics_path, a.sha256 AS metrics_sha256, cr.id AS cr_id, cr.pr_url, cr.pr_number
+      FROM runs r
+      LEFT JOIN research_tasks t ON t.id = r.task_id
+      LEFT JOIN run_results res ON res.run_id = r.id
+      LEFT JOIN run_artifacts a ON a.id = res.metrics_source_artifact_id AND a.run_id = r.id
+      LEFT JOIN change_requests cr ON cr.id = ? AND cr.student_id = r.student_id
+      WHERE r.id = ?`).bind(spec.changeRequestId, run.id).first<{
+        task_title: string | null; number: number | null; technical_validity: string | null; metrics_json: string | null;
+        metrics_path: string | null; metrics_sha256: string | null; cr_id: string | null; pr_url: string | null; pr_number: number | null;
+      }>(),
+    d1.prepare(`${INTERPRETATION_SQL} WHERE i.run_id = ? ORDER BY i.version DESC LIMIT 1`).bind(run.id).first<InterpretationRow>(),
+  ]);
+  const taskTitle = facts?.task_title || "研究任务";
+  const runName = facts?.number ? `运行 #${facts.number}` : "运行";
+  const commit = spec.executedCommitSha;
+  const status = RUN_STATUS_LABELS[run.status] ?? run.status;
+  const validity = facts?.technical_validity ? VALIDITY_LABELS[facts.technical_validity] ?? facts.technical_validity : null;
+  const metrics = parseJson<{ values?: Record<string, number> } | null>(facts?.metrics_json, null)?.values ?? null;
+  const prUrl = facts?.pr_url && facts.pr_url.startsWith("https://") ? facts.pr_url : "";
+  const prLabel = facts?.pr_number ? `PR #${facts.pr_number}` : "PR";
+
+  const summary: string[] = [validity
+    ? `${runName}（执行提交 ${commit.slice(0, 7)}）${status}，技术有效性：${validity}。`
+    : `${runName}（执行提交 ${commit.slice(0, 7)}）当前状态：${status}，尚无结果记录。`];
+  if (latest) {
+    summary.push(`学生解读（第 ${latest.version} 版）`);
+    const parts: [string, string][] = [
+      ["本次结果说明了什么", latest.what_it_shows], ["其他可能的解释", latest.alternative_explanations],
+      ["限制与异常", latest.limitations], ["建议的下一步", latest.proposed_next_step],
+    ];
+    for (const [label, value] of parts) if (value) summary.push(`${label}：${clip(value, 2800)}`);
+  } else {
+    summary.push("学生尚未填写结果解读：提交前需要学生本人说明这次结果意味着什么、还有哪些可能的解释和限制。");
+  }
+
+  const evidence = [`研究任务：${taskTitle}（${run.task_id}）`, `${runName}：${run.id}，状态 ${status}，执行提交 ${commit}`];
+  if (metrics && Object.keys(metrics).length) {
+    const entries = Object.entries(metrics);
+    const shown = entries.slice(0, 20).map(([name, value]) => `${name} = ${value}`).join("；");
+    const more = entries.length > 20 ? `；等共 ${entries.length} 项` : "";
+    const source = facts?.metrics_path
+      ? `来源 ${facts.metrics_path}，sha256 ${(facts.metrics_sha256 ?? "").slice(0, 12)}`
+      : "来源文件未记录";
+    evidence.push(`指标（${source}；评价协议 ${spec.evaluationProtocolSha256.slice(0, 12)}）：${shown}${more}`);
+  } else {
+    evidence.push(`没有正式指标（技术有效性：${validity ?? "尚无结果"}）`);
+  }
+  if (prUrl) evidence.push(`变更请求：${prLabel} ${prUrl}`);
+  else if (facts?.cr_id) evidence.push(`变更请求：${facts.cr_id}（尚无 PR 链接）`);
+
+  const evidenceSources: ProgressDraftSource[] = [];
+  if (prUrl) evidenceSources.push({ sourceType: "url", label: prLabel, ref: prUrl });
+  evidenceSources.push({
+    sourceType: "git", label: `执行提交 ${commit.slice(0, 7)}`,
+    ref: `https://github.com/${spec.repository.fullName}/commit/${commit}`,
+  });
+
+  return {
+    draft: {
+      kind: "项目",
+      title: clip(`${taskTitle} · ${runName} 结果`, 160),
+      summary: clip(summary.join("\n"), 12_000),
+      evidence: clip(evidence.join("\n"), 4000),
+      evidenceSources,
+      from: { taskId: run.task_id, runId: run.id, changeRequestId: facts?.cr_id ?? null, interpretationVersion: latest?.version ?? null },
+    },
   };
 }

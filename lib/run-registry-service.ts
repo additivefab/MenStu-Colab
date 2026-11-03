@@ -17,6 +17,7 @@ import {
   type ArtifactKind, type ComputeClaimResponse, type ComputeReconcileResponse, type EgressDecision, type EgressPolicy, type JsonValue,
   type ManifestArtifact, type RunManifest, type RunSpec, type RunStatus,
 } from "./research-loop/contracts.ts";
+import type { BaselineCandidate, RunBaselineView } from "./research-loop/results-contract.ts";
 
 // ---------------------------------------------------------------------------
 // Errors and small validators
@@ -737,6 +738,120 @@ export async function rerunRun(d1: D1Database, actor: AppUser, body: Record<stri
   }
   const created = await loadRun(d1, runId);
   return { runId, runSpecSha256: source.run_spec_sha256, attempt: created?.attempt ?? source.attempt + 1, status: "awaiting_approval" as RunStatus, replayed: false };
+}
+
+// ---------------------------------------------------------------------------
+// Baselines (batch 4, FA2): a comparison target only. Never part of the run
+// spec, its hash or its approval; stored in run_baselines.
+// ---------------------------------------------------------------------------
+
+/** Per-task creation-order number of the run aliased `alias` (same rule as
+ * components/research-loop/numbering.ts: created_at, then id). */
+export const runNumberSql = (alias: string) => `(SELECT COUNT(*) FROM runs rn WHERE rn.task_id = ${alias}.task_id
+  AND (rn.created_at < ${alias}.created_at OR (rn.created_at = ${alias}.created_at AND rn.id <= ${alias}.id)))`;
+
+/** Same-status audit event (from = to = the run's current status) by a user.
+ * `guard` is an extra SQL condition; the event is only written while it holds.
+ * The payload must carry ids and versions only, never free text. */
+export function userAuditStatement(d1: D1Database, runId: string, actorUserId: number, payload: Record<string, JsonValue>,
+  guard?: { sql: string; binds: unknown[] }) {
+  return d1.prepare(`INSERT INTO run_events (run_id, sequence, from_status, to_status, actor_type, actor_id, payload_json)
+    SELECT r.id, COALESCE((SELECT MAX(sequence) FROM run_events WHERE run_id = r.id), 0) + 1, r.status, r.status, 'user', ?, ?
+    FROM runs r WHERE r.id = ?${guard ? ` AND ${guard.sql}` : ""}`)
+    .bind(String(actorUserId), JSON.stringify(payload), runId, ...(guard?.binds ?? []));
+}
+
+export const isRunOwner = (actor: AppUser, studentId: string) => actor.role === "student" && actor.studentId === studentId;
+
+function metricValues(metricsJson: string | null | undefined) {
+  const parsed = parseJson<{ values?: { [name: string]: number } } | null>(metricsJson, null);
+  return parsed?.values && typeof parsed.values === "object" ? parsed.values : null;
+}
+
+/** The run's current baseline (RunBaselineView in results-contract), or null. */
+export async function readBaselineView(d1: D1Database, runId: string, runProtocolSha256: string): Promise<RunBaselineView | null> {
+  const row = await d1.prepare(`SELECT b.baseline_run_id, b.set_by_user_id, b.set_at, r.task_id, r.run_spec_sha256,
+      t.title AS task_title, s.executed_commit_sha, res.metrics_json, ${runNumberSql("r")} AS number
+    FROM run_baselines b
+    JOIN runs r ON r.id = b.baseline_run_id
+    JOIN run_specs s ON s.sha256 = r.run_spec_sha256
+    LEFT JOIN research_tasks t ON t.id = r.task_id
+    LEFT JOIN run_results res ON res.run_id = r.id
+    WHERE b.run_id = ?`).bind(runId).first<{
+      baseline_run_id: string; set_by_user_id: number; set_at: string; task_id: string; run_spec_sha256: string;
+      task_title: string | null; executed_commit_sha: string; metrics_json: string | null; number: number | null;
+    }>();
+  if (!row) return null;
+  // Verified spec: protocolMatches is evidence (T21), so it never comes from an unchecked copy.
+  const { spec } = await loadSpec(d1, row.run_spec_sha256);
+  return {
+    runId: row.baseline_run_id, taskId: row.task_id, taskTitle: row.task_title ?? "", number: row.number ?? null,
+    executedCommitShort: row.executed_commit_sha.slice(0, 7), metrics: metricValues(row.metrics_json),
+    evaluationProtocolSha256: spec.evaluationProtocolSha256, protocolMatches: spec.evaluationProtocolSha256 === runProtocolSha256,
+    setByUserId: row.set_by_user_id, setAt: row.set_at,
+  };
+}
+
+/** Completed, technically valid runs of the same student (any task), never the run itself. */
+export async function listBaselineCandidates(d1: D1Database, run: Pick<RunRow, "id" | "student_id">, runProtocolSha256: string): Promise<BaselineCandidate[]> {
+  const { results } = await d1.prepare(`SELECT r.id, r.task_id, r.ended_at, t.title AS task_title, ${runNumberSql("r")} AS number,
+      json_extract(s.canonical_json, '$.evaluationProtocolSha256') AS protocol
+    FROM runs r
+    JOIN run_specs s ON s.sha256 = r.run_spec_sha256
+    JOIN run_results res ON res.run_id = r.id AND res.technical_validity = 'valid'
+    LEFT JOIN research_tasks t ON t.id = r.task_id
+    WHERE r.student_id = ? AND r.status = 'completed' AND r.id <> ?
+    ORDER BY r.ended_at DESC, r.id DESC LIMIT 50`).bind(run.student_id, run.id)
+    .all<{ id: string; task_id: string; ended_at: string | null; task_title: string | null; number: number | null; protocol: string | null }>();
+  return results.map((row) => ({
+    runId: row.id, taskId: row.task_id, taskTitle: row.task_title ?? "", number: row.number ?? null, endedAt: row.ended_at,
+    protocolMatches: row.protocol === runProtocolSha256,
+  }));
+}
+
+export async function setRunBaseline(d1: D1Database, actor: AppUser, body: Record<string, unknown>): Promise<{ runId: string; baseline: RunBaselineView | null }> {
+  const run = await runForActor(d1, actor, body.runId);
+  if (!isRunOwner(actor, run.student_id) && !(await canReviewStudent(actor, run.student_id))) {
+    throw forbidden("只有该学生本人或可审核该学生的导师可以设置基线");
+  }
+  if (body.baselineRunId === undefined) throw bad("请选择基线运行，或传 null 清除基线");
+  const { spec } = await loadSpec(d1, run.run_spec_sha256);
+  const current = await d1.prepare("SELECT baseline_run_id FROM run_baselines WHERE run_id = ?").bind(run.id).first<{ baseline_run_id: string }>();
+
+  if (body.baselineRunId === null) {
+    if (current) {
+      // Event first, guarded on the row still being there: a concurrent clear writes no second event.
+      const exists = { sql: "EXISTS (SELECT 1 FROM run_baselines WHERE run_id = ? AND baseline_run_id = ?)", binds: [run.id, current.baseline_run_id] };
+      await d1.batch([
+        userAuditStatement(d1, run.id, actor.id, { action: "baseline_cleared", previousBaselineRunId: current.baseline_run_id }, exists),
+        d1.prepare("DELETE FROM run_baselines WHERE run_id = ? AND baseline_run_id = ?").bind(run.id, current.baseline_run_id),
+      ]);
+    }
+    return { runId: run.id, baseline: null };
+  }
+
+  const baselineRunId = identifier(body.baselineRunId, "基线运行");
+  if (baselineRunId === run.id) throw bad("不能把运行自身设为基线", "BASELINE_SELF");
+  const baseline = await d1.prepare(`SELECT r.student_id, r.status, res.technical_validity FROM runs r
+    LEFT JOIN run_results res ON res.run_id = r.id WHERE r.id = ?`).bind(baselineRunId)
+    .first<{ student_id: string; status: RunStatus; technical_validity: string | null }>();
+  // Another student's run is reported exactly like a missing one (no existence leak).
+  if (!baseline || baseline.student_id !== run.student_id) throw new RunServiceError(404, "基线运行不存在或不属于该学生", "BASELINE_NOT_FOUND");
+  if (baseline.status !== "completed") throw conflict("基线必须是已完成的运行", "BASELINE_NOT_COMPLETED");
+  if (baseline.technical_validity !== "valid") throw conflict("基线运行技术有效性未通过，不能作为基线", "BASELINE_NOT_VALID");
+
+  if (current?.baseline_run_id !== baselineRunId) {
+    const changes = { sql: "NOT EXISTS (SELECT 1 FROM run_baselines WHERE run_id = ? AND baseline_run_id = ?)", binds: [run.id, baselineRunId] };
+    await d1.batch([
+      userAuditStatement(d1, run.id, actor.id, {
+        action: "baseline_set", baselineRunId, previousBaselineRunId: current?.baseline_run_id ?? null,
+      }, changes),
+      d1.prepare(`INSERT INTO run_baselines (run_id, baseline_run_id, set_by_user_id) VALUES (?, ?, ?)
+        ON CONFLICT (run_id) DO UPDATE SET baseline_run_id = excluded.baseline_run_id, set_by_user_id = excluded.set_by_user_id,
+          set_at = CURRENT_TIMESTAMP`).bind(run.id, baselineRunId, actor.id),
+    ]);
+  }
+  return { runId: run.id, baseline: await readBaselineView(d1, run.id, spec.evaluationProtocolSha256) };
 }
 
 // ---------------------------------------------------------------------------
