@@ -1,0 +1,53 @@
+/* FA4 周会证据清单. Palette follows research-loop.module.css (light only). */
+.root { display: grid; gap: 10px; }
+.root.root { margin-top: 16px; }
+.title { margin: 0; }
+/* Staff: collapsed by default; a flex summary loses the native marker, so draw one. */
+.summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; list-style: none; }
+.summary::-webkit-details-marker { display: none; }
+.summary::before { content: "▸"; color: #8290a3; font-size: 12px; transition: transform .15s; }
+details[open] > .summary::before { transform: rotate(90deg); }
+.summary strong { color: #203047; font-size: 15px; font-weight: 650; }
+.body { display: grid; gap: 12px; min-width: 0; margin-top: 4px; }
+.intro { color: #5d6c82; font-size: 13px; overflow-wrap: anywhere; }
+
+.periodBar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; min-width: 0; }
+.periodBar button[aria-pressed="true"], .presetActive { background: #eaf2ff !important; border-color: #8aa9d8 !important; color: #1c50a9 !important; font-weight: 600; }
+.periodText { color: #718096; font-size: 12px; white-space: nowrap; }
+
+.custom { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px 10px; min-width: 0; }
+.custom label { flex: 1 1 140px; max-width: 200px; }
+.custom small { flex-basis: 100%; }
+.custom > p { flex-basis: 100%; margin: 0 !important; }
+
+.retry { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.retry > p { margin: 0 !important; flex: 1 1 220px; }
+
+.sections { display: grid; gap: 14px; min-width: 0; }
+.sections[aria-busy="true"] { opacity: .6; }
+.sections section { display: grid; gap: 6px; min-width: 0; }
+
+.items { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.items > li { display: grid; gap: 3px; min-width: 0; padding: 8px 10px; border: 1px solid #e3eaf2; border-radius: 8px; background: #fbfcfe; overflow-wrap: anywhere; }
+.meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.metrics { color: #42516a; }
+.failure { color: #8d3540 !important; }
+.blockerText { color: #203047; font-size: 13px; }
+.none { color: #8290a3; font-size: 13px; }
+
+.prompt { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid #e8b04b; border-left-width: 4px; border-radius: 7px; background: #fff7e8; color: #6b4e17; font-size: 13px; overflow-wrap: anywhere; }
+.prompt strong { color: #7a4f00; font-size: 14px; }
+.prompt ul { margin: 2px 0 0; padding-left: 18px; }
+
+.footer { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+
+@media (max-width: 520px) {
+  .root { padding: 14px 14px !important; }
+  .custom label { max-width: none; }
+  .periodText { flex-basis: 100%; }
+}
+
+/* Notice above the student's progress composer when it was prefilled from a run. */
+.draftNotice { display: grid; gap: 2px; margin: 0; padding: 10px 12px; border: 1px solid #c9d8ee; border-left: 4px solid #2f6fbb; border-radius: 8px; background: #f3f7fe; color: #2c4466; font-size: 13px; font-weight: 600; line-height: 1.6; overflow-wrap: anywhere; }
+.draftNotice small { color: #5d6c82; font-size: 12px; font-weight: 400; }
+.draftNoticeMuted { border-left-color: #a4b3c6; background: #f6f8fa; color: #42516a; }
