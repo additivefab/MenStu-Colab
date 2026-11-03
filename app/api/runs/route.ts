@@ -1,7 +1,7 @@
 import { getD1 } from "../../../lib/database";
 import { assertSameOrigin, requireAppUser } from "../../../lib/feishu-auth";
 import {
-  approveRun, cancelRun, createRun, privateResponse, readJsonBody, rerunRun, revokeApproval, runFailure, runJson,
+  approveRun, cancelRun, createRun, privateResponse, readJsonBody, rerunRun, revokeApproval, runFailure, runJson, setRunBaseline,
 } from "../../../lib/run-registry-service";
 import { listRuns, readRunDetail } from "../../../lib/run-results-service";
 
@@ -31,6 +31,7 @@ export async function POST(request: Request) {
       case "revoke_approval": return runJson(await revokeApproval(d1, auth.user, body));
       case "cancel": return runJson(await cancelRun(d1, auth.user, body));
       case "rerun": return runJson(await rerunRun(d1, auth.user, body));
+      case "set_baseline": return runJson(await setRunBaseline(d1, auth.user, body));
       default: return runJson({ code: "INVALID_INPUT", error: "未知操作" }, 400);
     }
   } catch (error) { return runFailure(error, FALLBACK); }
