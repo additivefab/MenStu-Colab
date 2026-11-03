@@ -29,7 +29,8 @@ The runner is a Node 22+ daemon on the lab's GPU servers. It implements spec
 | `schedulers/local.mjs`, `schedulers/slurm.mjs` | Scheduler adapters with one interface: `submit`, `findByTag`, `query`, `cancel`. |
 | `lib/checkout.mjs` | Fetches exactly `executedCommitSha`, without persisting the token. |
 | `lib/container.mjs` | Builds the Apptainer argv and applies the parameter-passing rule. |
-| `lib/dataset.mjs` | Checks the dataset manifest hash and extracts per-file hashes. |
+| `lib/dataset.mjs` | Binds the dataset: manifest hash, then the actual bytes under `dataPath` (full re-hash or sealed snapshot), post-run stat re-check, `dataDigest`. |
+| `seal-dataset.mjs` | Ingest command: hashes a dataset directory and writes its manifest and seal. |
 | `lib/config.mjs` | Validates the config and loads the token. |
 | `runner.config.example.json` | Example configuration. |
 | `lab-runner.service` | Example systemd unit. |
@@ -59,7 +60,7 @@ Only one runner may use a given `workRoot`. A lock file (`.runner.lock`) enforce
 | `platformUrl` | Platform origin. HTTPS is required. Plain HTTP is accepted only for `localhost` / `127.0.0.1` (tests). |
 | `runnerId` | The registered runner id. It appears in manifests and lab locators. |
 | `tokenFile` | Path to the runner token. `TANYAN_LAB_RUNNER_TOKEN` takes precedence. |
-| `workRoot` | Absolute path. Per-run directory: `<workRoot>/<runId>/{state.json, src/, out/, job.json, job.mjs, status.json, env.json}`. Under Slurm it must be on a filesystem shared with the compute nodes. |
+| `workRoot` | Absolute path. Per-run directory: `<workRoot>/<runId>/{state.json, data-binding.json, src/, out/, job.json, job.mjs, status.json, env.json}`. Under Slurm it must be on a filesystem shared with the compute nodes. |
 | `nodePath` | Interpreter written into each run's `job.mjs` shebang. |
 | `git`, `githubBaseUrl` | Git binary, and the base URL used with the minted token. |
 | `nvidiaSmi` | Path to `nvidia-smi`, or `null` to skip. If it is missing or fails, driver and GPU are reported as `""` and never guessed. |
@@ -67,23 +68,111 @@ Only one runner may use a given `workRoot`. A lock file (`.runner.lock`) enforce
 | `scheduler.passEnv` | Host variables passed to scheduler commands. Names that look like credentials are refused. |
 | `scheduler.slurm` | Command paths, `extraArgs` (`--partition=…`, `--account=…`), `sacctLookbackDays`. |
 | `apptainer.*` | See "Isolation". `images` maps each digest-pinned `imageRef` to a pre-pulled SIF with its provenance, `{ociDigest, sifPath, sifSha256, source, verifySignature?, allowRunnerWritable?}`. See "Image provenance". `allowPullByDigest` lets the runner use `docker://<imageRef>` instead, with no file hash recorded. |
-| `datasets[]` | `{versionId, dataPath, manifestPath, splitManifestPath?}` for each dataset version hosted here. |
+| `datasets[]` | `{versionId, dataPath, manifestPath, splitManifestPath?, extraFiles?, snapshot?}` for each dataset version hosted here. `extraFiles` is `"reject"` (default) or `"ignore"`; `snapshot: {sealPath}` selects sealed-snapshot verification. See "Dataset binding". |
 | `gitReadFallback` | `{url}` used when the claim returns `repository: null` (no GitHub App, or reconcile mode). Typical values are a local mirror path or an SSH URL that uses the host's own read-only deploy key. |
 | `limits` | `maxConcurrentRuns` (1), `heartbeatSeconds` (30), `pollSeconds` (15), `claimIntervalSeconds` (20), `killGraceSeconds` (30), `maxArtifacts` (500), `requestTimeoutSeconds` (60). |
 
-### Dataset manifest format
+### Dataset binding (R02)
 
-`manifestPath` must hash, byte for byte, to `spec.dataset.manifestSha256`. When
-the spec names a split manifest, `splitManifestPath` must match
-`splitManifestSha256`. On a mismatch the run fails **before** checkout or
-submission. Per-file hashes are read from either:
+An approved RunSpec names the dataset manifest by sha256. The runner proves that
+the bytes under `dataPath` are the bytes that manifest lists. A read-only mount
+only stops writes from inside the container, not changes on the NAS.
 
-- JSON, where every property named `sha256` at any depth counts; or
-- `sha256sum` output (`<hex>  <path>`).
+**Manifest format.** `manifestPath` must hash, byte for byte, to
+`spec.dataset.manifestSha256`. When the spec names a split manifest,
+`splitManifestPath` must match `splitManifestSha256`. These two hash checks run
+first, before checkout. The manifest content must be one of:
 
-If the manifest yields no per-file hashes, the run fails, because the raw-copy check
-would be meaningless. The manifest's own hash and the split manifest's hash are
-also added to the blocked set.
+- `tanyan.datamanifest/v1`: `{"schema":"tanyan.datamanifest/v1","files":[{"path","size","sha256"}]}`,
+  or the bare list `[{"path","size","sha256"}]`;
+- `sha256sum` output (`<hex>  <path>`, an optional `*`, an optional leading `./`). Sizes
+  are then taken from disk (full mode) or from the seal (sealed mode).
+
+Paths are relative POSIX paths with no leading `/`, no `.`, `..` or empty segments,
+no backslash and no control characters. Each path may appear only once. Any other JSON
+shape is refused. `seal-dataset.mjs` writes the object form.
+
+**Full verification** (default). This runs after checkout, as the last step before the job files are
+written and the job is submitted:
+
+1. `dataPath` is resolved with `realpath`. That real directory is verified, and the same
+   real directory is bound read-only at `/data`.
+2. The tree is walked with `lstat` and symlinks are never followed. A symlink (file or directory), a
+   special file (socket, FIFO, device), another filesystem mounted inside, or a directory whose
+   identity changes while it is listed refuses the run.
+3. Every manifest file is opened with `O_NOFOLLOW` and streamed through sha256, 4 files at a time.
+   The open file's inode, size, mtime and ctime must equal the walk's `lstat` before and after
+   reading. A modified (size or sha256), missing or replaced file refuses the run.
+4. Files on disk but not in the manifest follow `extraFiles`:
+   - `reject` (default) refuses the run;
+   - `ignore` lets the run go ahead. A directory bind cannot hide single files, so **ignored
+     files stay visible under `/data`**. The runner hashes them and records `{path, size, sha256}`
+     in `<runDir>/data-binding.json` and the log. They are not part of `dataDigest`. Use `ignore`
+     only for known, harmless clutter.
+
+The failure is reported as `data binding failed: …`, with the first problems listed. The
+job is never submitted.
+
+**Sealed snapshot** (`snapshot: {sealPath}`), for datasets too large to re-hash on
+every run. At ingest, an admin runs
+
+```
+node infra/lab-runner/seal-dataset.mjs --data /tank/datasets/.zfs/snapshot/imagenet-v2/data \
+  --manifest /srv/tanyan-datasets/imagenet-v2.manifest.json --seal /srv/tanyan-datasets/imagenet-v2.seal.json
+```
+
+The command hashes every file. It writes the manifest and the seal
+(`tanyan.dataseal/v1`: the real `dataPath`, `manifestSha256`, `dataDigest`, and for each file
+`{path, size, mtimeNs, ctimeNs, ino}`), both mode 0444, and prints the manifest sha256 to
+register. It refuses symlinks, special files, and output paths inside the dataset. At run time
+the runner checks that:
+
+- the seal is a regular file, not writable by group or other;
+- the seal was written for this manifest sha256 and this real `dataPath`;
+- the seal lists exactly the manifest's files, with the same sizes;
+- the seal's `dataDigest` matches the manifest listing.
+
+Then it walks the tree with `lstat`, with the same symlink, special-file and `extraFiles`
+rules, and compares every file's size, mtime, ctime and inode with the seal. Nothing is
+re-hashed. `dataVerification` is then `"sealed_snapshot"`.
+
+This mode **trusts the snapshot's immutability**. Stat metadata is evidence, not proof:
+a privileged user, or a filesystem that lets someone rewrite content and forge both mtime and ctime
+(for example by changing the clock), defeats it. Use it only for data that really cannot change, such
+as a ZFS or btrfs read-only snapshot, or a root-owned read-only directory that neither students nor the
+runner user can write. Seal the path the runner will mount, after the data has been made read-only:
+`chmod` and `chown` change ctime and invalidate the seal. Keep the seal and manifest admin-owned, outside
+`dataPath`.
+
+**Time of check and time of use.** Verification runs as late as `prepare()` allows: after
+checkout, immediately before `findByTag` and submit. The verified real directory is the one
+bind-mounted read-only. A residual window remains: between verification and the moment the job
+opens each file, and while the job runs, a process outside the container with write access
+to the NAS can still change the data. To close the loop, after the scheduler reports the job ended,
+the runner walks the mounted directory again. It compares every verified file's `(size, mtime, ctime,
+inode, device)` and every directory's identity with what it recorded before submit (`data-binding.json`):
+
+- a change, removal, replacement, new symlink or special file, or a new file under `extraFiles: "reject"`
+  turns the run into `outcome: "failed"` with `failureReason: "input data changed during the run …"`. The
+  manifest, with the pre-run `dataDigest`, and the artifacts are still reported as evidence. The platform
+  therefore records `technical_validity: "invalid"`;
+- new files under `extraFiles: "ignore"` are recorded in `state.json` (`dataRecheck.newlyIgnored`) and the log.
+
+The result is kept in `state.json` (`dataRecheck`). The re-check uses stat metadata. A change made and
+undone within the run with forged timestamps is not detectable this way, so immutable snapshots remain
+the strong guarantee. A canceled run is not re-checked. If `data-binding.json` is missing, for example
+when a job is adopted from a runner without this record, the re-check is skipped with a warning and no
+`dataDigest` is reported.
+
+**Digest.** `manifest.inputs.dataDigest` = sha256 of the canonical JSON listing
+`[{"path":…,"sha256":…,"size":…}, …]`: keys in that order, entries sorted by the UTF-8 bytes of `path`,
+no whitespace. This equals `canonicalJson` from `contracts.ts`. It covers the manifest files only, with
+sizes as verified. `manifest.inputs.dataVerification` is `"full"` or `"sealed_snapshot"`. Full and sealed
+verification of the same data give the same digest.
+
+**Egress.** Per-file hashes for the raw-copy check are read from the manifest as before: in JSON, every
+property named `sha256` at any depth; or `sha256sum` lines. If the manifest yields none, the run fails.
+The manifest's own hash and the split manifest's hash are also added to the blocked set.
 
 ## Execution flow
 
@@ -91,9 +180,9 @@ also added to the blocked set.
    Repository tokens are kept in memory only. An immediate heartbeat confirms the lease
    and picks up a pending cancel.
 2. **execute**:
-   1. Check the data binding (above).
+   1. Check the manifest hashes (above).
    2. Check out the code (below).
-   3. Write `job.json` and `job.mjs`.
+   3. Verify the data bytes (full or sealed; "Dataset binding"), then write `data-binding.json`, `job.json` and `job.mjs`.
    4. Call **`findByTag(submitTag)`**. If a job is found, adopt it. Otherwise submit.
    5. Record the job id at once.
    6. Poll the scheduler and send a heartbeat every `heartbeatSeconds`, with phase

@@ -46,7 +46,12 @@ export function validateConfig(raw) {
       dataPath: requireAbsolute(entry.dataPath, `datasets[${index}].dataPath`),
       manifestPath: requireAbsolute(entry.manifestPath, `datasets[${index}].manifestPath`),
       splitManifestPath: entry.splitManifestPath ? requireAbsolute(entry.splitManifestPath, `datasets[${index}].splitManifestPath`) : null,
+      // R02: files on disk but not in the manifest are refused unless "ignore".
+      extraFiles: entry.extraFiles ?? "reject",
+      // R02: sealed immutable snapshot (stat + seal check instead of a full re-hash).
+      snapshot: entry.snapshot ? { sealPath: requireAbsolute(entry.snapshot.sealPath, `datasets[${index}].snapshot.sealPath`) } : null,
     };
+    if (!["reject", "ignore"].includes(datasets[versionId].extraFiles)) throw new ConfigError(`datasets[${index}].extraFiles must be "reject" or "ignore"`);
   }
 
   const apptainer = raw.apptainer ?? {};

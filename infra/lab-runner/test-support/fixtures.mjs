@@ -71,10 +71,10 @@ export function createDataset(root) {
   for (const name of ["a-sample.json", "b-sample.json"]) {
     const content = JSON.stringify({ secret: randomBytes(8).toString("hex"), name });
     writeFileSync(join(dataPath, name), content);
-    files.push({ path: name, sha256: sha256(content), bytes: content.length });
+    files.push({ path: name, size: Buffer.byteLength(content), sha256: sha256(content) });
   }
   const manifestPath = join(root, "dataset-manifest.json");
-  const manifest = JSON.stringify({ schema: "lab.dataset/v1", files });
+  const manifest = JSON.stringify({ schema: "tanyan.datamanifest/v1", files });
   writeFileSync(manifestPath, manifest);
   return { dataPath, manifestPath, manifestSha256: sha256(manifest), files };
 }
