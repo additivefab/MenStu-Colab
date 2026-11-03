@@ -26,7 +26,7 @@ import { buildManifest } from "./manifest.mjs";
 import { CheckoutError, checkoutCommit } from "./lib/checkout.mjs";
 import { ConfigError, loadConfig, loadRunnerToken } from "./lib/config.mjs";
 import { buildContainerCommand } from "./lib/container.mjs";
-import { DataBindingError, loadDatasetFileHashes, verifyDatasetBinding } from "./lib/dataset.mjs";
+import { DataBindingError, loadDatasetFileHashes, recheckDatasetBinding, verifyDatasetBinding, verifyManifestHashes } from "./lib/dataset.mjs";
 import { readJsonIfExists, sleep, writeJsonAtomic } from "./lib/fsutil.mjs";
 import { createLogger, errorMessage } from "./lib/log.mjs";
 import { createPlatformClient, LeaseLostError } from "./lib/platform-client.mjs";
@@ -36,6 +36,7 @@ const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
 const SUBMIT_TAG = /^[A-Za-z0-9_.-]{1,128}$/;
 const LAUNCHER_URL = pathToFileURL(fileURLToPath(new URL("./job-launcher.mjs", import.meta.url))).href;
 const SCHEDULER_TERMINAL = new Set(["finished", "failed", "canceled"]);
+const DATA_BINDING_FILE = "data-binding.json";
 
 class PreparationError extends Error {}
 
@@ -114,18 +115,16 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
   }
 
   // -------------------------------------------------------------------------
-  // preparation: data binding, checkout, job files
+  // preparation: checkout, data binding, job files
   // -------------------------------------------------------------------------
 
   async function prepare(ctx) {
     const { spec } = ctx.work;
     const dataset = config.datasets[spec.dataset.versionId];
+    // Cheap manifest-hash check first, so a wrong binding fails before checkout;
+    // the data bytes themselves are verified after checkout (below).
     try {
-      await verifyDatasetBinding(spec, dataset);
-      const hashes = await loadDatasetFileHashes(dataset.manifestPath);
-      hashes.add(spec.dataset.manifestSha256);
-      if (spec.dataset.splitManifestSha256) hashes.add(spec.dataset.splitManifestSha256);
-      ctx.datasetHashes = hashes;
+      await verifyManifestHashes(spec, dataset);
     } catch (error) {
       if (error instanceof DataBindingError) throw new PreparationError(`data binding failed: ${error.message}`);
       throw error;
@@ -154,11 +153,34 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
     }
     ensureLease(ctx);
 
+    // R02: verify the input bytes last, as close to submit as possible, and
+    // mount exactly the verified (realpath) directory read-only.
+    let binding;
+    try {
+      binding = await verifyDatasetBinding(spec, dataset);
+      const hashes = await loadDatasetFileHashes(dataset.manifestPath);
+      hashes.add(spec.dataset.manifestSha256);
+      if (spec.dataset.splitManifestSha256) hashes.add(spec.dataset.splitManifestSha256);
+      ctx.datasetHashes = hashes;
+    } catch (error) {
+      if (error instanceof DataBindingError) throw new PreparationError(`data binding failed: ${error.message}`);
+      throw error;
+    }
+    await writeJsonAtomic(join(ctx.runDir, DATA_BINDING_FILE), binding);
+    ctx.dataBinding = binding;
+    if (binding.ignoredExtraFiles.length) {
+      logger.warn("dataset has files outside the manifest; extraFiles=ignore, recorded in data-binding.json (they stay visible under /data)", {
+        runId: ctx.work.runId, count: binding.ignoredExtraFiles.length, paths: binding.ignoredExtraFiles.slice(0, 20).map((file) => file.path),
+      });
+    }
+    logger.info("dataset verified", { runId: ctx.work.runId, dataVerification: binding.dataVerification, dataDigest: binding.dataDigest, files: binding.fileCount });
+    ensureLease(ctx);
+
     const outDir = join(ctx.runDir, "out");
     await mkdir(outDir, { recursive: true, mode: 0o700 });
     let command;
     try {
-      command = buildContainerCommand({ spec, runId: ctx.work.runId, srcDir, dataPath: dataset.dataPath, outDir, apptainer: config.apptainer });
+      command = buildContainerCommand({ spec, runId: ctx.work.runId, srcDir, dataPath: binding.dataPath, outDir, apptainer: config.apptainer });
     } catch (error) {
       throw new PreparationError(`container command rejected: ${errorMessage(error)}`);
     }
@@ -283,12 +305,41 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
   async function finishFromScheduler(ctx, result) {
     const status = await readJsonIfExists(join(ctx.runDir, "status.json"));
     const exitCode = typeof status?.exitCode === "number" ? status.exitCode : result.exitCode;
+    const dataChanged = await recheckInputData(ctx);
+    if (dataChanged && result.state !== "canceled") {
+      // The result cannot be attributed to the approved input bytes: not technically valid.
+      const reason = result.state === "finished" && exitCode === 0 ? "" : `${result.reason || (typeof exitCode === "number" ? `exit code ${exitCode}` : "job failed")}; `;
+      return finish(ctx, { outcome: "failed", failureReason: `${reason}${dataChanged}`.slice(0, 950), schedulerResult: result });
+    }
     if (result.state === "finished" && exitCode === 0) return finish(ctx, { outcome: "completed", schedulerResult: result });
     if (result.state === "canceled") {
       return finish(ctx, { outcome: "canceled", failureReason: ctx.state.cancelRequested ? "canceled at platform request" : `scheduler reports job canceled (${result.reason ?? "no reason"})`, schedulerResult: result });
     }
     const reason = status?.state === "timeout" ? status.reason : result.reason || (exitCode !== null && exitCode !== undefined ? `exit code ${exitCode}` : "job failed");
     return finish(ctx, { outcome: "failed", failureReason: reason, schedulerResult: result });
+  }
+
+  async function loadDataBinding(ctx) {
+    ctx.dataBinding ??= await readJsonIfExists(join(ctx.runDir, DATA_BINDING_FILE));
+    return ctx.dataBinding;
+  }
+
+  // R02 time-of-use check: after the job ends, every verified file must still
+  // carry the stat signature recorded before submit. Returns a failure reason
+  // or null. The result is kept in state.json either way.
+  async function recheckInputData(ctx) {
+    const binding = await loadDataBinding(ctx);
+    if (!binding) {
+      logger.warn("no data-binding.json for this run; post-run input check skipped and no dataDigest reported", { runId: ctx.work.runId });
+      return null;
+    }
+    const check = await recheckDatasetBinding(binding);
+    ctx.state.dataRecheck = { checkedAt: new Date().toISOString(), unchanged: check.unchanged, reason: check.reason, newlyIgnored: check.newlyIgnored.slice(0, 50) };
+    await persist(ctx);
+    if (check.newlyIgnored.length) logger.warn("files outside the manifest appeared during the run (extraFiles=ignore)", { runId: ctx.work.runId, paths: check.newlyIgnored.slice(0, 20) });
+    if (check.unchanged) return null;
+    logger.error("input data changed during the run; result marked failed", { runId: ctx.work.runId, reason: check.reason });
+    return `input data changed during the run (${binding.dataVerification} verification at ${binding.verifiedAt}): ${check.reason}`;
   }
 
   // -------------------------------------------------------------------------
@@ -354,6 +405,7 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
         status: { startedAt: status.startedAt, endedAt: status.endedAt, exitCode },
         artifacts: gate.artifacts,
         metricsArtifactPath: metrics.path,
+        dataBinding: await loadDataBinding(ctx),
       });
       for (const file of gate.published) {
         const content = await readFile(file.absolutePath);

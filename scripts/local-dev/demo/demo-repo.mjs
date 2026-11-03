@@ -148,13 +148,14 @@ export function ensureDataset() {
     const content = JSON.stringify({ id: `s${index + 1}`, x, y: 2 * x, note: "synthetic" });
     return { name, content };
   });
-  if (!existsSync(manifestPath)) {
+  // Regenerate state written before the tanyan.datamanifest/v1 format (R02).
+  if (!existsSync(manifestPath) || !readFileSync(manifestPath, "utf8").includes('"tanyan.datamanifest/v1"')) {
     if (existsSync(root)) execFileSync("chmod", ["-R", "u+w", root]);
     rmSync(root, { recursive: true, force: true });
     mkdirSync(path.join(dataPath, "samples"), { recursive: true });
     for (const file of files) writeFileSync(path.join(dataPath, file.name), file.content);
     writeFileSync(splitManifestPath, JSON.stringify({ schema: "lab.splits/v1", test: files.map((file) => file.name) }));
-    const manifest = JSON.stringify({ schema: "lab.dataset/v1", files: files.map((file) => ({ path: file.name, sha256: sha256(file.content), bytes: Buffer.byteLength(file.content) })) });
+    const manifest = JSON.stringify({ schema: "tanyan.datamanifest/v1", files: files.map((file) => ({ path: file.name, size: Buffer.byteLength(file.content), sha256: sha256(file.content) })) });
     writeFileSync(manifestPath, manifest);
     for (const file of files) chmodSync(path.join(dataPath, file.name), 0o444);
     chmodSync(path.join(dataPath, "samples"), 0o555);

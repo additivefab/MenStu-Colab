@@ -2,7 +2,7 @@
 // on the execution node; nothing is invented. Unknown hardware facts are "".
 import { imageDigestFromRef, seedsFromParams } from "./lib/container.mjs";
 
-export function buildManifest({ work, runnerId, schedulerJobId, environment, status, artifacts, metricsArtifactPath }) {
+export function buildManifest({ work, runnerId, schedulerJobId, environment, status, artifacts, metricsArtifactPath, dataBinding }) {
   const spec = work.spec;
   return {
     schema: "tanyan.manifest/v1",
@@ -17,6 +17,9 @@ export function buildManifest({ work, runnerId, schedulerJobId, environment, sta
       splitManifestSha256: spec.dataset.splitManifestSha256,
       evaluationProtocolSha256: spec.evaluationProtocolSha256,
       seeds: seedsFromParams(spec.entrypoint.params),
+      // R02: digest of the input bytes verified before submit (lib/dataset.mjs);
+      // omitted when no verification record exists for this run.
+      ...(dataBinding?.dataDigest ? { dataDigest: dataBinding.dataDigest, dataVerification: dataBinding.dataVerification } : {}),
     },
     environment: {
       imageDigest: imageDigestFromRef(spec.entrypoint.imageRef),

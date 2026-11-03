@@ -37,7 +37,15 @@
       "versionId": "ds_REPLACE_WITH_DATASET_VERSION_ID",
       "dataPath": "/data/projects/student-a/dataset-v3",
       "manifestPath": "/data/projects/student-a/dataset-v3.manifest.json",
-      "splitManifestPath": "/data/projects/student-a/dataset-v3.splits.json"
+      "splitManifestPath": "/data/projects/student-a/dataset-v3.splits.json",
+      "extraFiles": "reject"
+    },
+    {
+      "versionId": "ds_REPLACE_WITH_LARGE_DATASET_VERSION_ID",
+      "dataPath": "/tank/datasets/.zfs/snapshot/imagenet-v2/data",
+      "manifestPath": "/srv/tanyan-datasets/imagenet-v2.manifest.json",
+      "extraFiles": "reject",
+      "snapshot": { "sealPath": "/srv/tanyan-datasets/imagenet-v2.seal.json" }
     }
   ],
   "gitReadFallback": null,

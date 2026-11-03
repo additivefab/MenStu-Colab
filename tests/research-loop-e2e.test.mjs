@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, createHmac, generateKeyPairSync, randomUUID, verify } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
@@ -16,6 +16,7 @@ import { FakeAdapter } from "../infra/agent-worker/adapters/fake.mjs";
 import { createPlatformClient as createAgentPlatformClient } from "../infra/agent-worker/platform-client.mjs";
 import { runAttempt } from "../infra/agent-worker/worker.mjs";
 import { validateConfig as validateRunnerConfig } from "../infra/lab-runner/lib/config.mjs";
+import { computeDataDigest } from "../infra/lab-runner/lib/dataset.mjs";
 import { createLogger as createRunnerLogger } from "../infra/lab-runner/lib/log.mjs";
 import { createRunner } from "../infra/lab-runner/runner.mjs";
 import { installShim } from "../infra/lab-runner/test-support/fixtures.mjs";
@@ -137,9 +138,9 @@ function createDataset(root) {
   for (const [name, x] of [["a.json", 1], ["b.json", 2], ["c.json", 5]]) {
     const content = JSON.stringify({ id: name, x, y: 2 * x });
     writeFileSync(join(dataPath, "samples", name), content);
-    files.push({ path: `samples/${name}`, sha256: sha256(content), bytes: content.length });
+    files.push({ path: `samples/${name}`, size: Buffer.byteLength(content), sha256: sha256(content) });
   }
-  const manifest = JSON.stringify({ schema: "lab.dataset/v1", files });
+  const manifest = JSON.stringify({ schema: "tanyan.datamanifest/v1", files });
   const split = JSON.stringify({ schema: "lab.splits/v1", test: files.map((file) => file.path) });
   const manifestPath = join(root, "datasets", "v1.manifest.json");
   const splitManifestPath = join(root, "datasets", "v1.splits.json");
@@ -714,7 +715,7 @@ test("research loop end to end: real platform + real agent worker + real lab run
     assert.deepEqual(fetch.permissions, { contents: "read" }, "checkout used a minted contents:read token");
     assert.ok(!runnerLines.join("\n").includes(fetch.token), "token never logged");
     const [container] = shimCallsFor(run.runId);
-    assert.equal(container.binds["/data"].source, dataset.dataPath);
+    assert.equal(container.binds["/data"].source, realpathSync(dataset.dataPath), "the verified real path is mounted");
     assert.equal(container.binds["/data"].mode, "ro");
     assert.equal(container.binds["/src"].mode, "ro");
     assert.deepEqual(container.entry, ["node", "train.mjs", "--mode=ok", "--seed=7"]);
@@ -726,6 +727,9 @@ test("research loop end to end: real platform + real agent worker + real lab run
     assert.deepEqual(detail.result.metrics.values, { accuracy: 1, samples: 3 }, "metrics prove the agent's change ran");
     assert.equal(detail.result.manifest.repository.executedCommitSha, headSha);
     assert.equal(detail.result.manifest.inputs.manifestSha256, dataset.manifestSha256);
+    // R02: the platform stores the digest of the input bytes verified before submit.
+    assert.equal(detail.result.manifest.inputs.dataVerification, "full");
+    assert.equal(detail.result.manifest.inputs.dataDigest, computeDataDigest(dataset.files));
     assert.deepEqual(detail.result.manifest.inputs.seeds, [7]);
     const byPath = Object.fromEntries(detail.artifacts.map((item) => [item.relativePath, item]));
     assert.equal(byPath["metrics.json"].egressDecision, "published");

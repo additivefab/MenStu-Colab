@@ -1,6 +1,6 @@
 // Unit tests: container command, Slurm adapter parsing, dataset binding, config, logger.
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -63,17 +63,25 @@ test("Slurm state mapping", () => {
 
 test("dataset binding: manifest and split manifest hashes must match", async (t) => {
   const root = tempRoot(t);
+  const dataPath = join(root, "data");
+  mkdirSync(dataPath);
+  writeFileSync(join(dataPath, "a"), "alpha");
+  const manifestText = JSON.stringify({ schema: "tanyan.datamanifest/v1", files: [{ path: "a", size: 5, sha256: sha256("alpha") }] });
   const manifestPath = join(root, "m.json");
   const splitPath = join(root, "s.json");
-  writeFileSync(manifestPath, JSON.stringify({ files: [{ path: "a", sha256: "A".repeat(64) }, { nested: { sha256: "b".repeat(64) } }] }));
+  writeFileSync(manifestPath, manifestText);
   writeFileSync(splitPath, "train: [a]\n");
-  const manifestSha256 = sha256(JSON.stringify({ files: [{ path: "a", sha256: "A".repeat(64) }, { nested: { sha256: "b".repeat(64) } }] }));
-  const spec = { dataset: { versionId: "ds", manifestSha256, splitManifestSha256: sha256("train: [a]\n"), mount: "read_only" } };
-  await verifyDatasetBinding(spec, { manifestPath, splitManifestPath: splitPath });
-  await assert.rejects(verifyDatasetBinding(spec, { manifestPath }), /split manifest/);
-  await assert.rejects(verifyDatasetBinding({ dataset: { ...spec.dataset, splitManifestSha256: "0".repeat(64) } }, { manifestPath, splitManifestPath: splitPath }), /split manifest sha256 mismatch/);
+  const spec = { dataset: { versionId: "ds", manifestSha256: sha256(manifestText), splitManifestSha256: sha256("train: [a]\n"), mount: "read_only" } };
+  const binding = await verifyDatasetBinding(spec, { manifestPath, splitManifestPath: splitPath, dataPath });
+  assert.equal(binding.dataVerification, "full");
+  await assert.rejects(verifyDatasetBinding(spec, { manifestPath, dataPath }), /split manifest/);
+  await assert.rejects(verifyDatasetBinding({ dataset: { ...spec.dataset, splitManifestSha256: "0".repeat(64) } }, { manifestPath, splitManifestPath: splitPath, dataPath }), /split manifest sha256 mismatch/);
   await assert.rejects(verifyDatasetBinding(spec, undefined), DataBindingError);
-  assert.deepEqual([...(await loadDatasetFileHashes(manifestPath))].sort(), ["a".repeat(64), "b".repeat(64)]);
+
+  // The egress index still reads any JSON sha256 property and sha256sum lines.
+  const legacy = join(root, "legacy.json");
+  writeFileSync(legacy, JSON.stringify({ files: [{ path: "a", sha256: "A".repeat(64) }, { nested: { sha256: "b".repeat(64) } }] }));
+  assert.deepEqual([...(await loadDatasetFileHashes(legacy))].sort(), ["a".repeat(64), "b".repeat(64)]);
   const sums = join(root, "SHA256SUMS");
   writeFileSync(sums, `${"c".repeat(64)}  data/x.npy\n${"d".repeat(64)} *data/y.npy\n`);
   assert.deepEqual([...(await loadDatasetFileHashes(sums))].sort(), ["c".repeat(64), "d".repeat(64)]);

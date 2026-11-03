@@ -1,11 +1,12 @@
 // End-to-end runner tests against a FAKE platform and FAKE schedulers/container
 // (simulation only: no Apptainer, no Slurm, no GPU, no network).
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync, chmodSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync, chmodSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
 import { createRunner } from "./runner.mjs";
+import { computeDataDigest } from "./lib/dataset.mjs";
 import { createLogger } from "./lib/log.mjs";
 import { createScheduler } from "./schedulers/index.mjs";
 import { installFakeSlurm, readFakeSlurm, setFakeSlurmControl } from "./test-support/fake-slurm.mjs";
@@ -60,6 +61,8 @@ test("happy path: executes, gates outputs, reports manifest and metrics (T18, D5
   assert.equal(manifest.approvalId, work.approvalId);
   assert.deepEqual(manifest.repository, { repositoryId: 4242, executedCommitSha: env.repo.sha });
   assert.equal(manifest.inputs.manifestSha256, env.dataset.manifestSha256);
+  assert.equal(manifest.inputs.dataVerification, "full", "R02: every input file re-hashed before submit");
+  assert.equal(manifest.inputs.dataDigest, computeDataDigest(env.dataset.files), "R02: digest of the verified listing");
   assert.equal(manifest.inputs.evaluationProtocolSha256, PROTOCOL_SHA);
   assert.deepEqual(manifest.inputs.seeds, [7]);
   assert.equal(manifest.environment.imageDigest, `sha256:${"a".repeat(64)}`);
@@ -98,7 +101,7 @@ test("happy path: executes, gates outputs, reports manifest and metrics (T18, D5
   assert.ok(!call.flags.includes("--nv"), "no GPU requested");
   assert.equal(call.binds["/src"].mode, "ro");
   assert.equal(call.binds["/data"].mode, "ro");
-  assert.equal(call.binds["/data"].source, env.dataset.dataPath);
+  assert.equal(call.binds["/data"].source, realpathSync(env.dataset.dataPath), "the verified real path is mounted");
   assert.equal(call.binds["/out"].mode, "rw");
   assert.deepEqual(call.entry.slice(2), ["--mode=ok", "--seed=7"]);
   assert.equal(call.containerEnv.TANYAN_OUT_DIR, "/out");
