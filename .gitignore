@@ -37,6 +37,8 @@ yarn-error.log*
 
 /dist/
 /.wrangler/
+# local-only dev superadmin credentials written by `npm run dev:admin`
+/.local-dev-admin.txt
 /outputs/
 /work/
 *.tsbuildinfo

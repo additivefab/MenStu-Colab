@@ -31,6 +31,17 @@ const visibilityLabels: Record<RepositoryVisibility, string> = {
   unknown: "未注明公开性",
 };
 
+async function requestRepository(studentId: string, signal: AbortSignal) {
+  const response = await fetch(`/api/student-repositories?studentId=${encodeURIComponent(studentId)}`, {
+    cache: "no-store",
+    credentials: "same-origin",
+    signal,
+  });
+  const payload = await response.json() as RepositoryPayload;
+  if (!response.ok) throw new Error(payload.error || "科研仓库读取失败，请重试");
+  return payload;
+}
+
 // A student change remounts the complete editor, including requests and draft values.
 export function StudentRepositoryCard({ studentId }: { studentId: string }) {
   return <RepositoryCardContent key={studentId} studentId={studentId} />;
@@ -55,7 +66,22 @@ function RepositoryCardContent({ studentId }: { studentId: string }) {
   const editingPreviously = useRef(false);
   const editing = draft !== null;
 
-  const load = useCallback(async () => {
+  // State updates happen only in the settled-request callbacks, so the mount
+  // effect can start a fetch without a synchronous setState.
+  const fetchRepository = useCallback((controller: AbortController) =>
+    requestRepository(studentId, controller.signal).then((payload) => {
+      if (!controller.signal.aborted) setData(payload);
+    }, (failure: unknown) => {
+      if (!controller.signal.aborted) {
+        setData(null);
+        setError(failure instanceof Error ? failure.message : "科研仓库读取失败，请重试");
+      }
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoading(false);
+    }), [studentId]);
+
+  // User-triggered reload: reset the editor, then fetch the latest binding.
+  const load = useCallback(() => {
     readRequest.current?.abort();
     const controller = new AbortController();
     readRequest.current = controller;
@@ -65,32 +91,20 @@ function RepositoryCardContent({ studentId }: { studentId: string }) {
     setDraft(null);
     setConfirmUnlink(false);
     setConflict(false);
-    try {
-      const response = await fetch(`/api/student-repositories?studentId=${encodeURIComponent(studentId)}`, {
-        cache: "no-store",
-        credentials: "same-origin",
-        signal: controller.signal,
-      });
-      const payload = await response.json() as RepositoryPayload;
-      if (!response.ok) throw new Error(payload.error || "科研仓库读取失败，请重试");
-      if (!controller.signal.aborted) setData(payload);
-    } catch (failure) {
-      if (!controller.signal.aborted) {
-        setData(null);
-        setError(failure instanceof Error ? failure.message : "科研仓库读取失败，请重试");
-      }
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-    }
-  }, [studentId]);
+    return fetchRepository(controller);
+  }, [fetchRepository]);
 
+  // Initial load. The card is keyed by studentId, so the initial state already
+  // equals the reset that `load` performs; only the request needs to start.
   useEffect(() => {
-    void load();
+    const controller = new AbortController();
+    readRequest.current = controller;
+    void fetchRepository(controller);
     return () => {
       readRequest.current?.abort();
       writeRequest.current?.abort();
     };
-  }, [load]);
+  }, [fetchRepository]);
 
   useEffect(() => {
     if (editing) accountInput.current?.focus();

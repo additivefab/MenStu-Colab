@@ -55,7 +55,7 @@ test('schema 24 runtime and SQL migrations preserve all credentials, sessions an
       if(mode==='runtime') await Promise.all([upgradeLocalCredentialsSchema(d1),upgradeLocalCredentialsSchema(d1)]);
       else db.exec(sqls[names.findIndex(n=>n.startsWith('0024_'))]);
       const migrated=db.prepare('SELECT * FROM local_credentials').all();
-      assert.deepEqual(migrated.map(({authorized_role,...rest})=>rest),before.map(c=>({...c})));
+      assert.deepEqual(migrated.map(c=>{const rest={...c};delete rest.authorized_role;return rest;}),before.map(c=>({...c})));
       assert.equal(migrated[0].authorized_role,'student');
       assert.deepEqual(db.prepare('SELECT * FROM app_sessions').all(),sessions);
       await provisionAdministratorLogins(d1);
