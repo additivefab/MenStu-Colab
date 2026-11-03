@@ -49,10 +49,24 @@ function VersionBody({ version }: { version: TaskVersion }) {
   </div>;
 }
 
+/** Agent minutes from which plan-first is suggested (FB2). */
+const LARGE_AGENT_BUDGET_MINUTES = 60;
+
+/** Why plan-first is worth suggesting for this task version, or null. Only a hint; never forced. */
+function planFirstReason(version: TaskVersion | undefined): string | null {
+  if (!version) return null;
+  if (version.protectedPaths.some((path) => !defaults.has(path))) return "该任务额外设置了受保护路径，建议先出计划。";
+  const minutes = version.budget.maxAgentMinutes;
+  if (typeof minutes === "number" && minutes >= LARGE_AGENT_BUDGET_MINUTES) return `代理预算较大（${minutes} 分钟），建议先出计划。`;
+  return null;
+}
+
 function StartAttempt({ detail, onStarted }: { detail: TaskDetail; onStarted: () => void }) {
   const { permissions, task } = detail;
+  const suggestion = planFirstReason(detail.versions.find((item) => item.version === task.confirmedVersion));
   const [provider, setProvider] = useState(permissions.providers[0] ?? "");
   const [baseRef, setBaseRef] = useState("");
+  const [planFirst, setPlanFirst] = useState(false);
   const [key, setKey] = useState(newKey);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -68,9 +82,10 @@ function StartAttempt({ detail, onStarted }: { detail: TaskDetail; onStarted: ()
     setBusy(true);
     setError(null);
     try {
-      await postJson("/api/agent-attempts", { action: "start", taskId: task.id, provider, idempotencyKey: key, baseRef: baseRef.trim() || undefined }, "代理启动失败，请重试");
+      await postJson("/api/agent-attempts", { action: "start", taskId: task.id, provider, idempotencyKey: key, baseRef: baseRef.trim() || undefined, planFirst }, "代理启动失败，请重试");
       setKey(newKey());
       setBaseRef("");
+      setPlanFirst(false);
       onStarted();
     } catch (failure) { setError(failure); } finally { setBusy(false); }
   }
@@ -79,6 +94,10 @@ function StartAttempt({ detail, onStarted }: { detail: TaskDetail; onStarted: ()
     <label>代理<select value={provider} disabled={busy} onChange={(event) => setProvider(event.target.value)}>{permissions.providers.map((item) => <option key={item} value={item}>{providerLabels[item] ?? item}</option>)}</select></label>
     <label>基准分支或提交（可选）<input value={baseRef} maxLength={255} placeholder="默认分支" disabled={busy} spellCheck={false} autoComplete="off" onChange={(event) => setBaseRef(event.target.value)} /></label>
     <button type="submit" className={styles.primary} disabled={busy || !provider}>{busy ? "正在启动…" : `用第 ${task.confirmedVersion} 版启动代理`}</button>
+    <p>
+      <label className={styles.check}><input type="checkbox" checked={planFirst} disabled={busy} onChange={(event) => setPlanFirst(event.target.checked)} />先出修改计划，批准后再改代码</label>
+      <small>代理先只读代码并提交计划，由导师或学生本人（非发起人）批准后才开始修改。{suggestion && !planFirst ? <strong> {suggestion}</strong> : null}</small>
+    </p>
     <ErrorNote error={error} />
   </form>;
 }
