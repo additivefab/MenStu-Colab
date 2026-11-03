@@ -4,6 +4,8 @@ import handler from "vinext/server/app-router-entry";
 
 interface Env {
   ASSETS: Fetcher;
+  /** Optional public origin for notification links sent from the cron sweep. */
+  PUBLIC_SITE_ORIGIN?: string;
   DB: D1Database;
   FILES: R2Bucket;
   IMAGES: {
@@ -13,6 +15,11 @@ interface Env {
       };
     };
   };
+}
+
+interface ScheduledEvent {
+  cron: string;
+  scheduledTime: number;
 }
 
 interface ExecutionContext {
@@ -42,6 +49,34 @@ const worker = {
     }
 
     return handler.fetch(request, env, ctx);
+  },
+
+  // G2 compensating reconciliation (lib/loop-maintenance.ts). Runs on a Worker
+  // cron trigger: `triggers: { crons: ["*/10 * * * *"] }` in vite.config.ts
+  // `localBindingConfig` (emitted to dist/server/wrangler.json) for a Wrangler deploy.
+  // The hosted Sites deployment exposes no trigger setting; there the lab
+  // runner host calls POST /api/admin/maintenance instead (see that route).
+  // Imported lazily: the module graph uses `cloudflare:workers`, which the
+  // plain-Node render tests of this entry cannot load.
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    if (!env.DB) return;
+    const now = Number.isFinite(event.scheduledTime) ? new Date(event.scheduledTime) : new Date();
+    const run = import("../lib/loop-maintenance").then(({ runLoopMaintenance }) => runLoopMaintenance(env.DB, env, { now }));
+    ctx.waitUntil(run.then((report) => {
+      const counts = {
+        runsCanceled: report.runs.cancelFinalized.count,
+        runsNeedingAttention: report.runs.staleAttention.count,
+        attemptsFailed: report.agentAttempts.leaseExpiredFailed.count,
+        attemptsCanceled: report.agentAttempts.cancelFinalized.count,
+        changeRequestsChecked: report.changeRequests.checked.count,
+        publishingStuck: report.changeRequests.publishingStuck.count,
+        notificationsSent: report.notifications.sent.count,
+        errors: report.errors.length,
+      };
+      console.log(`loop maintenance ${event.cron}: ${JSON.stringify(counts)}`);
+    }, (error: unknown) => {
+      console.error("loop maintenance failed", error instanceof Error ? error.message : error);
+    }));
   },
 };
 

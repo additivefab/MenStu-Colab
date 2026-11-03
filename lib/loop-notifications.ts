@@ -336,3 +336,77 @@ export async function notifyLoopEvent(d1: D1Database, event: LoopNotificationEve
     console.warn(`loop notification ${event.kind} skipped: ${shortError(error)}`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Retry (G2 compensating reconciliation, lib/loop-maintenance.ts)
+// ---------------------------------------------------------------------------
+
+const ENTITY_ID = "[A-Za-z0-9_-]{1,80}";
+const EVENT_KEY_PATTERNS: [RegExp, (match: RegExpExecArray) => LoopNotificationEvent][] = [
+  [new RegExp(`^task_draft:(${ENTITY_ID}):v\\d+$`), (match) => ({ kind: "task_draft", taskId: match[1], actorUserId: 0 })],
+  [new RegExp(`^plan_submitted:(${ENTITY_ID}):v\\d+$`), (match) => ({ kind: "plan_submitted", attemptId: match[1] })],
+  [new RegExp(`^change_(?:extra_review|ready):(${ENTITY_ID})$`), (match) => ({ kind: "change_request", changeRequestId: match[1], actorUserId: null })],
+  [new RegExp(`^run_awaiting_approval:(${ENTITY_ID})$`), (match) => ({ kind: "run_awaiting_approval", runId: match[1], actorUserId: 0 })],
+  [new RegExp(`^run_result_ready:(${ENTITY_ID})$`), (match) => ({ kind: "run_result_ready", runId: match[1] })],
+  [new RegExp(`^review_saved:(${ENTITY_ID}):v(\\d+)$`), (match) => ({ kind: "review_saved", runId: match[1], version: Number(match[2]), actorUserId: 0 })],
+];
+
+/** Rebuilds the event behind a stored event key. The original actor is not
+ * needed: the stored recipient was chosen with the actor already excluded. */
+function eventFromKey(eventKey: string): LoopNotificationEvent | null {
+  for (const [pattern, build] of EVENT_KEY_PATTERNS) {
+    const match = pattern.exec(eventKey);
+    if (match) return build(match);
+  }
+  return null;
+}
+
+export type LoopNotificationRetryOutcome = "sent" | "failed" | "stale" | "not_claimed";
+
+/** Retries one `failed` delivery with the existing sender. It sends only while
+ * the event still waits for that recipient (same event key, recipient still a
+ * valid candidate) and only after claiming the row (failed → pending with
+ * attempts below the limit), so concurrent retries never send twice. The
+ * Feishu message uuid is the original one, so Feishu de-duplicates a send that
+ * did arrive earlier. Never throws. `origin` builds the deep link (undefined =
+ * the current request's origin, if any; null = no link). */
+export async function retryLoopNotification(
+  d1: D1Database,
+  row: { eventKey: string; recipientUserId: number; channel: string },
+  options: { origin?: string | null; maxAttempts?: number } = {},
+): Promise<LoopNotificationRetryOutcome> {
+  try {
+    if (row.channel !== CHANNEL || !isFeishuConfigured()) return "not_claimed";
+    const event = eventFromKey(row.eventKey);
+    const plan = event ? await planFor(d1, event) : null;
+    if (!plan || plan.eventKey !== row.eventKey || !plan.candidates.includes(row.recipientUserId)) return "stale";
+    const [recipient] = await recipientsFor(d1, [row.recipientUserId]);
+    if (!recipient) return "stale";
+    const maxAttempts = Math.min(options.maxAttempts ?? MAX_ATTEMPTS, MAX_ATTEMPTS);
+    const claimed = await d1.prepare(`UPDATE loop_notifications SET status = 'pending'
+        WHERE event_key = ? AND recipient_user_id = ? AND channel = ? AND status = 'failed' AND attempts < ?
+        RETURNING recipient_user_id`)
+      .bind(row.eventKey, recipient.id, CHANNEL, maxAttempts).first();
+    if (!claimed) return "not_claimed";
+    const origin = options.origin === undefined ? await requestOrigin() : options.origin;
+    const url = origin ? new URL(plan.href, origin).toString() : null;
+    let error: string | null = null;
+    try {
+      const uuid = await messageUuid(`loop-notification:${plan.eventKey}:${recipient.id}:${CHANNEL}`);
+      await withTimeout(sendFeishuCard(recipient.feishu_open_id, card(plan.line, url), uuid), SEND_TIMEOUT_MS);
+    } catch (caught) {
+      error = shortError(caught);
+    }
+    await (error === null
+      ? d1.prepare(`UPDATE loop_notifications SET status = 'sent', attempts = attempts + 1, last_error = '', sent_at = CURRENT_TIMESTAMP
+          WHERE event_key = ? AND recipient_user_id = ? AND channel = ? AND status = 'pending'`)
+        .bind(plan.eventKey, recipient.id, CHANNEL)
+      : d1.prepare(`UPDATE loop_notifications SET status = 'failed', attempts = attempts + 1, last_error = ?
+          WHERE event_key = ? AND recipient_user_id = ? AND channel = ? AND status = 'pending'`)
+        .bind(error, plan.eventKey, recipient.id, CHANNEL)).run();
+    return error === null ? "sent" : "failed";
+  } catch (error) {
+    console.warn(`loop notification retry skipped: ${shortError(error)}`);
+    return "failed";
+  }
+}
