@@ -83,7 +83,8 @@ export type AttemptPlan = {
   decision: AttemptPlanDecision;
   submittedAt: string | null;
   /** Decider's display name (or id, depending on the server). */
-  decidedBy: string | number | null;
+  /** Platform returns {id, displayName}; older shapes tolerated. */
+  decidedBy: { id: number; displayName: string } | string | number | null;
   decidedAt: string | null;
   note: string;
   /** Optimistic-lock version sent back as `expectedVersion` on decide_plan. */

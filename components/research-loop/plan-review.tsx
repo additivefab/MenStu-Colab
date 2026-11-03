@@ -10,6 +10,7 @@ import css from "./plan-review.module.css";
 const NOTE_MAX = 2000;
 
 function decider(value: AttemptPlan["decidedBy"]) {
+  if (value && typeof value === "object") return value.displayName?.trim() || null;
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
