@@ -385,7 +385,25 @@ Required OS measures (recommended deployment):
 3. Ideally, run each attempt in its own container or VM with only
    `work/<attemptId>` and that one profile mounted. This closes the gap
    above where an agent shell command could read another profile's files.
-   The current worker does not do this.
+   Batch 7 adds the plumbing for this (see below); the launcher itself is
+   the operator's and has not been verified on a real host.
+
+### Deployment modes and isolation preflight (G01, batch 7)
+
+- `deployment`: `local_dev` (default, unchanged behaviour), `pilot` or
+  `production`. `isolation.mode`: `none` (default), `per_attempt_uid` or
+  `container`.
+- `pilot` + `none` with two or more credential profiles refuses to start;
+  `production` + `none` always refuses. A single-profile pilot may set
+  `acceptSharedUidRisk: true` and starts with a loud warning.
+- In the isolated modes both providers are started through a generated
+  stub that runs the operator's launcher (`infra/isolation-canary/launcher.mjs`)
+  with only that attempt's profile and workspace. The Codex path is wired
+  through `codexPathOverride` and is unverified locally.
+- Before a pilot, run `node infra/agent-worker/preflight.mjs --config <path>
+  --as-attempt` on the real host and keep the JSON report as T14/T15
+  evidence. Procedure: [`docs/ops/主机隔离验收.md`](../../docs/ops/主机隔离验收.md).
+  On a single-UID host it reports FAIL, which is the honest result.
 
 ### Git metadata and R01
 
