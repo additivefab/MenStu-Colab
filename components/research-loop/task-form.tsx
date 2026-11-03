@@ -52,6 +52,8 @@ export function TaskForm({ initial, title, submitLabel, note, onSubmit, onCancel
     agentMinutes: initial.budget.maxAgentMinutes?.toString() ?? "",
     gpuCount: initial.budget.maxGpuCount?.toString() ?? "",
     walltime: initial.budget.maxWalltimeMinutes?.toString() ?? "",
+    formalEvaluations: initial.budget.maxFormalEvaluations?.toString() ?? "",
+    reproTolerance: initial.budget.reproTolerance?.toString() ?? "",
   });
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -66,6 +68,10 @@ export function TaskForm({ initial, title, submitLabel, note, onSubmit, onCancel
     if (agent !== undefined) budget.maxAgentMinutes = agent;
     if (gpu !== undefined) budget.maxGpuCount = gpu;
     if (walltime !== undefined) budget.maxWalltimeMinutes = walltime;
+    const formalEvaluations = budgetNumber(draft.formalEvaluations);
+    const tolerance = budgetNumber(draft.reproTolerance);
+    if (formalEvaluations !== undefined) budget.maxFormalEvaluations = formalEvaluations;
+    if (tolerance !== undefined) budget.reproTolerance = tolerance;
     try {
       await onSubmit({
         title: draft.title, researchQuestion: draft.researchQuestion, hypothesis: draft.hypothesis,
@@ -97,6 +103,8 @@ export function TaskForm({ initial, title, submitLabel, note, onSubmit, onCancel
         <label>代理时长上限（分钟）<input type="number" min={0} max={240} inputMode="numeric" value={draft.agentMinutes} disabled={busy} onChange={(event) => set({ agentMinutes: event.target.value })} /></label>
         <label>GPU 数量上限<input type="number" min={0} max={8} inputMode="numeric" value={draft.gpuCount} disabled={busy} onChange={(event) => set({ gpuCount: event.target.value })} /></label>
         <label>单次运行时长上限（分钟）<input type="number" min={0} max={10080} inputMode="numeric" value={draft.walltime} disabled={busy} onChange={(event) => set({ walltime: event.target.value })} /></label>
+        <label>正式评测次数上限（可选）<input type="number" min={0} max={100} step={1} inputMode="numeric" value={draft.formalEvaluations} disabled={busy} placeholder="不限" onChange={(event) => set({ formalEvaluations: event.target.value })} /><small>同一任务版本、同一评价协议下最多登记几次正式评测；重跑和失败的运行都计入，未派发就取消的不计入。避免反复试评价集。</small></label>
+        <label>复现容差（可选）<input type="number" min={0} max={1} step="any" inputMode="decimal" value={draft.reproTolerance} disabled={busy} placeholder="默认 0.01" onChange={(event) => set({ reproTolerance: event.target.value })} /><small>同一运行规范再次执行时，每项指标与上次的差值绝对值不超过此值即视为在容差内；留空按 0.01。</small></label>
       </div>
     </details>
     <ErrorNote error={error} />

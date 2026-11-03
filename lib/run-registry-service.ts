@@ -16,9 +16,11 @@ import {
   canTransition, canonicalJson, isCommitSha, isSha256, newId, normalizeRepoPath, runSpecSha256, sha256Hex,
   validateMetricsFile,
   type ArtifactKind, type ComputeClaimResponse, type ComputeReconcileResponse, type EgressDecision, type EgressPolicy, type JsonValue,
-  type ManifestArtifact, type RunManifest, type RunSpec, type RunStatus,
+  type ManifestArtifact, type RunManifest, type RunSpec, type RunStatus, type TaskBudget,
 } from "./research-loop/contracts.ts";
-import type { BaselineCandidate, RunBaselineView } from "./research-loop/results-contract.ts";
+import type {
+  BaselineCandidate, EvaluationBudgetView, ReproductionView, RunBaselineView,
+} from "./research-loop/results-contract.ts";
 
 // ---------------------------------------------------------------------------
 // Errors and small validators
@@ -530,13 +532,21 @@ export async function createRun(d1: D1Database, actor: AppUser, body: Record<str
 
   const params = validateParams(parseJson<ParamsSchema>(entrypoint.params_schema_json as string, {}), body.params);
   const resources = parseResources(body.resources);
-  const budget = parseJson<{ maxGpuCount?: number; maxWalltimeMinutes?: number }>(version.budget_json, {});
+  const budget = parseJson<TaskBudget>(version.budget_json, {});
   if (budget.maxGpuCount !== undefined && resources.gpuCount > budget.maxGpuCount) {
     throw bad(`GPU 数量超过任务预算（上限 ${budget.maxGpuCount}）`, "OVER_BUDGET");
   }
   if (budget.maxWalltimeMinutes !== undefined && resources.walltimeMinutes > budget.maxWalltimeMinutes) {
     throw bad(`运行时长超过任务预算（上限 ${budget.maxWalltimeMinutes} 分钟）`, "OVER_BUDGET");
   }
+  // Pack 02 §9: early, friendly rejection; the guarded INSERT below is what
+  // actually enforces the limit under concurrency.
+  const evaluationScope: EvaluationScope = {
+    taskId: task.id, taskVersion: task.confirmed_version,
+    evaluationProtocolSha256: entrypoint.evaluation_protocol_sha256 as string,
+    limit: formalEvaluationLimit(version.budget_json),
+  };
+  await assertEvaluationBudget(d1, evaluationScope);
 
   const hasCr = body.changeRequestId !== undefined && body.changeRequestId !== null && body.changeRequestId !== "";
   const hasSha = body.executedCommitSha !== undefined && body.executedCommitSha !== null && body.executedCommitSha !== "";
@@ -596,15 +606,19 @@ export async function createRun(d1: D1Database, actor: AppUser, body: Record<str
   const sha256 = await runSpecSha256(spec);
   const canonical = canonicalJson(spec as unknown as JsonValue);
   const runId = newId("run");
+  let inserted: boolean;
   try {
-    await d1.batch([
+    const results = await d1.batch([
       d1.prepare(`INSERT OR IGNORE INTO run_specs (sha256, canonical_json, task_id, task_version, student_id, github_repository_id,
         executed_commit_sha, entrypoint_id, dataset_version_id, change_request_id, created_by_user_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(sha256, canonical, task.id, task.confirmed_version, task.student_id, link.github_repository_id,
           executedCommitSha, entrypointId, datasetVersionId, changeRequestId, actor.id),
-      ...newRunStatements(d1, { runId, sha256, taskId: task.id, studentId: task.student_id, key, actor, payload: { action: "created" } }),
+      ...newRunStatements(d1, {
+        runId, sha256, taskId: task.id, studentId: task.student_id, key, actor, payload: { action: "created" }, evaluation: evaluationScope,
+      }),
     ]);
+    inserted = (results[1]?.meta?.changes ?? 0) === 1;
   } catch (error) {
     const existing = await d1.prepare("SELECT * FROM runs WHERE idempotency_key = ?").bind(key).first<RunRow>();
     if (existing && existing.task_id === task.id && existing.created_by_user_id === actor.id) {
@@ -613,25 +627,149 @@ export async function createRun(d1: D1Database, actor: AppUser, body: Record<str
     if (String(error).includes("UNIQUE")) throw conflict("运行创建冲突，请重试", "CREATE_CONFLICT");
     throw error;
   }
+  if (!inserted) throw budgetExhausted(evaluationScope);
   await notifyLoopEvent(d1, { kind: "run_awaiting_approval", runId, actorUserId: actor.id });
   const created = await loadRun(d1, runId);
   return { runId, runSpecSha256: sha256, attempt: created?.attempt ?? 1, status: "awaiting_approval" as RunStatus, replayed: false };
 }
 
+/** The runs INSERT comes first; when `evaluation.limit` is set it only applies
+ * while fewer than `limit` formal evaluations exist (checked inside the same
+ * statement, so concurrent creates cannot exceed it), and the event insert
+ * follows only if the run row exists. Callers check the INSERT's changes. */
 function newRunStatements(d1: D1Database, input: {
   runId: string; sha256: string; taskId: string; studentId: string; key: string; actor: AppUser; payload: Record<string, JsonValue>;
+  evaluation: EvaluationScope;
 }) {
+  const guard = input.evaluation.limit === null ? null : evaluationCountSql(input.evaluation);
   return [
     // created_at in milliseconds: run numbers follow creation order, and
     // second resolution made same-second runs tie (resolved below by rowid).
     d1.prepare(`INSERT INTO runs (id, run_spec_sha256, attempt, task_id, student_id, status, idempotency_key, submit_tag, created_by_user_id, created_at)
-      VALUES (?, ?, (SELECT COALESCE(MAX(attempt), 0) + 1 FROM runs WHERE run_spec_sha256 = ?), ?, ?, 'awaiting_approval', ?, ?, ?,
-        strftime('%Y-%m-%d %H:%M:%f', 'now'))`)
-      .bind(input.runId, input.sha256, input.sha256, input.taskId, input.studentId, input.key, `tanyan-${input.runId}`, input.actor.id),
+      SELECT ?, ?, (SELECT COALESCE(MAX(attempt), 0) + 1 FROM runs WHERE run_spec_sha256 = ?), ?, ?, 'awaiting_approval', ?, ?, ?,
+        strftime('%Y-%m-%d %H:%M:%f', 'now')${guard ? `
+      WHERE (${guard.sql}) < ?` : ""}`)
+      .bind(input.runId, input.sha256, input.sha256, input.taskId, input.studentId, input.key, `tanyan-${input.runId}`, input.actor.id,
+        ...(guard ? [...guard.binds, input.evaluation.limit] : [])),
     d1.prepare(`INSERT INTO run_events (run_id, sequence, from_status, to_status, actor_type, actor_id, payload_json)
-      VALUES (?, 1, '', 'awaiting_approval', 'user', ?, ?)`)
-      .bind(input.runId, String(input.actor.id), JSON.stringify(input.payload)),
+      SELECT ?, 1, '', 'awaiting_approval', 'user', ?, ? WHERE EXISTS (SELECT 1 FROM runs WHERE id = ?)`)
+      .bind(input.runId, String(input.actor.id), JSON.stringify(input.payload), input.runId),
   ];
+}
+
+// ---------------------------------------------------------------------------
+// Research validity (batch 6, pack 02 §9 and T22): formal evaluation budget
+// and reproduction checks. Shapes: EvaluationBudgetView / ReproductionView.
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_REPRO_TOLERANCE = 0.01;
+/** Absorbs binary floating-point noise (0.92 - 0.91 > 0.01 in IEEE 754). */
+const TOLERANCE_EPSILON = 1e-9;
+
+type EvaluationScope = { taskId: string; taskVersion: number; evaluationProtocolSha256: string; limit: number | null };
+
+function formalEvaluationLimit(budgetJson: string | null | undefined) {
+  const limit = parseJson<TaskBudget>(budgetJson, {}).maxFormalEvaluations;
+  return typeof limit === "number" && Number.isSafeInteger(limit) && limit >= 0 ? limit : null;
+}
+
+function reproTolerance(budgetJson: string | null | undefined) {
+  const tolerance = parseJson<TaskBudget>(budgetJson, {}).reproTolerance;
+  return typeof tolerance === "number" && Number.isFinite(tolerance) && tolerance >= 0 ? tolerance : DEFAULT_REPRO_TOLERANCE;
+}
+
+/** Formal evaluations of one task version under one evaluation protocol:
+ * every run except those canceled before dispatch (canceled and never
+ * claimed, i.e. started_at IS NULL). Failed runs and reruns count. */
+function evaluationCountSql(scope: Pick<EvaluationScope, "taskId" | "taskVersion" | "evaluationProtocolSha256">) {
+  return {
+    sql: `SELECT COUNT(*) FROM runs ev JOIN run_specs evs ON evs.sha256 = ev.run_spec_sha256
+      WHERE evs.task_id = ? AND evs.task_version = ?
+        AND json_extract(evs.canonical_json, '$.evaluationProtocolSha256') = ?
+        AND NOT (ev.status = 'canceled' AND ev.started_at IS NULL)`,
+    binds: [scope.taskId, scope.taskVersion, scope.evaluationProtocolSha256] as unknown[],
+  };
+}
+
+async function countFormalEvaluations(d1: D1Database, scope: EvaluationScope) {
+  const count = evaluationCountSql(scope);
+  const row = await d1.prepare(`SELECT (${count.sql}) AS used`).bind(...count.binds).first<{ used: number }>();
+  return row?.used ?? 0;
+}
+
+function budgetView(scope: EvaluationScope, used: number): EvaluationBudgetView {
+  return {
+    taskVersion: scope.taskVersion, evaluationProtocolSha256: scope.evaluationProtocolSha256, used, limit: scope.limit,
+    remaining: scope.limit === null ? null : Math.max(0, scope.limit - used),
+  };
+}
+
+function budgetExhausted(scope: EvaluationScope) {
+  return conflict(`第 ${scope.taskVersion} 版任务在该评价协议下的正式评测次数已用完（上限 ${scope.limit} 次）。如需继续评测，请与导师商量后修改任务并重新确认。`,
+    "EVALUATION_BUDGET_EXHAUSTED");
+}
+
+async function assertEvaluationBudget(d1: D1Database, scope: EvaluationScope) {
+  if (scope.limit === null) return;
+  if (await countFormalEvaluations(d1, scope) >= scope.limit) throw budgetExhausted(scope);
+}
+
+async function evaluationScopeFor(d1: D1Database, taskId: string, taskVersion: number, evaluationProtocolSha256: string) {
+  const version = await d1.prepare("SELECT budget_json FROM research_task_versions WHERE task_id = ? AND version = ?")
+    .bind(taskId, taskVersion).first<{ budget_json: string }>();
+  const scope: EvaluationScope = { taskId, taskVersion, evaluationProtocolSha256, limit: formalEvaluationLimit(version?.budget_json) };
+  return { scope, budgetJson: version?.budget_json ?? null };
+}
+
+/** GET /api/runs?view=evaluation_budget&taskId=&evaluationProtocolSha256=
+ * Budget of the task's confirmed version under that protocol, for the run
+ * form; null while the task is not confirmed. Viewers in scope only. */
+export async function readEvaluationBudget(d1: D1Database, actor: AppUser, query: { taskId: unknown; evaluationProtocolSha256: unknown }) {
+  const taskId = identifier(query.taskId, "研究任务");
+  if (!isSha256(query.evaluationProtocolSha256)) throw bad("评价协议 sha256 无效");
+  const task = await confirmedTask(d1, taskId);
+  if (!(await canViewStudent(actor, task.student_id))) throw forbidden("无权查看该学生的运行");
+  if (task.status !== "confirmed" || !task.confirmed_version) return { evaluationBudget: null };
+  const { scope } = await evaluationScopeFor(d1, task.id, task.confirmed_version, query.evaluationProtocolSha256);
+  return { evaluationBudget: budgetView(scope, await countFormalEvaluations(d1, scope)) };
+}
+
+function finiteMetrics(metricsJson: string | null | undefined): { [name: string]: number } {
+  const values = metricValues(metricsJson) ?? {};
+  return Object.fromEntries(Object.entries(values).filter(([, value]) => typeof value === "number" && Number.isFinite(value)));
+}
+
+/** Detail additions: the run's evaluation budget and, for a completed run with
+ * attempt > 1, the comparison with the most recent earlier completed
+ * execution of the same run spec (null when there is none). Only metrics
+ * present in both are compared; |diff| <= tolerance (absolute) is within.
+ * Callers have already checked view scope. */
+export async function readRunValidityViews(d1: D1Database, run: { id: string; runSpecSha256: string; attempt: number; status: string },
+  spec: Pick<RunSpec, "taskId" | "taskVersion" | "evaluationProtocolSha256">): Promise<{ evaluationBudget: EvaluationBudgetView; reproduction: ReproductionView | null }> {
+  const { scope, budgetJson } = await evaluationScopeFor(d1, spec.taskId, spec.taskVersion, spec.evaluationProtocolSha256);
+  const evaluationBudget = budgetView(scope, await countFormalEvaluations(d1, scope));
+  if (run.status !== "completed" || run.attempt <= 1) return { evaluationBudget, reproduction: null };
+  const [current, previous] = await Promise.all([
+    d1.prepare("SELECT metrics_json FROM run_results WHERE run_id = ?").bind(run.id).first<{ metrics_json: string | null }>(),
+    d1.prepare(`SELECT r.id, r.attempt, res.metrics_json FROM runs r LEFT JOIN run_results res ON res.run_id = r.id
+      WHERE r.run_spec_sha256 = ? AND r.attempt < ? AND r.status = 'completed' ORDER BY r.attempt DESC LIMIT 1`)
+      .bind(run.runSpecSha256, run.attempt).first<{ id: string; attempt: number; metrics_json: string | null }>(),
+  ]);
+  if (!previous) return { evaluationBudget, reproduction: null };
+  const tolerance = reproTolerance(budgetJson);
+  const now = finiteMetrics(current?.metrics_json);
+  const before = finiteMetrics(previous.metrics_json);
+  const metrics = Object.keys(now).filter((name) => Object.prototype.hasOwnProperty.call(before, name)).sort().map((name) => {
+    const diff = now[name] - before[name];
+    return { name, current: now[name], previous: before[name], diff, withinTolerance: Math.abs(diff) <= tolerance + TOLERANCE_EPSILON };
+  });
+  return {
+    evaluationBudget,
+    reproduction: {
+      comparedRunId: previous.id, comparedAttempt: previous.attempt, tolerance, metrics,
+      reproduced: metrics.length > 0 && metrics.every((item) => item.withinTolerance),
+    },
+  };
 }
 
 async function runForActor(d1: D1Database, actor: AppUser, runIdValue: unknown) {
@@ -731,16 +869,21 @@ export async function rerunRun(d1: D1Database, actor: AppUser, body: Record<stri
   if (reusable?.entrypoint_active !== 1 || reusable?.dataset_active !== 1 || !reusable?.grants) {
     throw conflict("入口、数据集或数据授权已失效，不能重跑", "RERUN_NOT_ALLOWED");
   }
+  const { scope: evaluationScope } = await evaluationScopeFor(d1, spec.taskId, spec.taskVersion, spec.evaluationProtocolSha256);
+  await assertEvaluationBudget(d1, evaluationScope);
   const runId = newId("run");
+  let inserted: boolean;
   try {
-    await d1.batch(newRunStatements(d1, {
+    const results = await d1.batch(newRunStatements(d1, {
       runId, sha256: source.run_spec_sha256, taskId: source.task_id, studentId: source.student_id, key, actor,
-      payload: { action: "rerun", sourceRunId: source.id },
+      payload: { action: "rerun", sourceRunId: source.id }, evaluation: evaluationScope,
     }));
+    inserted = (results[0]?.meta?.changes ?? 0) === 1;
   } catch (error) {
     if (String(error).includes("UNIQUE")) throw conflict("重跑冲突，请重试", "CREATE_CONFLICT");
     throw error;
   }
+  if (!inserted) throw budgetExhausted(evaluationScope);
   await notifyLoopEvent(d1, { kind: "run_awaiting_approval", runId, actorUserId: actor.id });
   const created = await loadRun(d1, runId);
   return { runId, runSpecSha256: source.run_spec_sha256, attempt: created?.attempt ?? source.attempt + 1, status: "awaiting_approval" as RunStatus, replayed: false };
