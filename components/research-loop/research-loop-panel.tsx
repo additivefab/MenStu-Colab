@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { getJson, newKey, postJson, type RunList, type TaskSummary } from "./api";
 import { anchorId, LoopNavigationContext, type ChangeRequestRef, type LoopNavigation } from "./navigation";
 import { sequenceNumbers } from "./numbering";
+import { Readiness } from "./readiness";
 import type { StageTarget } from "./stage-model";
 import { TaskCard } from "./task-card";
 import { emptyTaskContent, TaskForm, type TaskContentDraft } from "./task-form";
@@ -165,6 +166,7 @@ function PanelContent({ studentId, mode, prefill, guidanceHref }: {
       </div>
       {!creating ? <button type="button" className={styles.primary} onClick={() => setCreating({ initial: emptyTaskContent, key: newKey() })}>新建研究任务</button> : null}
     </header>
+    <Readiness studentId={studentId} mode={mode} />
     {creating ? <TaskForm
       title={creating.sourceGuidanceNoteId ? "由导师意见创建研究任务" : "新建研究任务"}
       submitLabel="保存为草稿"
