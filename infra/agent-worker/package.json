@@ -1,0 +1,17 @@
+{
+  "name": "@tanyan/agent-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lab-side agent worker: runs Codex/Claude on confirmed research tasks with per-user subscription credentials and returns constrained change sets.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node --experimental-strip-types worker.mjs --config config.json",
+    "test": "node --experimental-strip-types --test *.test.mjs"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "0.166.0"
+  }
+}

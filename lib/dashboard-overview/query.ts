@@ -4,6 +4,7 @@ import type { AppUser } from "../feishu-auth";
 import { readMonthlyDeliveries } from "../monthly-delivery-service";
 import { loadProblemRecords } from "../problem-records-service";
 import { loadProgressResolutions } from "../progress-resolution-service";
+import { countLoopInboxByStudent } from "../research-loop-inbox";
 import { assembleMentorOverview } from "./assemble";
 import {
   acceptedTrackProgressSql,
@@ -107,6 +108,18 @@ type GuidanceRow = {
   updated_at: string;
 };
 
+// Research-loop pending counts (plan FA1) for staff viewers only. A failure here
+// must not take the whole group overview down: the column is simply omitted.
+async function loadLoopPendingCounts(d1: D1Database, viewer: AppUser): Promise<Record<string, number> | null> {
+  if (viewer.role !== "superadmin" && viewer.role !== "admin") return null;
+  try {
+    return await countLoopInboxByStudent(d1, { id: viewer.id, role: viewer.role });
+  } catch (error) {
+    console.error("全组进度：闭环待处理计数读取失败", error);
+    return null;
+  }
+}
+
 type PaperRow = {
   id: number;
   student_id: string;
@@ -148,7 +161,7 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
     };
   }
 
-  const [reviewableResult, substantiveResult, trackResult, submittedResult, outstandingResult, proposalResult, milestoneResult, guidanceResult, paperResult, resolutions, problemRecords, monthlyDeliveries] = await Promise.all([
+  const [reviewableResult, substantiveResult, trackResult, submittedResult, outstandingResult, proposalResult, milestoneResult, guidanceResult, paperResult, resolutions, problemRecords, monthlyDeliveries, loopPendingByStudent] = await Promise.all([
     viewer.role === "superadmin"
       ? Promise.resolve({ results: studentIds
         .filter((studentId) => studentId !== viewer.studentId)
@@ -168,6 +181,7 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
       id: student.id, name: student.display_name, stage: student.stage, canRecord: false,
     }))),
     readMonthlyDeliveries(d1, studentIds, now),
+    loadLoopPendingCounts(d1, viewer),
   ]);
   const reviewableRows = reviewableResult.results as Array<{ student_id: string }>;
   const substantiveRows = substantiveResult.results as SubstantiveRow[];
@@ -194,5 +208,6 @@ export async function loadMentorOverview(viewer: AppUser, now = new Date()): Pro
     resolutions,
     problemRecords,
     monthlyDeliveries,
+    loopPendingByStudent,
   }, viewer, now);
 }

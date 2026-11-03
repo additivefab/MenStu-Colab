@@ -21,6 +21,16 @@ import type { MonthlyDeliverySummary } from "../lib/monthly-delivery";
 import type { ProblemRecordStudent } from "../lib/problem-records";
 import { clearMutationKey, mutationKeyForForm } from "../lib/client-idempotency";
 import { StudentRepositoryCard } from "./components/student-repository-card";
+import { ResearchLoopPanel } from "../components/research-loop/research-loop-panel";
+import { DelegatedReviews } from "../components/research-loop/delegated-reviews";
+import type { LoopInboxItem, LoopInboxKind } from "../lib/research-loop-inbox";
+import loopStyles from "./components/loop-inbox.module.css";
+import { ResearchLoopAdmin } from "../components/research-loop/admin-panel";
+import { EvidenceList, ProgressDraftNotice } from "../components/research-loop/evidence-list";
+import { draftNoticeText, draftRunParam, parseProgressDraft, progressDraftPrefill, type ProgressDraftPrefill } from "../components/research-loop/evidence-model";
+import { progressDraftStorageKey } from "../components/research-loop/result-insights-model";
+import { postJson } from "../components/research-loop/api";
+import type { ProgressDraft } from "../lib/research-loop/results-contract";
 
 declare global {
   interface Window {
@@ -406,6 +416,8 @@ type DashboardData = {
   papers: StudentPaper[];
   researchOutputs: ResearchOutput[];
   pending: PendingEntry[];
+  /** Research loop decisions for the viewer (lib/research-loop-inbox.ts, batch 3). */
+  loopTasks?: LoopInboxItem[];
   workflowTasks: Array<{
     id: number;
     type: "proposal_review" | "blocked_milestone" | "overdue_milestone" | "guidance_verification" | "resolution_verification";
@@ -448,6 +460,8 @@ type DashboardData = {
     proposalPending: number;
     guidancePending: number;
     resolutionPending?: number;
+    /** Research loop decisions waiting on the viewer (batch 3). */
+    loopPending?: number;
     blocked: number;
     outputs: number;
     attention: number;
@@ -900,8 +914,8 @@ export default function Dashboard() {
             <div className="nav-entry" key={item.id}>
               <button className={`nav-item ${activeView === item.id ? "active" : ""}`} onClick={() => navigateMentor(item.id)}>
                 <span>{item.icon}</span>{item.label}
-                {item.id === "inbox" && data && data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + data.metrics.blocked + meetingPendingCount > 0
-                  ? <b>{data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + data.metrics.blocked + meetingPendingCount}</b> : null}
+                {item.id === "inbox" && data && data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + (data.metrics.loopPending ?? 0) + data.metrics.blocked + meetingPendingCount > 0
+                  ? <b>{data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + (data.metrics.loopPending ?? 0) + data.metrics.blocked + meetingPendingCount}</b> : null}
               </button>
             </div>
           ))}
@@ -961,6 +975,7 @@ export default function Dashboard() {
           <ProblemRecords active={activeView === "issues" && !loading && !error} query={query} refreshRequest={issuesRefreshRequest} onRecord={(students, selectedStudentId) => setIssueForm({ students, selectedStudentId })} />
         </div>
 
+        {data && activeView === "inbox" ? <DelegatedReviews /> : null}
         {data && activeView === "inbox" ? (
           <MentorDecisionInbox
             data={data}
@@ -1008,7 +1023,54 @@ type MentorTaskCategory = "decision" | "coordination" | "followup" | "waiting";
 type MentorInboxTask =
   | { key: string; category: MentorTaskCategory; kind: "progress"; entry: PendingEntry }
   | { key: string; category: MentorTaskCategory; kind: "workflow"; task: DashboardData["workflowTasks"][number] }
-  | { key: string; category: MentorTaskCategory; kind: "meeting"; request: MeetingRequest };
+  | { key: string; category: MentorTaskCategory; kind: "meeting"; request: MeetingRequest }
+  | { key: string; category: MentorTaskCategory; kind: "loop"; item: LoopInboxItem };
+
+const loopKindLabels: Record<LoopInboxKind, string> = {
+  task_confirmation: "确认任务",
+  change_extra_review: "额外审查",
+  run_approval: "批准运行",
+  result_review: "评审结果",
+  plan_review: "审阅计划",
+};
+
+const loopNextStep: Record<LoopInboxKind, string> = {
+  task_confirmation: "打开任务卡片，核对研究问题、范围和验收标准后确认，或退回学生修改。",
+  change_extra_review: "打开变更卡片，查看触发额外审查的原因和具体改动后通过或退回。",
+  run_approval: "打开运行卡片，核对“本次批准的内容”后批准或取消。",
+  result_review: "打开运行卡片，先看技术有效性和指标来源，再给出评审结论。",
+  plan_review: "打开代理卡片，阅读修改计划，同意后代理才会按计划改代码；不合适就退回。",
+};
+
+function loopDecisionText(item: LoopInboxItem) {
+  const run = item.runNumber != null ? `运行 #${item.runNumber}` : "这次运行";
+  if (item.kind === "task_confirmation") return `是否确认任务定义${item.taskVersion != null ? `（V${item.taskVersion}）` : ""}`;
+  if (item.kind === "change_extra_review") return "是否通过这次代码变更的额外审查";
+  if (item.kind === "run_approval") return `是否批准${run}`;
+  if (item.kind === "plan_review") return "是否同意代理按这份修改计划改代码";
+  return `如何评审${run}的结果`;
+}
+
+function loopWaitingText(since: string) {
+  const elapsed = Date.now() - instantTimestamp(since);
+  if (!Number.isFinite(elapsed)) return "等待时间未知";
+  const hours = Math.floor(Math.max(0, elapsed) / 3_600_000);
+  if (hours < 1) return "等待不到 1 小时";
+  if (hours < 24) return `已等待 ${hours} 小时`;
+  return `已等待 ${Math.floor(hours / 24)} 天`;
+}
+
+function loopSinceText(since: string) {
+  const timestamp = instantTimestamp(since);
+  if (!Number.isFinite(timestamp)) return "未知";
+  return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(timestamp));
+}
+
+function mentorTaskWaitingSince(task: MentorInboxTask) {
+  if (task.kind === "loop") return instantTimestamp(task.item.waitingSince);
+  if (task.kind === "progress") return instantTimestamp(task.entry.revisions.find((revision) => revision.revision_number === task.entry.current_revision)?.created_at ?? task.entry.submitted_at);
+  return Number.NaN;
+}
 
 const mentorTaskLabels: Record<MentorTaskCategory, string> = {
   decision: "需要判断",
@@ -1071,11 +1133,27 @@ function MentorDecisionInbox({ data, reviewBusy, receipt, onDismissReceipt, onPl
       kind: "meeting",
       request,
     })),
-  ], [data.pending, data.workflowTasks, meetingRequests]);
+    ...(data.loopTasks ?? []).map((item): MentorInboxTask => ({
+      key: `loop-${item.id}`,
+      category: "decision",
+      kind: "loop",
+      item,
+    })),
+  ], [data.pending, data.workflowTasks, data.loopTasks, meetingRequests]);
   const categoryPriority: Record<MentorTaskCategory, number> = { decision: 0, coordination: 1, followup: 2, waiting: 3 };
   const filtered = tasks
     .filter((task) => filter === "all" || task.category === filter)
-    .sort((left, right) => categoryPriority[left.category] - categoryPriority[right.category]);
+    .sort((left, right) => {
+      const byCategory = categoryPriority[left.category] - categoryPriority[right.category];
+      if (byCategory || left.category !== "decision") return byCategory;
+      // Decision items wait longest first; items without a timestamp keep their order after them.
+      const leftSince = mentorTaskWaitingSince(left);
+      const rightSince = mentorTaskWaitingSince(right);
+      const leftKnown = Number.isFinite(leftSince);
+      const rightKnown = Number.isFinite(rightSince);
+      if (leftKnown && rightKnown) return leftSince - rightSince;
+      return leftKnown === rightKnown ? 0 : leftKnown ? -1 : 1;
+    });
   const selected = filtered.find((task) => task.key === selectedKey) ?? filtered[0];
 
   async function handleMeeting(request: MeetingRequest, action: "confirm" | "decline") {
@@ -1157,9 +1235,9 @@ function MentorDecisionInbox({ data, reviewBusy, receipt, onDismissReceipt, onPl
       <div className="mentor-task-queue" aria-label="待办队列">
         {meetingLoadError ? <div className="mentor-task-load-error" role="alert"><strong>预约暂未同步</strong><small>{meetingLoadError}</small><button type="button" onClick={() => void onRefresh()}>重新读取</button></div> : null}
         {filtered.map((task) => {
-          const student = task.kind === "progress" ? task.entry.display_name : task.kind === "workflow" ? task.task.studentName : task.request.student_name;
-          const title = task.kind === "progress" ? task.entry.paper?.title || task.entry.title : task.kind === "workflow" ? task.task.title : task.request.topic;
-          const meta = task.kind === "progress" ? `${isAiSummaryCandidate(task.entry) ? "AI 纪要候选" : task.entry.kind} · V${task.entry.current_revision}` : task.kind === "workflow" ? task.task.detail : `${task.request.preferred_date} ${task.request.preferred_time}`;
+          const student = task.kind === "progress" ? task.entry.display_name : task.kind === "workflow" ? task.task.studentName : task.kind === "loop" ? task.item.studentName : task.request.student_name;
+          const title = task.kind === "progress" ? task.entry.paper?.title || task.entry.title : task.kind === "workflow" ? task.task.title : task.kind === "loop" ? `${loopKindLabels[task.item.kind]}：${task.item.taskTitle}` : task.request.topic;
+          const meta = task.kind === "progress" ? `${isAiSummaryCandidate(task.entry) ? "AI 纪要候选" : task.entry.kind} · V${task.entry.current_revision}` : task.kind === "workflow" ? task.task.detail : task.kind === "loop" ? `${task.item.title} · ${loopWaitingText(task.item.waitingSince)}` : `${task.request.preferred_date} ${task.request.preferred_time}`;
           return <button key={task.key} className={selected?.key === task.key ? "active" : ""} onClick={() => {
             setSelectedKey(task.key);
             if (window.matchMedia("(max-width: 780px)").matches) window.requestAnimationFrame(() => {
@@ -1169,6 +1247,7 @@ function MentorDecisionInbox({ data, reviewBusy, receipt, onDismissReceipt, onPl
           }}>
             <span className={`mentor-task-category ${task.category}`}>{mentorTaskLabels[task.category]}</span>
             <strong>{student}</strong><b>{title}</b><small>{meta}</small>
+            {task.kind === "loop" && task.item.technicalValidity === "invalid" ? <em className={loopStyles.invalidTag}>技术无效</em> : null}
           </button>;
         })}
         {!filtered.length && !meetingLoadError ? <div className="mentor-task-empty"><span>✓</span><strong>这个队列已清空</strong><small>切换类型可查看其他事项。</small></div> : null}
@@ -1201,6 +1280,19 @@ function MentorDecisionInbox({ data, reviewBusy, receipt, onDismissReceipt, onPl
           {selected.request.note ? <div className="mentor-decision-fact"><span>学生备注</span><strong>{selected.request.note}</strong></div> : null}
           <label className="review-note-field">回复说明<textarea rows={3} value={meetingNotes[selected.request.id] || ""} onChange={(event) => setMeetingNotes((current) => ({ ...current, [selected.request.id]: event.target.value }))} placeholder="确认时可留空；拒绝时必须给出可行动的原因" /></label>
           <div className="mentor-detail-actions"><button disabled={meetingBusy === selected.request.id} onClick={() => void handleMeeting(selected.request, "decline")}>拒绝并说明</button><button className="primary" disabled={meetingBusy === selected.request.id} onClick={() => void handleMeeting(selected.request, "confirm")}>确认预约</button></div>
+        </article> : null}
+        {selected?.kind === "loop" ? <article className="mentor-workflow-detail">
+          <span className={`mentor-task-category ${selected.category}`}>{mentorTaskLabels[selected.category]}</span>
+          <h2>{selected.item.title}</h2><p>{selected.item.studentName} · {loopKindLabels[selected.item.kind]} · {loopWaitingText(selected.item.waitingSince)}</p>
+          {selected.item.technicalValidity === "invalid" ? <div className={loopStyles.invalidNotice} role="note"><b>技术无效</b><span>这次运行的结果在技术上无效；仍需要你给出评审结论。</span></div> : null}
+          <dl className={loopStyles.facts}>
+            <div><dt>学生</dt><dd>{selected.item.studentName}</dd></div>
+            <div><dt>研究任务</dt><dd>{selected.item.taskTitle}</dd></div>
+            <div><dt>需要决定</dt><dd>{loopDecisionText(selected.item)}</dd></div>
+            <div><dt>等待自</dt><dd>{loopSinceText(selected.item.waitingSince)}</dd></div>
+          </dl>
+          <div className="mentor-decision-effect"><b>下一步</b><span>{loopNextStep[selected.item.kind]}</span></div>
+          <div className="mentor-detail-actions"><a className="primary button-link" href={selected.item.href}>{selected.item.kind === "task_confirmation" ? "打开任务卡片" : selected.item.kind === "change_extra_review" ? "打开变更卡片" : "打开运行卡片"}</a></div>
         </article> : null}
         {!selected ? <div className="mentor-task-detail-empty"><span>✓</span><h2>没有需要处理的事项</h2><p>新进展、方案、阻塞或预约到达后会进入这里。</p></div> : null}
       </div>
@@ -1429,7 +1521,24 @@ type StudentNavigationIntent = {
   milestoneId?: number;
   guidanceId?: number;
   meetingId?: number;
+  /** Run whose progress draft prefills the project composer (FA4). */
+  draftRunId?: string;
 };
+
+/** Progress draft handed over from a run's result card (FA4). */
+type StudentProgressDraftState = { runId: string; status: "loading" | "ready"; draft: ProgressDraft | null };
+
+function readStoredProgressDraft(runId: string) {
+  try {
+    return parseProgressDraft(window.sessionStorage.getItem(progressDraftStorageKey(runId)));
+  } catch {
+    return null;
+  }
+}
+
+function clearStoredProgressDraft(runId: string) {
+  try { window.sessionStorage.removeItem(progressDraftStorageKey(runId)); } catch { /* storage unavailable */ }
+}
 
 const studentViewMeta: Record<StudentView, { label: string; icon: string }> = {
   today: { label: "下一步", icon: "⌂" },
@@ -1452,12 +1561,14 @@ function studentNavigationHref(intent: StudentNavigationIntent) {
   if (intent.milestoneId) params.set("milestone", String(intent.milestoneId));
   if (intent.guidanceId) params.set("guidance", String(intent.guidanceId));
   if (intent.meetingId) params.set("meeting", String(intent.meetingId));
+  if (intent.draftRunId && intent.composerKind === "项目") params.set("draftRun", intent.draftRunId);
   return params.size ? `/?${params.toString()}` : "/";
 }
 
 function studentNavigationFromLocation(href: string): StudentNavigationIntent {
   const params = new URL(href).searchParams;
-  const rawView = params.get("studentView");
+  // The result card links with `view=progress` (FA4); `studentView` wins when both exist.
+  const rawView = params.get("studentView") ?? params.get("view");
   const view: StudentView = rawView === "research" || rawView === "progress" || rawView === "library" || rawView === "mentor" ? rawView : "today";
   const rawEntry = Number(params.get("entry"));
   const rawPaper = Number(params.get("paper"));
@@ -1477,6 +1588,7 @@ function studentNavigationFromLocation(href: string): StudentNavigationIntent {
     milestoneId: Number.isInteger(rawMilestone) && rawMilestone > 0 ? rawMilestone : undefined,
     guidanceId: Number.isInteger(rawGuidance) && rawGuidance > 0 ? rawGuidance : undefined,
     meetingId: Number.isInteger(rawMeeting) && rawMeeting > 0 ? rawMeeting : undefined,
+    draftRunId: compose === "project" ? draftRunParam(params.get("draftRun")) ?? undefined : undefined,
   };
 }
 
@@ -1520,6 +1632,8 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
   const [taskFilterRequest, setTaskFilterRequest] = useState<{ filter: "open" | "pending" | "completed"; key: number }>();
   const [resolutionRequest, setResolutionRequest] = useState<{ progressEntryId: number; itemKind: ProgressResolutionKind; key: number }>();
   const [pendingNavigation, setPendingNavigation] = useState<StudentNavigationIntent | null>(null);
+  const [progressDraft, setProgressDraft] = useState<StudentProgressDraftState | null>(null);
+  const progressDraftRunRef = useRef<string | null>(null);
   const student = data.students.find((item) => item.id === data.viewer.studentId);
   const papers = student ? data.papers.filter((paper) => paper.student_id === student.id) : [];
   const projectEntries = student?.progress.filter((entry) => entry.kind === "项目") ?? [];
@@ -1527,6 +1641,27 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
   const paperReturned = currentEntries.filter((entry) => entry.kind === "论文" && entry.review_status === "changes_requested").length;
   const projectReturned = currentEntries.filter((entry) => entry.kind === "项目" && entry.review_status === "changes_requested").length;
   const waitingCount = currentEntries.filter((entry) => entry.review_status === "submitted" || entry.review_status === "in_review").length;
+
+  // Prefill from the draft the result card stored; if it is missing (another
+  // tab, storage blocked), ask the server to rebuild it (no write). Never submits.
+  const loadProgressDraft = useCallback((runId: string) => {
+    if (progressDraftRunRef.current === runId) return;
+    progressDraftRunRef.current = runId;
+    const stored = readStoredProgressDraft(runId);
+    if (stored) {
+      setProgressDraft({ runId, status: "ready", draft: stored });
+      return;
+    }
+    setProgressDraft({ runId, status: "loading", draft: null });
+    postJson<{ draft?: unknown }>("/api/run-results", { action: "progress_draft", runId }, "进展草稿生成失败")
+      .then((payload) => parseProgressDraft(payload.draft), () => null)
+      .then((draft) => {
+        if (draft) {
+          try { window.sessionStorage.setItem(progressDraftStorageKey(runId), JSON.stringify(draft)); } catch { /* storage unavailable */ }
+        }
+        setProgressDraft((current) => current?.runId === runId ? { runId, status: "ready", draft } : current);
+      });
+  }, []);
 
   const applyStudentNavigation = useCallback((intent: StudentNavigationIntent) => {
     const nextResearchTrack = intent.researchTrack || "paper";
@@ -1538,11 +1673,14 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
     setComposerTargetId(intent.composerKind === "论文" ? intent.paperId ?? null
       : intent.composerKind === "项目" ? intent.milestoneId ?? null : null);
     setComposerVisible(Boolean(intent.composerKind));
+    if (intent.composerKind === "项目" && intent.draftRunId) loadProgressDraft(intent.draftRunId);
     setPendingNavigation(intent);
-  }, []);
+  }, [loadProgressDraft]);
 
   function navigateStudent(intent: StudentNavigationIntent) {
-    const nextIntent = intent.view === "progress" && !intent.composerKind && composer && composerVisible ? { ...intent, composerKind: composer } : intent;
+    const nextIntent = intent.view === "progress" && !intent.composerKind && composer && composerVisible
+      ? { ...intent, composerKind: composer, draftRunId: composer === "项目" ? progressDraft?.runId : undefined }
+      : intent;
     window.history.pushState({ studentView: nextIntent.view }, "", studentNavigationHref(nextIntent));
     applyStudentNavigation(nextIntent);
   }
@@ -1612,7 +1750,15 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
 
   if (!student) return <main className="student-portal-shell"><div className="error-state"><strong>学生档案尚未绑定</strong><span>请联系管理员核对账号与学生记录。</span></div></main>;
 
+  function closeProgressDraft() {
+    if (progressDraft) clearStoredProgressDraft(progressDraft.runId);
+    progressDraftRunRef.current = null;
+    setProgressDraft(null);
+  }
+
   function openComposer(kind: "论文" | "项目", targetId?: number) {
+    progressDraftRunRef.current = null;
+    setProgressDraft(null);
     navigateStudent({
       view: "progress",
       composerKind: kind,
@@ -1661,7 +1807,7 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
 
       <div hidden={view !== "today" && view !== "research"}><StudentRepositoryCard studentId={student.id} /></div>
 
-      {view === "today" ? <><StudentNextAction action={data.studentNextAction} student={student} papers={papers} onPaper={(paperId) => openComposer("论文", paperId)} onProject={(milestoneId) => openComposer("项目", milestoneId)} onMeeting={openMeetingDesk} onGuidance={openGuidanceDesk} onProgress={(entryId) => navigateStudent({ view: "progress", entryId })} onSupplement={openSupplement} onResolution={(progressEntryId, itemKind) => setResolutionRequest({ progressEntryId, itemKind, key: Date.now() })} /><ProgressResolutionPanel studentId={student.id} mode="student" onChanged={onRefresh} openRequest={resolutionRequest} filterRequest={taskFilterRequest} compact /></> : null}
+      {view === "today" ? <><StudentNextAction action={data.studentNextAction} student={student} papers={papers} onPaper={(paperId) => openComposer("论文", paperId)} onProject={(milestoneId) => openComposer("项目", milestoneId)} onMeeting={openMeetingDesk} onGuidance={openGuidanceDesk} onProgress={(entryId) => navigateStudent({ view: "progress", entryId })} onSupplement={openSupplement} onResolution={(progressEntryId, itemKind) => setResolutionRequest({ progressEntryId, itemKind, key: Date.now() })} /><ProgressResolutionPanel studentId={student.id} mode="student" onChanged={onRefresh} openRequest={resolutionRequest} filterRequest={taskFilterRequest} compact /><DelegatedReviews /></> : null}
 
       {view === "research" ? <>
         <StudentViewIntro id="student-view-research-title" title="我的研究" metric={`${paperReturned + projectReturned}`} metricLabel="项待补充">
@@ -1671,13 +1817,16 @@ function StudentPortal({ data, onRefresh, onToast, onFeishu, onSwitchToManagemen
           </nav>
         </StudentViewIntro>
         <StudentResearchTracks scope={researchTrack} student={student} papers={papers} selectedPaperId={researchPaperId} onSelectPaper={(paperId) => navigateStudent({ view: "research", researchTrack: "paper", paperId })} onOpenComposer={openComposer} />
+        <ResearchLoopPanel studentId={student.id} mode="student" />
       </> : null}
 
       {view === "progress" ? <StudentViewIntro id="student-view-progress-title" title="我的进展" metric={`${waitingCount}`} metricLabel="条等待导师">
         <div className="student-view-intro-actions"><button className="primary" type="button" onClick={() => openComposer("论文")}>记论文进展</button><button type="button" onClick={() => openComposer("项目")}>记课题进展</button></div>
       </StudentViewIntro> : null}
-      {composer ? <div className="student-persistent-composer" hidden={view !== "progress" || !composerVisible}><StudentQuickProgressComposer key={`${composer}-${composerTargetId ?? "default"}`} kind={composer} initialTargetId={composerTargetId} student={student} papers={papers} onCancel={() => { setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); }} onSaved={async () => { const savedKind = composer; setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); onToast(`${savedKind === "论文" ? "论文" : "课题"}进展已提交，记录已更新`); await onRefresh(); }} /></div> : null}
-      {view === "progress" ? <><StudentProgressOverview student={student} onChanged={onRefresh} onSupplement={openSupplement} currentEntryIds={new Set(currentEntries.map((entry) => entry.id))} />{paperReturned + projectReturned > 0 ? <details className="quiet-details student-supplement-section"><summary>待补充材料<span>{paperReturned + projectReturned} 条</span></summary><StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} returnedOnly /><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} returnedOnly /></details> : null}</> : null}
+      {composer ? <div className="student-persistent-composer" hidden={view !== "progress" || !composerVisible}>{composer === "项目" && progressDraft?.status === "loading"
+        ? <section className="student-quick-progress" id="student-quick-progress" tabIndex={-1} aria-busy="true"><header><h2>记录课题进展</h2></header><form onSubmit={(event) => event.preventDefault()}><p role="status">正在载入运行生成的进展草稿…</p></form></section>
+        : <StudentQuickProgressComposer key={`${composer}-${composerTargetId ?? "default"}-${composer === "项目" && progressDraft ? `draft-${progressDraft.runId}` : "blank"}`} kind={composer} initialTargetId={composerTargetId} student={student} papers={papers} progressDraft={composer === "项目" ? progressDraft : null} onCancel={() => { closeProgressDraft(); setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); }} onSaved={async () => { const savedKind = composer; closeProgressDraft(); setComposerVisible(false); setComposer(null); setComposerTargetId(null); window.history.replaceState({ studentView: "progress" }, "", studentNavigationHref({ view: "progress" })); onToast(`${savedKind === "论文" ? "论文" : "课题"}进展已提交，记录已更新`); await onRefresh(); }} />}</div> : null}
+      {view === "progress" ? <><EvidenceList studentId={student.id} mode="student" /><StudentProgressOverview student={student} onChanged={onRefresh} onSupplement={openSupplement} currentEntryIds={new Set(currentEntries.map((entry) => entry.id))} />{paperReturned + projectReturned > 0 ? <details className="quiet-details student-supplement-section"><summary>待补充材料<span>{paperReturned + projectReturned} 条</span></summary><StudentProgressPanel student={student} papers={papers} onRefresh={onRefresh} onToast={onToast} returnedOnly /><StudentProjectProgressPanel student={student} onRefresh={onRefresh} onToast={onToast} returnedOnly /></details> : null}</> : null}
 
       {view === "library" ? <><StudentViewIntro id="student-view-library-title" title="我的资料" /><StudentResearchLibrary student={student} onOpenSource={openResearchSource} /></> : null}
 
@@ -1789,11 +1938,13 @@ function formDataHasVerifiableEvidence(formData: FormData) {
   return Boolean(evidence || gitUrl || hasAttachment);
 }
 
-function StudentQuickProgressComposer({ kind, initialTargetId, student, papers, onCancel, onSaved }: {
+function StudentQuickProgressComposer({ kind, initialTargetId, student, papers, progressDraft = null, onCancel, onSaved }: {
   kind: "论文" | "项目";
   initialTargetId: number | null;
   student: Student;
   papers: StudentPaper[];
+  /** FA4: project progress prefilled from a run's draft; the student edits and submits it. */
+  progressDraft?: StudentProgressDraftState | null;
   onCancel: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -1809,6 +1960,7 @@ function StudentQuickProgressComposer({ kind, initialTargetId, student, papers, 
   const [projectMilestoneSelection, setProjectMilestoneSelection] = useState(initialMilestone ? String(initialMilestone.id) : "");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
+  const [prefill] = useState<ProgressDraftPrefill | null>(() => kind === "项目" && progressDraft?.draft ? progressDraftPrefill(progressDraft.draft) : null);
   const [{ minimumDate, nextWeek }] = useState(() => {
     const formatter = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" });
     const today = new Date();
@@ -1857,6 +2009,7 @@ function StudentQuickProgressComposer({ kind, initialTargetId, student, papers, 
       const details = (event.target as HTMLElement).closest("details");
       if (details) details.open = true;
     }}>
+      {kind === "项目" && progressDraft?.status === "ready" ? <ProgressDraftNotice found={Boolean(progressDraft.draft)} text={draftNoticeText(progressDraft.draft)} detail={progressDraft.draft ? "草稿只是起点，不会自动提交；请写明这次结果意味着什么、下一步如何判断。" : undefined} /> : null}
       {kind === "论文" ? <>
         <div className="student-quick-row"><label>哪篇论文<select value={paperSelection} onChange={(event) => { const value = event.target.value; setPaperSelection(value); setPaperStage(activePapers.find((paper) => String(paper.id) === value)?.current_stage ?? "planning"); }}>{activePapers.map((paper) => <option key={paper.id} value={paper.id}>{paper.title}</option>)}<option value="new">新建一篇论文</option></select></label><label>现在写到哪一步<select value={paperStage} onChange={(event) => setPaperStage(event.target.value as PaperStage)}>{paperStages.map((stage) => <option key={stage} value={stage}>{paperStageMeta[stage].label}</option>)}</select></label></div>
         {!selectedPaper ? <div className="student-quick-row new-paper"><label>论文题目<input name="paperTitle" required placeholder="暂定题目也可以" /></label><label>类型<select name="paperType" defaultValue="期刊论文">{paperTypes.map((type) => <option key={type}>{type}</option>)}</select></label><label>计划投稿<input name="plannedSubmissionDate" type="date" min={minimumDate} required /></label></div> : null}
@@ -1869,16 +2022,16 @@ function StudentQuickProgressComposer({ kind, initialTargetId, student, papers, 
           <label>关联培养节点<select name="linkedMilestoneId" value={projectMilestoneSelection} onChange={(event) => setProjectMilestoneSelection(event.target.value)} required={activeMilestones.length > 0} disabled={!activeMilestones.length}><option value="">{activeMilestones.length ? "请选择" : "暂无可关联节点"}</option>{activeMilestones.map((milestone) => <option key={milestone.id} value={milestone.id}>{milestone.title} · {milestoneStatusLabels[milestone.status]}</option>)}</select></label>
           {!activeMilestones.length ? <input type="hidden" name="linkedMilestoneId" value="" /> : null}
         </div>
-        <label className="wide">这次做完了什么<textarea name="summary" rows={4} required placeholder="例如：完成第一轮测试，结果表和异常样本已整理。" /></label>
+        <label className="wide">这次做完了什么<textarea name="summary" rows={prefill ? 7 : 4} required defaultValue={prefill?.summary} placeholder="例如：完成第一轮测试，结果表和异常样本已整理。" /></label>
         <div className="student-quick-row"><label>下一行动<input name="nextAction" required placeholder="例如：补做低温组对照实验" /></label><label>计划完成日期<input name="nextActionDueDate" type="date" min={minimumDate} defaultValue={nextWeek} required /></label></div>
         <label htmlFor="student-project-completion-request" className={`student-completion-request ${projectMilestoneSelection ? "" : "disabled"}`}><input id="student-project-completion-request" name="completionRequested" type="checkbox" value="1" disabled={!projectMilestoneSelection} /><span>申请完成所选节点<small>申请不会直接改状态；导师确认为实质性进展后才完成。</small></span></label>
       </>}
-      <label className="wide student-evidence-field">材料说明<textarea name="evidence" rows={3} placeholder={kind === "论文" ? "例如：稿件第 4–6 页、图 3/4，或评审记录位置。如果上传了附件可不填。" : "例如：实验批次 EXP-024、结果表 Sheet-2、验收记录位置。如果上传了附件可不填。"} /><small>填写证据位置、链接或编号，也可直接上传文件。</small></label>
-      <details className="quiet-details student-optional-fields">
+      <label className="wide student-evidence-field">材料说明<textarea name="evidence" rows={prefill?.evidence ? 6 : 3} defaultValue={prefill?.evidence} placeholder={kind === "论文" ? "例如：稿件第 4–6 页、图 3/4，或评审记录位置。如果上传了附件可不填。" : "例如：实验批次 EXP-024、结果表 Sheet-2、验收记录位置。如果上传了附件可不填。"} /><small>填写证据位置、链接或编号，也可直接上传文件。</small></label>
+      <details className="quiet-details student-optional-fields" open={prefill?.gitUrl ? true : undefined}>
         <summary>补充信息<span>阻塞、Git 链接{kind === "论文" ? "、稿件编号" : ""}</span></summary>
         <div>
           <label className="wide">本次新增问题（可选）<textarea name="blocker" rows={2} placeholder="填写新遇到、需要支持的问题；没有可留空。" /><small>已记录的问题会继续保留，不影响本次提交，无需重复填写。</small></label>
-          <label className="wide">私有 GitHub 链接（可选）<input name="gitUrl" type="url" placeholder="https://github.com/…" /></label>
+          <label className="wide">私有 GitHub 链接（可选）<input name="gitUrl" type="url" defaultValue={prefill?.gitUrl || undefined} placeholder="https://github.com/…" /></label>
           {kind === "论文" ? <label className="wide">稿件编号 / DOI（可选）<input name="submissionIdentifier" placeholder="投稿后填写稿件号或 DOI" /></label> : null}
         </div>
       </details>
@@ -2550,7 +2703,7 @@ function OverviewMetrics({ data }: { data: DashboardData }) {
   return <section className="metric-grid" aria-label="课题组概况">
     <article className="metric"><span>{data.viewer.role === "admin" ? "负责学生" : "在组学生"}</span><strong>{data.metrics.total}</strong><small>{data.metrics.doctors} 博士 · {data.metrics.masters} 硕士</small></article>
     <article className="metric"><span>科研成果与资产</span><strong>{data.metrics.outputs}</strong><small className="positive">论文、数据、软件、专利与交付物</small></article>
-    <article className="metric"><span>待我处理</span><strong>{data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + data.metrics.blocked}</strong><small>证据 {data.metrics.pending} · 方案 {data.metrics.proposalPending} · 验收 {data.metrics.guidancePending} · 节点 {data.metrics.blocked}</small></article>
+    <article className="metric"><span>待我处理</span><strong>{data.metrics.pending + data.metrics.proposalPending + data.metrics.guidancePending + (data.metrics.resolutionPending ?? 0) + (data.metrics.loopPending ?? 0) + data.metrics.blocked}</strong><small>证据 {data.metrics.pending} · 方案 {data.metrics.proposalPending} · 验收 {data.metrics.guidancePending} · 节点 {data.metrics.blocked} · 闭环 {data.metrics.loopPending ?? 0}</small></article>
     <article className="metric attention"><span>需要关注</span><strong>{data.metrics.attention}</strong><small>黄 {data.metrics.riskCounts.黄色 ?? 0} · 橙 {data.metrics.riskCounts.橙色 ?? 0} · 红 {data.metrics.riskCounts.红色 ?? 0}</small></article>
   </section>;
 }
@@ -3136,11 +3289,12 @@ function SettingsView({ viewer, onFeishu, students, onRosterImported }: {
     {viewer.role === "superadmin" ? <ProductionReadinessPanel /> : null}
     {viewer.role === "superadmin" ? <RosterImport students={students} onImported={onRosterImported} /> : null}
     {viewer.role === "superadmin" ? <StudentAccessSetup /> : null}
+    {viewer.role === "superadmin" ? <ResearchLoopAdmin students={students.map((student) => ({ id: student.id, name: student.name }))} /> : null}
     <section className="panel setting-card"><PanelHeader title="飞书集成" subtitle="登录、提醒与 AI 会议总结导入" /><div className="setting-body"><span className="status-pill safe">智能拆分已启用</span><p>普通聊天即时过滤；智能纪要会按学生姓名和汇报分段生成个人进展，归属不明确时才进入备用人工区。</p><button className="primary" onClick={onFeishu}>查看接入状态</button></div></section>
-    <section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="代码只能由本地模型读取" /><div className="setting-body"><span className="status-pill safe">本地读取</span><p>网站只保存仓库链接、提交号和学生主动提交的摘要，不把完整代码发送给云端 GPT。</p><small>当前不启用在线 GitHub 授权；仓库访问由导师本地工作区单独管理。</small></div></section>
+    <section className="panel setting-card"><PanelHeader title="GitHub 私有仓库" subtitle="已绑定仓库按确认的任务由授权代码代理处理" /><div className="setting-body"><span className="status-pill safe">按任务授权</span><p>已绑定的研究仓库可由授权代码代理在实验室工作进程中按确认的任务读取和修改；专利和保密项目仍只在本地处理。网站本身只保存仓库链接、提交号和摘要。</p><small>“代码与实验”需要的仓库授权通过 GitHub App 逐个开通，见“代码与实验配置”；未开通的仓库仍由导师本地工作区管理。</small></div></section>
     <section className="panel setting-card"><PanelHeader title="开源流程参考" subtitle="TUM · Moodle · OSIRIS · eLabFTW" /><div className="setting-body"><p>设计参考了以下开源项目的方案管理、权限和审核流程。</p><div className="reference-links"><a href="https://github.com/ls1intum/thesis-management" target="_blank" rel="noreferrer">TUM</a><a href="https://github.com/moodle/moodle" target="_blank" rel="noreferrer">Moodle</a><a href="https://github.com/OSIRIS-Solutions/osiris" target="_blank" rel="noreferrer">OSIRIS</a><a href="https://github.com/elabftw/elabftw" target="_blank" rel="noreferrer">eLabFTW</a></div></div></section>
     <AccountManagement viewer={viewer} students={students} />
-    <section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="遵循已确认的 A / C / D 分类" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>代码仓库、专利及保密项目仅限本地模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section>
+    <section className="panel setting-card"><PanelHeader title="AI 数据边界" subtitle="A / C / D 分类；C 类于 2026-11-03 随“代码与实验”调整" /><div className="setting-body data-boundaries"><p><b>A</b>培养计划、进展记录、论文草稿可交给云端模型</p><p><b>C</b>已绑定的科研代码仓库可由授权代码代理（Codex / Claude）在实验室工作进程中按确认的任务读取和修改；专利及保密项目仍仅限本地模型；原始实验数据只能在实验室服务器上计算，不得拷贝，也不发送给任何模型</p><p><b>D</b>私人评价、身心健康、正式成绩不允许 AI 读取</p></div></section>
   </div>;
 }
 

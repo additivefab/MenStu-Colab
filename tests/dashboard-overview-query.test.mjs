@@ -535,5 +535,8 @@ test("the overview route is scoped, read-only, non-cacheable, and excludes deep 
   assert.match(query, /Promise\.all/);
   assert.match(assemble, /blockers:[\s\S]*?dueDate: null/);
   assert.doesNotMatch(query, /LIMIT\s+1000/i);
+  assert.match(query, /countLoopInboxByStudent\(d1, \{ id: viewer\.id, role: viewer\.role \}\)/);
+  assert.match(query, /viewer\.role !== "superadmin" && viewer\.role !== "admin"\) return null/);
+  assert.match(query, /loopPendingByStudent,\n\s*\}, viewer, now\)/);
   assert.doesNotMatch(sql, /attachment|audit|open_id|email|summary|evidence/i);
 });

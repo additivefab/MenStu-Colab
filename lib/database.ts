@@ -9,13 +9,25 @@ import { provisionConfirmedRepositoryBindings } from "./confirmed-repository-bin
 
 const DAY = 24 * 60 * 60 * 1000;
 
-export const CURRENT_SCHEMA_VERSION = 25;
+export const CURRENT_SCHEMA_VERSION = 27;
 
 // These tables are owned exclusively by the hosted/local Drizzle migration.
 // Runtime bootstrap must never invent them or mark the schema upgraded before
 // deployment has installed all of them.
 const MIGRATION_OWNED_REPOSITORY_TABLES = [
   "student_repository_bindings", "student_repository_events", "student_repository_rollouts",
+] as const;
+
+// Schema 26 research loop (docs/科研闭环_实施规格_v1.md), also migration-owned.
+export const MIGRATION_OWNED_RESEARCH_LOOP_TABLES = [
+  "research_tasks", "research_task_versions", "research_task_events",
+  "github_installations", "repository_links", "github_webhook_deliveries",
+  "lab_runners", "agent_credential_profiles", "agent_attempts", "agent_attempt_events",
+  "change_requests", "registered_entrypoints", "dataset_versions", "dataset_grants",
+  "run_specs", "run_approvals", "runs", "run_events", "run_artifacts", "run_results",
+  "result_reviews", "result_comments",
+  // Schema 27 (0027): baselines, interpretations, review delegation, plan-first attempts, loop notifications.
+  "run_baselines", "result_interpretations", "review_delegations", "agent_attempt_plans", "loop_notifications",
 ] as const;
 
 const REQUIRED_TABLES = [
@@ -55,6 +67,7 @@ const REQUIRED_TABLES = [
   "feishu_meeting_summary_links",
   "progress_evidence_sources",
   ...MIGRATION_OWNED_REPOSITORY_TABLES,
+  ...MIGRATION_OWNED_RESEARCH_LOOP_TABLES,
 ] as const;
 
 export type DatabaseSchemaStatus = {
@@ -151,6 +164,10 @@ async function prepareDatabase() {
   if (missingRepositoryTables.length) {
     throw new Error("科研仓库数据库迁移尚未应用，请先应用部署迁移");
   }
+  const missingResearchLoopTables = MIGRATION_OWNED_RESEARCH_LOOP_TABLES.filter((name) => before.missingTables.includes(name));
+  if (missingResearchLoopTables.length) {
+    throw new Error("科研闭环数据库迁移（0026/0027）尚未应用，请先应用部署迁移");
+  }
   if (before.version !== null && before.version >= 23 && before.missingTables.length) {
     throw new Error(`数据库结构不完整：缺少 ${before.missingTables.join("、")}`);
   }
@@ -176,6 +193,20 @@ export async function ensureDatabase() {
 
 async function migrateDatabase(previousVersion: number | null) {
   const d1 = getD1();
+  if (previousVersion === 26) {
+    // 0027 only adds migration-owned tables, verified complete before this point.
+    await d1.prepare("UPDATE app_schema_meta SET version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND version = 26")
+      .bind(CURRENT_SCHEMA_VERSION).run();
+    return;
+  }
+  if (previousVersion === 25) {
+    // 0026 only adds migration-owned tables, verified complete before this point.
+    await ensureResearchOutputColumns();
+    await ensureResearchOutputGuidanceLinks();
+    await d1.prepare("UPDATE app_schema_meta SET version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND version = 25")
+      .bind(CURRENT_SCHEMA_VERSION).run();
+    return;
+  }
   if (previousVersion === 24) {
     await ensureResearchOutputColumns();
     await ensureResearchOutputGuidanceLinks();

@@ -1,9 +1,10 @@
 import { overviewStateMeta, overviewStates, type MentorOverviewStudent, type OverviewState } from "../../lib/dashboard-overview/types.ts";
-import type { OverviewDegreeFilter } from "./overview-filters";
+import type { OverviewDegreeFilter, OverviewLoopFilter } from "./overview-filters";
 
 export type OverviewUrlState = {
   state: OverviewState | "all";
   degree: OverviewDegreeFilter;
+  loop: OverviewLoopFilter;
   studentId: string | null;
 };
 
@@ -15,7 +16,27 @@ export function parseOverviewUrl(value: string): OverviewUrlState {
     : "all";
   const requestedDegree = params.get("degree");
   const degree = requestedDegree === "phd" || requestedDegree === "master" ? requestedDegree : "all";
-  return { state, degree, studentId: params.get("student") };
+  const loop = params.get("loop") === "pending" ? "pending" : "all";
+  return { state, degree, loop, studentId: params.get("student") };
+}
+
+/** Research-loop pending count shown for a student; 0 when absent (non-staff or not loaded). */
+export function overviewLoopPending(student: Pick<MentorOverviewStudent, "loopPending">) {
+  return typeof student.loopPending === "number" && student.loopPending > 0 ? student.loopPending : 0;
+}
+
+/** The loop column/filter only exists when the server sent counts for this viewer. */
+export function overviewHasLoopCounts(students: ReadonlyArray<Pick<MentorOverviewStudent, "loopPending">>) {
+  return students.some((student) => typeof student.loopPending === "number");
+}
+
+export function overviewLoopHref(studentId: string) {
+  return `/students/${encodeURIComponent(studentId)}#research-loop`;
+}
+
+/** Filter only — the loop count never changes sort order (no ranking, plan §三.6). */
+export function matchesOverviewLoopFilter(student: Pick<MentorOverviewStudent, "loopPending">, loop: OverviewLoopFilter) {
+  return loop === "all" || overviewLoopPending(student) > 0;
 }
 
 function compareNullableDate(left: string | null, right: string | null, nullLast = true) {

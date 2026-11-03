@@ -2738,8 +2738,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .student-track-next-action strong { font-size: 18px; }
 .student-research-track-facts { background: #fff; }
 .student-quick-progress { border-color: #e0e5eb; box-shadow: none; }
-.student-quick-progress > header { padding: 20px 24px; background: #fff; }
+.student-quick-progress > header { padding: 20px 24px; color: #1f2b3a; background: #fff; border-bottom: 1px solid #e3e8ed; }
 .student-quick-progress > header h2 { margin: 0; font-size: 20px; }
+/* The simplified white header kept the gradient header's white text; restore contrast. */
+.student-quick-progress > header span { color: #5b6b7d; }
+.student-quick-progress > header p { color: #465a71; }
+.student-quick-progress > header button { color: #2b4a6b; border-color: #d8e1eb; background: #fff; }
 .student-optional-fields { padding: 0; border-top: 1px solid #e3e8ed; }
 .student-optional-fields > div { display: grid; gap: 16px; padding: 4px 0 16px; }
 .student-quick-progress form > footer { justify-content: flex-end; }

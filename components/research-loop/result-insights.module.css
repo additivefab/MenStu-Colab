@@ -1,0 +1,44 @@
+/* Result card batch 4 additions (frontend plan FA2–FA4). Palette follows
+   research-loop.module.css. */
+
+/* FA2: baseline line, protocol warning, picker. */
+.baseline { display: grid; gap: 6px; min-width: 0; }
+.baselineLine { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; color: #42516a; font-size: 13px; }
+.baselineLine > * { overflow-wrap: anywhere; }
+.baselineLine small { color: #8290a3; }
+.protocolWarning { display: grid; gap: 2px; margin: 0 !important; padding: 10px 12px; border: 1px solid #e8b04b; border-left-width: 4px; border-radius: 7px; background: #fff7e8; color: #6b4e17; font-size: 13px; overflow-wrap: anywhere; }
+.protocolWarning strong { font-size: 14px; color: #7a4f00; }
+.protocolWarning code { word-break: break-all; }
+.baselinePicker { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.baselinePicker label { display: grid; gap: 4px; flex: 1 1 260px; min-width: 0; color: #5d6c82; font-size: 12px; }
+.baselinePicker select { width: 100%; min-width: 0; }
+.pickerNote { flex-basis: 100%; color: #785d2b; }
+/* Differences are neutral: same colour as the other numbers. */
+.delta { color: inherit; white-space: nowrap; }
+
+/* FA3: student interpretation. */
+.section { display: grid; gap: 8px; min-width: 0; }
+.section h5 small { margin-left: 6px; color: #8290a3; font-weight: 400; }
+.interpretation { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid #dce5ed; border-radius: 8px; background: #fff; min-width: 0; }
+.interpretationMeta { color: #8290a3; font-size: 12px; }
+.interpretationFields { display: grid; gap: 8px; margin: 0; }
+.interpretationFields > div { min-width: 0; }
+.interpretationFields dt { color: #8290a3; font-size: 12px; font-weight: 600; }
+.interpretationFields dd { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; color: #203047; }
+.interpretationGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; margin-top: 10px; }
+.interpretationGrid label { display: grid; gap: 4px; min-width: 0; }
+.interpretationGrid textarea { width: 100%; min-width: 0; }
+
+/* FA4: progress draft. */
+.progress { display: grid; gap: 6px; min-width: 0; }
+.progress .draft { display: grid; gap: 8px; padding: 10px 12px; border: 1px dashed #c9d5e3; border-radius: 8px; background: #f9fbfd; min-width: 0; }
+.draftHead { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; font-size: 13px; }
+.draftHead span { color: #946616; font-size: 12px; }
+.sources { margin: 0; padding-left: 18px; }
+.sources li { overflow-wrap: anywhere; }
+.sources code { word-break: break-all; }
+
+@media (max-width: 600px) {
+  .interpretationGrid { grid-template-columns: minmax(0, 1fr); }
+  .baselinePicker > button { flex: 1 1 auto; }
+}

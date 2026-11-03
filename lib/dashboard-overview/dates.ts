@@ -5,7 +5,8 @@ const dateKeyPattern = /^\d{4}-\d{2}-\d{2}$/;
 function parsedInstant(value: string | Date) {
   if (value instanceof Date) return value;
   if (dateKeyPattern.test(value)) return new Date(`${value}T12:00:00+08:00`);
-  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+  // SQLite UTC timestamps, with optional fractional seconds (strftime('%f')).
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/.test(value)
     ? `${value.replace(" ", "T")}Z`
     : value;
   return new Date(normalized);

@@ -1,0 +1,55 @@
+/* Change review (G2): file list with policy markers, agent tests, per-file diff. */
+
+.headRow { display: flex; align-items: center; gap: 4px 8px; min-width: 0; }
+.headRow > button { flex: 1 1 auto; min-width: 0; }
+.prLink { flex: 0 0 auto; margin-right: 14px; font-size: 13px; white-space: nowrap; }
+
+.section { margin-top: 14px; min-width: 0; }
+.sectionHead { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 6px; }
+.sectionHead h4 { margin: 0; font-size: 14px; font-weight: 650; color: #26354d; }
+.sectionHead small { color: #718096; font-size: 12px; }
+.note { margin: 4px 0 0 !important; color: #718096; font-size: 13px; }
+.noteWarn { margin: 4px 0 0 !important; color: #785d2b; font-size: 13px; }
+
+.fileList { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; min-width: 0; }
+.fileRow { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; padding: 6px 8px; border: 1px solid #e8edf3; border-radius: 6px; background: #fff; min-width: 0; }
+.fileRow.flaggedRow { border-color: #f1c7cc; background: #fff8f8; }
+.filePath { flex: 1 1 200px; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; color: #26354d; }
+.fileMarks { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; }
+
+.badge { display: inline-block; padding: 0 6px; border-radius: 4px; background: #edf2f8; color: #50627a; font-size: 11px; line-height: 1.7; white-space: nowrap; }
+.badge_add { background: #e9f7f0; color: #23785a; }
+.badge_delete { background: #fff1f2; color: #a3434d; }
+.flag { display: inline-block; padding: 0 6px; border-radius: 4px; background: #ffe7ea; color: #9b2f3c; font-size: 11px; font-weight: 600; line-height: 1.7; white-space: nowrap; }
+.flagWarn { display: inline-block; padding: 0 6px; border-radius: 4px; background: #fff3dc; color: #8a5a12; font-size: 11px; font-weight: 600; line-height: 1.7; white-space: nowrap; }
+.plus { color: #23785a; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.minus { color: #a3434d; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.tests { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; min-width: 0; }
+.test { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 2px 8px; padding: 6px 8px; border-radius: 6px; background: #f6f8fb; min-width: 0; }
+.test code { font-size: 12px; overflow-wrap: anywhere; color: #26354d; }
+.test p { grid-column: 2; margin: 0; color: #5d6c82; font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.exitOk { padding: 0 6px; border-radius: 4px; background: #e9f7f0; color: #23785a; font-size: 11px; font-weight: 600; line-height: 1.7; white-space: nowrap; }
+.exitBad { padding: 0 6px; border-radius: 4px; background: #fff1f2; color: #a3434d; font-size: 11px; font-weight: 600; line-height: 1.7; white-space: nowrap; }
+.exitUnknown { padding: 0 6px; border-radius: 4px; background: #edf2f8; color: #50627a; font-size: 11px; line-height: 1.7; white-space: nowrap; }
+
+.diffList { display: grid; gap: 6px; min-width: 0; }
+.fileDiff { border: 1px solid #e3e9f1; border-radius: 6px; background: #fff; min-width: 0; }
+.fileDiff > summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; padding: 6px 10px; cursor: pointer; list-style: none; min-width: 0; }
+.fileDiff > summary::-webkit-details-marker { display: none; }
+.fileDiff > summary::before { content: "▸"; flex: 0 0 auto; color: #8290a3; font-size: 11px; }
+.fileDiff[open] > summary::before { content: "▾"; }
+.fileDiff[open] > summary { border-bottom: 1px solid #e3e9f1; }
+.fileName { flex: 1 1 180px; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.fileMeta { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; }
+.code {
+  display: block; max-width: 100%; max-height: 420px; overflow: auto; margin: 0; padding: 8px 0;
+  background: #1f2633; color: #e6edf6; border-radius: 0 0 6px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5; white-space: pre; tab-size: 4;
+}
+.code > span { display: block; min-width: max-content; padding: 0 10px; }
+.lineAdd { background: #1d3b2c; color: #b9f0cf; }
+.lineDel { background: #46242a; color: #ffc9cf; }
+.lineHunk { color: #8fb6ff; }
+.lineMeta { color: #9aa7b8; }
+.truncated { margin: 0 !important; padding: 6px 10px; background: #fff7e8; color: #785d2b; font-size: 12px; border-radius: 0 0 6px 6px; }

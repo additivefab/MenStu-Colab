@@ -43,7 +43,7 @@ test('v23 upgrade: administrators keep privileges, need no password change, and 
     const oldSession=await get('/api/auth/session','tanyan_session=existing-student-session');
     assert.equal(oldSession.status,200,await oldSession.clone().text());
     assert.equal((await oldSession.json()).user.id,2);
-    assert.equal((await db.prepare('SELECT version FROM app_schema_meta').first()).version,25);
+    assert.equal((await db.prepare('SELECT version FROM app_schema_meta').first()).version,27);
     const before=(await db.prepare('SELECT * FROM app_users').all()).results;
     const admins=(await db.prepare('SELECT * FROM local_credentials WHERE app_user_id IN (1,24)').all()).results;
     assert.equal(admins.length,2);

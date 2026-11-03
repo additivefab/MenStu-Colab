@@ -265,10 +265,14 @@ function assertRecentProgress(value: unknown, path: string) {
   assertString(value.confirmedAt, `${path}.confirmedAt`, false);
 }
 
+// Optional per-student keys: present only when the server has the fact for this viewer.
+const optionalStudentKeys = ["monthlyDelivery", "loopPending"] as const;
+
 function assertStudent(value: unknown, path: string) {
   assertRecord(value, path);
-  assertExactKeys(value, Object.hasOwn(value, "monthlyDelivery") ? [...studentKeys, "monthlyDelivery"] : studentKeys, path);
+  assertExactKeys(value, [...studentKeys, ...optionalStudentKeys.filter((key) => Object.hasOwn(value, key))], path);
   if (Object.hasOwn(value, "monthlyDelivery")) assertMonthlyDelivery(value.monthlyDelivery, `${path}.monthlyDelivery`);
+  if (Object.hasOwn(value, "loopPending")) assertInteger(value.loopPending, `${path}.loopPending`);
   assertString(value.studentId, `${path}.studentId`, false);
   assertString(value.displayName, `${path}.displayName`, false);
   if (value.degreeLevel !== "博士" && value.degreeLevel !== "硕士") {

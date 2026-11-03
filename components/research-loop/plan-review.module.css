@@ -1,0 +1,20 @@
+/* FB2 plan-first: the agent's plan and its review on the attempt card. */
+
+.plan { margin-top: 10px; padding: 10px 12px; border: 1px solid #e3e9f2; border-radius: 8px; background: #fbfcfe; min-width: 0; }
+.head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 13px; }
+.head small { color: #718096; font-weight: 400; }
+
+.text {
+  margin: 8px 0 0; max-height: 320px; overflow: auto; padding: 8px 10px; border: 1px solid #e3e9f2; border-radius: 6px; background: #fff;
+  color: #2c3a50; font-family: inherit; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+.decision { margin: 8px 0 0 !important; color: #50627a; font-size: 13px; overflow-wrap: anywhere; }
+.note { display: block; margin-top: 2px; color: #35445b; white-space: pre-wrap; }
+
+.decide { margin-top: 10px; }
+.decide textarea { margin-top: 2px; }
+
+@media (max-width: 640px) {
+  .text { max-height: 240px; }
+}

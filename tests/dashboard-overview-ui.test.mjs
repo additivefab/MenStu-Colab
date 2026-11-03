@@ -3,7 +3,16 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { overviewActionHref, overviewActionLabel } from "../components/dashboard-overview/overview-actions.ts";
-import { earliestOverviewDueDate, overviewNextActionText, parseOverviewUrl, sortOverviewStudents } from "../components/dashboard-overview/overview-view-model.ts";
+import {
+  earliestOverviewDueDate,
+  matchesOverviewLoopFilter,
+  overviewHasLoopCounts,
+  overviewLoopHref,
+  overviewLoopPending,
+  overviewNextActionText,
+  parseOverviewUrl,
+  sortOverviewStudents,
+} from "../components/dashboard-overview/overview-view-model.ts";
 
 function student(overrides = {}) {
   return {
@@ -22,13 +31,16 @@ test("overview URL state accepts only supported filters and remains recoverable"
   assert.deepEqual(parseOverviewUrl("https://example.test/?view=overview&state=mentor&degree=phd&student=student-7"), {
     state: "mentor",
     degree: "phd",
+    loop: "all",
     studentId: "student-7",
   });
-  assert.deepEqual(parseOverviewUrl("https://example.test/?state=owner&degree=postdoc"), {
+  assert.deepEqual(parseOverviewUrl("https://example.test/?state=owner&degree=postdoc&loop=most"), {
     state: "all",
     degree: "all",
+    loop: "all",
     studentId: null,
   });
+  assert.equal(parseOverviewUrl("https://example.test/?loop=pending").loop, "pending");
   assert.equal(parseOverviewUrl("https://example.test/?state=follow_up").state, "all");
 });
 
@@ -153,4 +165,42 @@ test("problem records share a student-filtered destination while plans and repor
   }
   assert.equal(overviewActionHref(student({ primaryAction: "follow_up", primaryActionTargetId: 12, issues: [{ sourceType: "guidance" }] })), "/students/student-1#guidance-12");
   assert.equal(overviewActionHref(student({ primaryAction: "follow_up", primaryActionTargetId: 12, issues: [{ sourceType: "milestone" }] })), "/students/student-1#milestone-12");
+});
+
+test("research-loop pending is a filter and a deep link, never a sort key", () => {
+  assert.equal(overviewLoopPending(student({ loopPending: 3 })), 3);
+  assert.equal(overviewLoopPending(student({ loopPending: 0 })), 0);
+  assert.equal(overviewLoopPending(student()), 0);
+  assert.equal(overviewHasLoopCounts([student(), student({ loopPending: 0 })]), true);
+  assert.equal(overviewHasLoopCounts([student(), student()]), false);
+  assert.equal(overviewLoopHref("学生/甲#x"), `/students/${encodeURIComponent("学生/甲#x")}#research-loop`);
+  assert.equal(matchesOverviewLoopFilter(student({ loopPending: 2 }), "pending"), true);
+  assert.equal(matchesOverviewLoopFilter(student({ loopPending: 0 }), "pending"), false);
+  assert.equal(matchesOverviewLoopFilter(student(), "all"), true);
+
+  const rows = () => [
+    student({ studentId: "a", displayName: "甲", primaryState: "mentor", loopPending: 0 }),
+    student({ studentId: "b", displayName: "乙", primaryState: "mentor", loopPending: 9 }),
+    student({ studentId: "c", displayName: "丙", primaryState: "on_track", loopPending: 4 }),
+  ];
+  const withoutCounts = rows().map((row) => {
+    const rest = { ...row };
+    delete rest.loopPending;
+    return rest;
+  });
+  assert.deepEqual(rows().sort(sortOverviewStudents).map((row) => row.studentId), withoutCounts.sort(sortOverviewStudents).map((row) => row.studentId));
+});
+
+test("overview UI shows the loop count as a narrow column, mobile link, and drawer link", async () => {
+  const [table, mobile, drawer, overview, filters, viewModel] = await Promise.all([
+    "overview-table.tsx", "overview-mobile-list.tsx", "student-overview-drawer.tsx", "mentor-group-overview.tsx", "overview-filters.tsx", "overview-view-model.ts",
+  ].map((file) => readFile(new URL(`../components/dashboard-overview/${file}`, import.meta.url), "utf8")));
+  assert.match(table, /role="columnheader"[^>]*>闭环待处理</);
+  assert.match(table, /loopPending > 0 \?/);
+  assert.match(mobile, /闭环待处理 \{loopPending\}/);
+  assert.match(drawer, /闭环待处理 \{loopPending\}/);
+  assert.match(filters, /有闭环待处理/);
+  assert.match(overview, /matchesOverviewLoopFilter\(student, loopFilter\)/);
+  assert.doesNotMatch(viewModel, /loopPending[^\n]*(?:localeCompare|\s-\s)/);
+  assert.doesNotMatch(table + mobile + drawer, /排名|提交次数|活跃/);
 });
