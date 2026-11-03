@@ -1024,6 +1024,7 @@ const loopKindLabels: Record<LoopInboxKind, string> = {
   change_extra_review: "额外审查",
   run_approval: "批准运行",
   result_review: "评审结果",
+  plan_review: "审阅计划",
 };
 
 const loopNextStep: Record<LoopInboxKind, string> = {
@@ -1031,6 +1032,7 @@ const loopNextStep: Record<LoopInboxKind, string> = {
   change_extra_review: "打开变更卡片，查看触发额外审查的原因和具体改动后通过或退回。",
   run_approval: "打开运行卡片，核对“本次批准的内容”后批准或取消。",
   result_review: "打开运行卡片，先看技术有效性和指标来源，再给出评审结论。",
+  plan_review: "打开代理卡片，阅读修改计划，同意后代理才会按计划改代码；不合适就退回。",
 };
 
 function loopDecisionText(item: LoopInboxItem) {
@@ -1038,6 +1040,7 @@ function loopDecisionText(item: LoopInboxItem) {
   if (item.kind === "task_confirmation") return `是否确认任务定义${item.taskVersion != null ? `（V${item.taskVersion}）` : ""}`;
   if (item.kind === "change_extra_review") return "是否通过这次代码变更的额外审查";
   if (item.kind === "run_approval") return `是否批准${run}`;
+  if (item.kind === "plan_review") return "是否同意代理按这份修改计划改代码";
   return `如何评审${run}的结果`;
 }
 

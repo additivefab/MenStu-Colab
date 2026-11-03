@@ -215,6 +215,33 @@ test("research loop inbox: scope, self-exclusion, ordering and cap", { timeout: 
       }
     });
 
+    await t.test("plan_review: a pending plan-first plan, not requested by the viewer", async () => {
+      for (const [id, requestedBy, createdAt] of [["planS", 2001, "2026-10-02 00:00:00"], ["planM", 2011, "2026-10-02 01:00:00"]]) {
+        await db.prepare(`INSERT INTO agent_attempts(id, task_id, task_version, student_id, provider, credential_profile_id, github_repository_id,
+          base_commit_sha, context_snapshot_sha256, status, idempotency_key, requested_by_user_id, created_at)
+          VALUES (?, 't3', 1, 'ib-s1', 'codex', 'cred_ib', 6001, ?, ?, 'waiting_approval', ?, ?, ?)`)
+          .bind(`att_${id}`, "0".repeat(40), SECRET_HEX, `idem-${id}`, requestedBy, createdAt).run();
+        await db.prepare(`INSERT INTO agent_attempt_plans(attempt_id, plan_text, plan_sha256, decision, submitted_at)
+          VALUES (?, '合成计划', ?, 'pending', ?)`).bind(`att_${id}`, SECRET_HEX, createdAt).run();
+      }
+      try {
+        const items = await inbox("mentorA");
+        const plan = items.find((item) => item.id === "plan_review:att_planS");
+        assert.ok(plan, "the student's plan waits on the mentor");
+        assert.equal(plan.kind, "plan_review");
+        assert.match(plan.title, /^审阅代理 #\d+ 的修改计划$/);
+        assert.equal(plan.href, "/students/ib-s1#research-task-t3");
+        assert.equal(plan.runNumber, null);
+        assert.ok(!items.some((item) => item.id === "plan_review:att_planM"), "the mentor's own plan is excluded");
+        assert.ok(!JSON.stringify(plan).includes(SECRET_HEX));
+      } finally {
+        for (const id of ["planS", "planM"]) {
+          await db.prepare("DELETE FROM agent_attempt_plans WHERE attempt_id = ?").bind(`att_${id}`).run();
+          await db.prepare("DELETE FROM agent_attempts WHERE id = ?").bind(`att_${id}`).run();
+        }
+      }
+    });
+
     await t.test("a run whose spec the viewer authored is excluded, mirroring approveRun", async () => {
       // A student resubmits a spec mentor A wrote: approveRun refuses mentor A, so the inbox must too.
       await db.prepare("UPDATE run_specs SET created_by_user_id = 2011 WHERE sha256 = (SELECT run_spec_sha256 FROM runs WHERE id = 'run_d')").run();

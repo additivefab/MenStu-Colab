@@ -18,12 +18,14 @@
 // - result_review: runs.status = 'completed' with no result_reviews row or
 //   state = 'pending'. Technically invalid results are included (the mentor
 //   still decides); the item says so.
+// - plan_review (batch 5, plan-first): agent_attempts.status = 'waiting_approval'
+//   with a pending agent_attempt_plans row, not requested by the viewer.
 // - Order: oldest waitingSince first; at most 200 items.
 // - Items carry no secrets, hashes or file contents — only what the inbox shows.
 
 import { scopeSql, type StudentScope } from "./access-policy.ts";
 
-export const LOOP_INBOX_KINDS = ["task_confirmation", "change_extra_review", "run_approval", "result_review"] as const;
+export const LOOP_INBOX_KINDS = ["task_confirmation", "change_extra_review", "run_approval", "result_review", "plan_review"] as const;
 export type LoopInboxKind = typeof LOOP_INBOX_KINDS[number];
 
 export type LoopInboxItem = {
@@ -78,6 +80,10 @@ type KindQuery = {
 const RUN_NUMBER = `(SELECT COUNT(*) FROM runs earlier WHERE earlier.task_id = r.task_id
   AND (earlier.created_at < r.created_at OR (earlier.created_at = r.created_at AND earlier.id <= r.id)))`;
 
+// Agent attempt numbers, same creation-order rule as runs.
+const ATTEMPT_NUMBER = `(SELECT COUNT(*) FROM agent_attempts earlier WHERE earlier.task_id = aa.task_id
+  AND (earlier.created_at < aa.created_at OR (earlier.created_at = aa.created_at AND earlier.id <= aa.id)))`;
+
 const KIND_QUERIES: KindQuery[] = [
   {
     kind: "task_confirmation",
@@ -120,6 +126,17 @@ const KIND_QUERIES: KindQuery[] = [
     waiting: "COALESCE(res.created_at, r.ended_at, r.updated_at)",
     select: `NULL AS task_version, ${RUN_NUMBER} AS run_number,
       COALESCE(res.technical_validity, 'unknown') AS technical_validity`,
+  },
+  {
+    kind: "plan_review",
+    from: `agent_attempts aa JOIN agent_attempt_plans p ON p.attempt_id = aa.id
+      JOIN research_tasks t ON t.id = aa.task_id JOIN students s ON s.id = aa.student_id`,
+    where: "aa.status = 'waiting_approval' AND p.decision = 'pending' AND aa.requested_by_user_id <> ?",
+    selfExcluded: true,
+    objectId: "aa.id",
+    waiting: "COALESCE(p.submitted_at, aa.updated_at)",
+    // run_number carries the attempt number for the title only; runNumber stays null.
+    select: `NULL AS task_version, ${ATTEMPT_NUMBER} AS run_number, NULL AS technical_validity`,
   },
 ];
 
@@ -189,6 +206,7 @@ function itemTitle(kind: LoopInboxKind, row: InboxRow) {
     case "change_extra_review": return "额外审查：变更触及受保护路径";
     case "run_approval": return `批准运行 #${Number(row.run_number)}`;
     case "result_review": return `评审运行 #${Number(row.run_number)} 的结果${row.technical_validity === "invalid" ? "（技术无效）" : ""}`;
+    case "plan_review": return `审阅代理 #${Number(row.run_number)} 的修改计划`;
   }
 }
 

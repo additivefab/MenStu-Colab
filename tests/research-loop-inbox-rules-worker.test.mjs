@@ -18,7 +18,9 @@ const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const ITEM_KEYS = ["href", "id", "kind", "objectId", "runNumber", "studentId", "studentName", "taskId", "taskTitle",
   "taskVersion", "technicalValidity", "title", "waitingSince"].sort();
 const KINDS = ["task_confirmation", "change_extra_review", "run_approval", "result_review"];
-const TASK_KINDS = new Set(["task_confirmation", "change_extra_review"]);
+// plan_review (batch 5) deep-links to the task like the change kinds; this
+// fixture seeds no plans, so KINDS above stays the four seeded kinds.
+const TASK_KINDS = new Set(["task_confirmation", "change_extra_review", "plan_review"]);
 
 // --- Actors -----------------------------------------------------------------
 const STUDENTS = [
