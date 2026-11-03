@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getJson, postJson, type AttemptDetail, type AttemptEvent, type AttemptSummary } from "./api";
-import { attemptStatusLabels, dateLabel, label, providerLabels, shortSha } from "./labels";
+import { getJson, postJson, type AttemptDetail, type AttemptEvent, type AttemptPlan, type AttemptSummary } from "./api";
+import { attemptStatusLabels, dateLabel, errorHints, label, providerLabels, shortSha, type Tone } from "./labels";
 import { anchorId, useFocusedCard } from "./navigation";
 import { attemptLabel } from "./numbering";
+import { PlanReview } from "./plan-review";
 import { ConfirmButton, ErrorNote, Pill } from "./ui";
 import { usePolling } from "./use-polling";
 import { buildTimeline, mergeEvents } from "./attempt-timeline";
@@ -40,10 +41,15 @@ export function AttemptCard({ attempt, number, onChanged }: { attempt: AttemptSu
   const [detail, setDetail] = useState<AttemptDetail["attempt"] | null>(null);
   const [events, setEvents] = useState<AttemptEvent[]>([]);
   const [error, setError] = useState<unknown>(null);
+  const [plan, setPlan] = useState<AttemptPlan | null>(null);
+  const [canDecidePlan, setCanDecidePlan] = useState(false);
   const [busy, setBusy] = useState(false);
   const after = useRef(0);
   const status = detail?.status ?? attempt.status;
   const live = LIVE.has(status);
+  // FB2: a collapsed attempt waiting for approval still reads its detail once,
+  // so its title can say whether a plan is waiting for review.
+  const wantDetail = open || attempt.status === "waiting_approval";
 
   /** Rejects on failure (after recording it) so usePolling can back off. */
   const poll = useCallback(async (signal: AbortSignal) => {
@@ -53,6 +59,8 @@ export function AttemptCard({ attempt, number, onChanged }: { attempt: AttemptSu
       );
       if (signal.aborted) return;
       setDetail(payload.attempt);
+      setPlan(payload.plan && typeof payload.plan === "object" ? payload.plan : null);
+      setCanDecidePlan(payload.permissions?.canDecidePlan === true);
       if (payload.events.length) {
         after.current = payload.nextAfterSequence;
         setEvents((current) => mergeEvents(current, payload.events, MAX_EVENTS));
@@ -65,11 +73,11 @@ export function AttemptCard({ attempt, number, onChanged }: { attempt: AttemptSu
   }, [attempt.id]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!wantDetail) return;
     const controller = new AbortController();
     poll(controller.signal).catch(() => {});
     return () => controller.abort();
-  }, [open, poll]);
+  }, [wantDetail, poll, attempt.updatedAt]);
 
   usePolling(poll, { active: open && live, baseMs: POLL_MS });
 
@@ -86,7 +94,14 @@ export function AttemptCard({ attempt, number, onChanged }: { attempt: AttemptSu
     } catch (failure) { setError(failure); } finally { setBusy(false); }
   }
 
-  const [text, tone] = label(attemptStatusLabels, status);
+  async function planDecided() {
+    const controller = new AbortController();
+    await poll(controller.signal).catch(() => {});
+    onChanged();
+  }
+
+  const [text, tone]: [string, Tone] = plan?.decision === "pending" && status === "waiting_approval"
+    ? ["等待审阅计划", "warn"] : label(attemptStatusLabels, status);
   const errorCode = detail?.errorCode ?? attempt.errorCode;
   const errorMessage = detail?.errorMessage ?? attempt.errorMessage;
   return <article className={styles.item} id={anchorId.attempt(attempt.id)} ref={rootRef}>
@@ -95,7 +110,7 @@ export function AttemptCard({ attempt, number, onChanged }: { attempt: AttemptSu
       <span className={styles.itemMeta}><Pill tone={tone}>{text}</Pill><small>{dateLabel(attempt.createdAt)}</small></span>
     </button>
     {(status === "failed" || status === "canceled") && (errorCode || errorMessage)
-      ? <p className={`${styles.failure} ${open ? "" : css.clamped}`}>{errorMessage || "未提供原因"}{errorCode ? <code>{errorCode}</code> : null}</p> : null}
+      ? <p className={`${styles.failure} ${open ? "" : css.clamped}`}>{errorMessage || "未提供原因"}{errorCode ? <code>{errorCode}</code> : null}{errorCode && errorHints[errorCode] ? <span> {errorHints[errorCode]}</span> : null}</p> : null}
     {open ? <div className={styles.itemBody}>
       <dl className={styles.fields}>
         <div className={styles.field}><dt>尝试编号</dt><dd className={styles.mono}>{attempt.id}</dd></div>
@@ -103,6 +118,7 @@ export function AttemptCard({ attempt, number, onChanged }: { attempt: AttemptSu
         <div className={styles.field}><dt>模型</dt><dd>{(detail?.modelId || attempt.modelId) || "由工作进程上报"}</dd></div>
         <div className={styles.field}><dt>最近心跳</dt><dd>{dateLabel(detail?.heartbeatAt)}</dd></div>
       </dl>
+      {plan ? <PlanReview attemptId={attempt.id} plan={plan} canDecide={canDecidePlan} onDecided={planDecided} /> : null}
       {detail?.changedPaths.length ? <details className={styles.subtle}><summary>改动文件 {detail.changedPaths.length} 个</summary><ul className={styles.pathList}>{detail.changedPaths.map((path) => <li key={path}>{path}</li>)}</ul></details> : null}
       {detail?.tests.length ? <details className={styles.subtle}><summary>代理自测 {detail.tests.length} 项</summary><ul className={styles.pathList}>{detail.tests.map((item, index) => <li key={index}><code>{item.command}</code> → 退出码 {item.exitCode}{item.summary ? ` · ${item.summary}` : ""}</li>)}</ul></details> : null}
       <section className={css.process} aria-label="代理过程">

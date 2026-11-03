@@ -112,4 +112,14 @@ export const errorHints: Record<string, string> = {
   EXTRA_REVIEW_REQUIRED: "修改涉及受保护路径，需导师先完成额外审查。",
   NOT_TECHNICALLY_VALID: "技术有效性未通过的结果不能验收。",
   SPEC_HASH_MISMATCH: "运行规范已变化，请刷新后重新审阅。",
+  PLAN_REJECTED: "修改计划已被退回，本次尝试已取消；可调整任务后重新发起。",
+  PLAN_MODE_EDITED: "该尝试处于“先出计划”阶段，代理不应在计划批准前修改文件；请重新发起尝试。",
+};
+
+/** FB2 plan decision states shown on the attempt card. */
+export const planDecisionLabels: Record<string, [string, Tone]> = {
+  awaiting_plan: ["待代理提交计划", "info"],
+  pending: ["待审阅计划", "warn"],
+  approved: ["已批准（进入修改阶段）", "good"],
+  rejected: ["已退回", "neutral"],
 };

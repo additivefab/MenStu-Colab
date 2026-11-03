@@ -75,6 +75,21 @@ export type TaskDetail = {
 
 export type AttemptEvent = { sequence: number; kind: string; payload: Record<string, unknown>; createdAt: string };
 
+/** FB2 plan-first: awaiting_plan = the agent is still writing it; pending = waiting for a human. */
+export type AttemptPlanDecision = "awaiting_plan" | "pending" | "approved" | "rejected";
+
+export type AttemptPlan = {
+  text: string;
+  decision: AttemptPlanDecision;
+  submittedAt: string | null;
+  /** Decider's display name (or id, depending on the server). */
+  decidedBy: string | number | null;
+  decidedAt: string | null;
+  note: string;
+  /** Optimistic-lock version sent back as `expectedVersion` on decide_plan. */
+  version: number;
+};
+
 export type AttemptDetail = {
   attempt: AttemptSummary & {
     changedPaths: string[];
@@ -85,6 +100,10 @@ export type AttemptDetail = {
   };
   events: AttemptEvent[];
   nextAfterSequence: number;
+  // Batch 5 (FB2). Optional so the card still renders against a server that
+  // does not return them yet. null = not a plan-first attempt.
+  plan?: AttemptPlan | null;
+  permissions?: { canDecidePlan?: boolean };
 };
 
 export type ChangeRequestPermissions = { canPublish: boolean; canApproveExtraReview: boolean; canReject: boolean };
