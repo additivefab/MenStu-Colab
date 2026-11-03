@@ -110,8 +110,9 @@ export const OWNER_LABELS: Record<Exclude<StageOwner, null>, string> = {
  *         newest queued/dispatching/running/collecting/cancel_requested/reconciling → working · lab
  *         newest non-canceled: failed → failed · student (failureReason); completed → done "执行结束"
  *         none / only canceled: task confirmed and code done|skipped → active · student (登记运行); else idle
- * result  completed runs only. Oldest unreviewed (pending or missing review): validity not invalid
- *           → active · mentor; invalid → failed · mentor (still awaits the review). Otherwise the newest
+ * result  completed runs only. Oldest unreviewed (pending or missing review) → active · mentor; runs
+ *           not technically invalid come first. An invalid run is still active (the mentor must review
+ *           it) and its summary says 技术无效 / 不能验收, so it never reads as success. Otherwise the newest
  *           reviewed run → done with its review wording. Validity and review are always worded
  *           separately; nothing here is a combined "success".
  * next    task closed → done. Newest run completed with a final review and no code/run stage
@@ -341,7 +342,7 @@ function resultStage(task: TaskSummary, runs: readonly RunSummary[], numbers: Ma
   const invalid = completed.find(unreviewed);
   if (invalid) {
     return {
-      stage: make("result", "failed", `${name(invalid)} 技术无效 · 待导师评审`, "mentor"),
+      stage: make("result", "active", `${name(invalid)} 技术无效 · 待导师评审`, "mentor"),
       next: { text: `等待导师评审${name(invalid)}（技术无效，不能验收）`, owner: "mentor", target: target(invalid) },
     };
   }

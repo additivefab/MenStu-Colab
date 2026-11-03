@@ -306,9 +306,9 @@ const cases = [
     summary: { result: "运行 #1 技术有效性未知 · 待导师评审" },
   },
   {
-    name: "technically invalid, unreviewed → failed but still owned by mentor review",
+    name: "technically invalid, unreviewed → active: the mentor must still review, worded as invalid",
     input: input({ runs: [run("r1", 10, "completed", { technicalValidity: "invalid", reviewState: "pending" })] }),
-    shape: { result: "failed/mentor", next: "idle/-" },
+    shape: { result: "active/mentor", next: "idle/-" },
     summary: { result: "运行 #1 技术无效 · 待导师评审" },
     next: { text: "等待导师评审运行 #1（技术无效，不能验收）", owner: "mentor", target: { kind: "run", taskId: "task_1", runId: "r1" } },
     current: "result",
