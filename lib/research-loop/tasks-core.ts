@@ -58,6 +58,15 @@ export function parseTaskContent(body: Record<string, unknown>): TaskContent {
   if (maxAgentMinutes !== undefined) budget.maxAgentMinutes = maxAgentMinutes;
   if (maxGpuCount !== undefined) budget.maxGpuCount = maxGpuCount;
   if (maxWalltimeMinutes !== undefined) budget.maxWalltimeMinutes = maxWalltimeMinutes;
+  const maxFormalEvaluations = bounded(budgetInput.maxFormalEvaluations, "正式评测次数上限", 100);
+  if (maxFormalEvaluations !== undefined) budget.maxFormalEvaluations = maxFormalEvaluations;
+  const tolerance = budgetInput.reproTolerance;
+  if (tolerance !== undefined && tolerance !== null) {
+    if (typeof tolerance !== "number" || !Number.isFinite(tolerance) || tolerance < 0 || tolerance > 1) {
+      throw new TaskInputError("复现容差需为 0–1 之间的数");
+    }
+    budget.reproTolerance = tolerance;
+  }
   return {
     title: text(body.title, "任务标题", 120),
     researchQuestion: text(body.researchQuestion, "研究问题", 2000),

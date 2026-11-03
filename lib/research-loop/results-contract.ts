@@ -96,3 +96,31 @@ export type EvidenceReport = {
   /** Open items that block progress: failed runs, rejected/failed changes, unconfirmed drafts. */
   blockers: { kind: "run_failed" | "change_failed" | "task_unconfirmed"; text: string; taskId: string; runId: string | null }[];
 };
+
+// ---------------------------------------------------------------------------
+// Batch 6 (pack 02 §9, T22): evaluation budget and reproduction checks.
+// RunDetail gains optional `evaluationBudget` and `reproduction`; run creation
+// rejects with 409 EVALUATION_BUDGET_EXHAUSTED when the budget is used up.
+// ---------------------------------------------------------------------------
+
+/** Formal evaluation runs of one task version under one evaluation protocol.
+ * Counted: runs not canceled before dispatch (awaiting_approval/queued that
+ * were canceled do not count; failed runs do). */
+export type EvaluationBudgetView = {
+  taskVersion: number;
+  evaluationProtocolSha256: string;
+  used: number;
+  limit: number | null;
+  remaining: number | null;
+};
+
+/** Comparison of this run with the previous completed execution of the same
+ * run spec (attempt − 1 or earlier). Only metrics present in both are compared. */
+export type ReproductionView = {
+  comparedRunId: string;
+  comparedAttempt: number;
+  tolerance: number;
+  metrics: { name: string; current: number; previous: number; diff: number; withinTolerance: boolean }[];
+  /** true when every compared metric is within tolerance and at least one was compared. */
+  reproduced: boolean;
+};
