@@ -18,6 +18,13 @@ import { BaseAdapter, matchTestCommand } from "./base.mjs";
 
 export const CLAUDE_FILE_TOOLS = Object.freeze(["Read", "Edit", "Write", "Glob", "Grep"]);
 
+/** Plan mode (FB2): read-only tools only. No Edit/Write and no Bash at all. */
+export const CLAUDE_PLAN_TOOLS = Object.freeze(["Read", "Glob", "Grep"]);
+
+/** Tools that can change the working tree: denied in plan mode, and the run
+ * is aborted if the CLI still reports one of them at init. */
+export const CLAUDE_WRITE_TOOLS = Object.freeze(["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"]);
+
 /** Denied even when they would otherwise be available. Bash entries are
  * belt-and-braces: Bash is only auto-approved for the test prefixes anyway. */
 export const CLAUDE_DENIED_TOOLS = Object.freeze([
@@ -38,7 +45,27 @@ export const CLAUDE_DENIED_TOOLS = Object.freeze([
 /** Tools that must never appear in the init message. */
 const FORBIDDEN_TOOL = (name) => name === "WebFetch" || name === "WebSearch" || name.startsWith("mcp__");
 
+const isPlanPolicy = (policy) => policy?.mode === "plan" || policy?.sandbox === "read-only";
+
 export function buildClaudeArgs({ policy, modelId }) {
+  if (isPlanPolicy(policy)) {
+    return [
+      "-p",
+      "--output-format", "stream-json",
+      "--verbose",
+      "--safe-mode",
+      "--setting-sources", "user",
+      "--settings", JSON.stringify({ disableAllHooks: true }),
+      "--strict-mcp-config",
+      "--tools", CLAUDE_PLAN_TOOLS.join(","),
+      "--allowedTools", CLAUDE_PLAN_TOOLS.join(","),
+      "--disallowedTools", [...CLAUDE_WRITE_TOOLS, ...CLAUDE_DENIED_TOOLS.filter((rule) => !rule.startsWith("Bash("))].join(","),
+      "--permission-mode", "dontAsk",
+      "--max-turns", String(policy.maxTurns),
+      "--no-session-persistence",
+      ...(modelId ? ["--model", modelId] : []),
+    ];
+  }
   const bashRules = policy.testCommandPrefixes.flatMap((prefix) => [`Bash(${prefix})`, `Bash(${prefix} *)`]);
   const tools = [...CLAUDE_FILE_TOOLS, ...(bashRules.length ? ["Bash"] : [])];
   return [
@@ -150,7 +177,8 @@ export class ClaudeAdapter extends BaseAdapter {
         if (typeof message.claude_code_version === "string") state.sdkVersion = `claude-cli@${message.claude_code_version}`;
         const tools = Array.isArray(message.tools) ? message.tools.map(String) : [];
         const servers = Array.isArray(message.mcp_servers) ? message.mcp_servers : [];
-        const forbidden = tools.filter(FORBIDDEN_TOOL);
+        const planMode = isPlanPolicy(input.policy);
+        const forbidden = tools.filter((name) => FORBIDDEN_TOOL(name) || (planMode && CLAUDE_WRITE_TOOLS.includes(name)));
         if (forbidden.length || servers.length) {
           policyBreach = `tool policy not applied: tools=${forbidden.join(",") || "-"} mcp_servers=${servers.length}`;
           emit("error", { code: "TOOL_POLICY_BREACH", message: policyBreach });

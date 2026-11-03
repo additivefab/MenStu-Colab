@@ -8,10 +8,14 @@
 //   collectChanges(attemptId)            -> {files, unifiedDiff, totalBytes} vs base commit
 //   usage(attemptId)                     -> provider usage object
 //   result(attemptId)                    -> Promise<{outcome, errorCode?, errorMessage?, sdkVersion}>
+//   finalMessage(attemptId)              -> last assistant/final message text ("" if none);
+//                                           the plan in plan mode (FB2)
 //
 // start() input: {attemptId, workspace, baseCommitSha, prompt, policy,
 // modelId, profile: {id, dir}, registerSecret(value)}. Adapters must register
-// every credential they read so the worker can redact it.
+// every credential they read so the worker can redact it. policy.mode ===
+// "plan" (policy.sandbox === "read-only") means the run must not be able to
+// write: each adapter maps it to its own read-only mechanism.
 
 import { collectChanges } from "../workspace.mjs";
 
@@ -83,9 +87,16 @@ export class BaseAdapter {
       usage: {},
       sdkVersion: "unknown",
       cancelRequested: false,
+      finalMessage: "",
     };
     this.runs.set(input.attemptId, state);
-    const emit = (kind, payload, extra = {}) => state.queue.push({ kind, payload, ...extra });
+    const emit = (kind, payload, extra = {}) => {
+      // The agent's last assistant/final text is its answer (the plan in plan mode).
+      if (kind === "message" && (payload?.role === "assistant" || payload?.role === "final") && typeof payload.text === "string" && payload.text.trim()) {
+        state.finalMessage = payload.text;
+      }
+      state.queue.push({ kind, payload, ...extra });
+    };
     state.done = (async () => {
       let result;
       try {
@@ -145,6 +156,10 @@ export class BaseAdapter {
 
   result(attemptId) {
     return this.state(attemptId).done;
+  }
+
+  finalMessage(attemptId) {
+    return this.state(attemptId).finalMessage;
   }
 
   release(attemptId) {

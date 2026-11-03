@@ -2,6 +2,7 @@
 // These are simulations; no real Codex/Claude account or GitHub is involved.
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -408,4 +409,143 @@ test("the model the agent reports is recorded as the result's modelId for proven
   const [result] = env.platform.byAction("result");
   assert.equal(result.outcome, "change_ready");
   assert.equal(result.modelId, "claude-opus-5-5");
+});
+
+// ---------------------------------------------------------------------------
+// Plan-first attempts (FB2)
+// ---------------------------------------------------------------------------
+
+const PLAN_TEXT = "1. Files to touch: src/model.py, tests/test_model.py\n2. Approach: add a scale parameter\n3. Tests to run: pytest -q\n4. Risks: callers relying on f(x)";
+
+test("FB2: plan mode runs read-only and returns plan_ready with the final message and no files", async (t) => {
+  const env = await setup(t);
+  const fake = new FakeAdapter({
+    script: async (ctx) => {
+      await readFile(path.join(ctx.workspaceDir, "src/model.py"), "utf8");
+      ctx.emit("message", { role: "assistant", text: "Looking at src/model.py first." });
+      ctx.emit("message", { role: "assistant", text: `\n${PLAN_TEXT}\n\n` });
+    },
+  });
+  const work = makeWork(env.repo, { mode: "plan" });
+  await runAttempt(work, env.ctx({ codex: fake }));
+
+  const [result] = env.platform.byAction("result");
+  assert.equal(result.outcome, "plan_ready", result.errorMessage);
+  assert.equal(result.plan, PLAN_TEXT);
+  assert.deepEqual(result.files, []);
+  assert.equal(result.unifiedDiff, "");
+  assert.equal(result.errorCode, undefined);
+  const [received] = fake.received;
+  assert.equal(received.policy.mode, "plan");
+  assert.equal(received.policy.sandbox, "read-only");
+  assert.deepEqual([...received.policy.testCommandPrefixes], []);
+  assert.deepEqual([...received.policy.allowedPaths], work.task.allowedPaths);
+  assert.match(received.prompt, /planning phase/);
+  assert.match(received.prompt, /Do not create, modify or delete any file/);
+  for (const section of ["Files to touch", "Approach", "Tests to run", "Risks and open questions"]) assert.ok(received.prompt.includes(section), section);
+  assert.ok(received.prompt.includes("`src/**`"));
+  const events = env.platform.events();
+  assert.equal(events.find((event) => event.payload.phase === "claimed").payload.mode, "plan");
+  assert.ok(events.some((event) => event.payload.phase === "plan_collected"));
+});
+
+test("FB2: edits in plan mode are discarded and fail with PLAN_MODE_EDITED", async (t) => {
+  const env = await setup(t, { config: { keepWorkspaces: true } });
+  const fake = new FakeAdapter({
+    script: async (ctx) => {
+      const ws = ctx.workspaceDir;
+      await writeFile(path.join(ws, "src/model.py"), "def f(x, scale=1):\n    return x * scale\n");
+      await rm(path.join(ws, "src/old_helper.py"));
+      await mkdir(path.join(ws, "tests"), { recursive: true });
+      await writeFile(path.join(ws, "tests/test_model.py"), "def test_f():\n    pass\n");
+      ctx.emit("message", { role: "assistant", text: PLAN_TEXT });
+    },
+  });
+  const work = makeWork(env.repo, { mode: "plan" });
+  await runAttempt(work, env.ctx({ codex: fake }));
+
+  const [result] = env.platform.byAction("result");
+  assert.equal(result.outcome, "failed");
+  assert.equal(result.errorCode, "PLAN_MODE_EDITED");
+  assert.equal(result.plan, undefined);
+  assert.deepEqual(result.files, []);
+  assert.equal(result.unifiedDiff, "");
+  assert.match(result.errorMessage, /src\/model\.py/);
+  const flagged = env.platform.events().find((event) => event.kind === "error" && event.payload.code === "PLAN_MODE_EDITED");
+  assert.deepEqual(flagged.payload.paths, ["src/model.py", "src/old_helper.py", "tests/test_model.py"]);
+
+  const repoDir = path.join(env.config.workRoot, work.attemptId, "repo");
+  const status = execFileSync("git", ["status", "--porcelain", "--untracked-files=all", "--ignored"], { cwd: repoDir, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+  assert.equal(status, "", "workspace is clean after discarding");
+  assert.equal(await readFile(path.join(repoDir, "src/model.py"), "utf8"), "def f(x):\n    return x\n");
+  await stat(path.join(repoDir, "src/old_helper.py"));
+});
+
+test("FB2: plan mode without a final message fails with NO_PLAN; long plans are capped and redacted", async (t) => {
+  const env = await setup(t);
+  await runAttempt(makeWork(env.repo, { attemptId: "att_np1", mode: "plan" }), env.ctx({ codex: new FakeAdapter() }));
+  const long = new FakeAdapter({
+    script: async (ctx) => ctx.emit("message", { role: "final", text: `token ${WORKER_TOKEN}\n${"x".repeat(30_000)}` }),
+  });
+  await runAttempt(makeWork(env.repo, { attemptId: "att_np2", mode: "plan" }), env.ctx({ codex: long }));
+  const byId = Object.fromEntries(env.platform.byAction("result").map((result) => [result.attemptId, result]));
+  assert.equal(byId.att_np1.outcome, "failed");
+  assert.equal(byId.att_np1.errorCode, "NO_PLAN");
+  assert.equal(byId.att_np2.outcome, "plan_ready");
+  assert.ok(byId.att_np2.plan.length <= 20_000);
+  assert.match(byId.att_np2.plan, /^token \[REDACTED\]/);
+  assert.match(byId.att_np2.plan, /\[truncated\]$/);
+});
+
+test("FB2: edit mode with an approved plan puts the plan in the prompt as binding scope; the rest is unchanged", async (t) => {
+  const env = await setup(t);
+  const fake = new FakeAdapter({
+    script: async (ctx) => writeFile(path.join(ctx.workspaceDir, "src/model.py"), "def f(x, scale=1):\n    return x * scale\n"),
+  });
+  const work = makeWork(env.repo, { mode: "edit", approvedPlan: PLAN_TEXT });
+  await runAttempt(work, env.ctx({ codex: fake }));
+
+  const [received] = fake.received;
+  assert.deepEqual(received.policy, buildAgentPolicy(work.task, env.config));
+  assert.equal(received.policy.sandbox, "workspace-write");
+  assert.match(received.prompt, /## Approved plan \(binding scope\)/);
+  assert.ok(received.prompt.includes("按已批准的计划修改；如需偏离计划，停止并报告"));
+  assert.ok(received.prompt.includes(`<approved-plan>\n${PLAN_TEXT}\n</approved-plan>`));
+  assert.ok(received.prompt.indexOf("## Approved plan") < received.prompt.indexOf("## Scope"));
+  // Everything outside the plan section is the ordinary prompt.
+  const ordinary = buildPrompt({ work: { ...work, mode: undefined, approvedPlan: undefined }, policy: received.policy });
+  assert.equal(received.prompt.replace(/## Approved plan[\s\S]*?<\/approved-plan>\n\n/, ""), ordinary);
+
+  const [result] = env.platform.byAction("result");
+  assert.equal(result.outcome, "change_ready", result.errorMessage);
+  assert.equal(result.plan, undefined);
+  assert.deepEqual(result.files.map((file) => file.path), ["src/model.py"]);
+});
+
+test("FB2: attempts without mode (or with mode edit and no plan) are unchanged", async (t) => {
+  const env = await setup(t);
+  const fake = new FakeAdapter({
+    script: async (ctx) => {
+      await writeFile(path.join(ctx.workspaceDir, "src/model.py"), "changed\n");
+      ctx.emit("message", { role: "assistant", text: "done" });
+    },
+  });
+  const plain = makeWork(env.repo, { attemptId: "att_plain" });
+  const explicitEdit = makeWork(env.repo, { attemptId: "att_edit", mode: "edit", approvedPlan: null });
+  await runAttempt(plain, env.ctx({ codex: fake }));
+  await runAttempt(explicitEdit, env.ctx({ codex: fake }));
+
+  const policy = buildAgentPolicy(plain.task, env.config);
+  assert.ok(!("mode" in policy));
+  assert.equal(policy.sandbox, "workspace-write");
+  assert.deepEqual(policy, buildAgentPolicy(plain.task, env.config, { mode: "edit" }));
+  const [first, second] = fake.received;
+  assert.deepEqual(first.policy, policy);
+  assert.deepEqual(second.policy, policy);
+  assert.doesNotMatch(first.prompt, /Approved plan|planning phase/);
+  assert.equal(second.prompt, first.prompt.replace("attempt att_plain", "attempt att_edit"));
+  for (const result of env.platform.byAction("result")) {
+    assert.equal(result.outcome, "change_ready", result.errorMessage);
+    assert.ok(!("plan" in result));
+  }
 });

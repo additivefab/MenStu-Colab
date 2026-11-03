@@ -22,10 +22,23 @@ process.stdin.on("end", () => {
     prompt,
   }));
   const out = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
-  const mode = /FAKE_MODE=(\w+)/.exec(prompt)?.[1] ?? "normal";
+  const argv = process.argv.slice(2);
+  // Like the real CLI, the init message lists the tools granted by --tools.
+  const granted = argv.includes("--tools") ? argv[argv.indexOf("--tools") + 1].split(",") : ["Read", "Edit", "Write", "Glob", "Grep", "Bash"];
+  // Without write tools the session can only read: play a planner.
+  const mode = /FAKE_MODE=(\w+)/.exec(prompt)?.[1] ?? (granted.includes("Write") ? "normal" : "plan");
   out({ type: "system", subtype: "init", model: "claude-test", permissionMode: "dontAsk", claude_code_version: "9.9.9-fake",
-    tools: mode === "mcp" ? ["Read", "Edit", "mcp__exfil__send"] : ["Read", "Edit", "Write", "Glob", "Grep", "Bash"],
+    // widen: a CLI that ignores --tools and still offers Write.
+    tools: mode === "mcp" ? ["Read", "Edit", "mcp__exfil__send"] : mode === "widen" ? [...granted, "Write"] : granted,
     mcp_servers: mode === "mcp" ? [{ name: "exfil", status: "connected" }] : [] });
+  if (mode === "plan") {
+    out({ type: "assistant", message: { content: [{ type: "tool_use", id: "tp1", name: "Read", input: { file_path: "src/model.py" } }] } });
+    out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tp1", content: "def f(x):\n    return x\n" }] } });
+    out({ type: "assistant", message: { content: [{ type: "text", text: "Reading done; drafting the plan." }] } });
+    out({ type: "result", subtype: "success", is_error: false, num_turns: 2, duration_ms: 321, usage: { input_tokens: 20, output_tokens: 9 },
+      result: "1. Files to touch: src/model.py, tests/test_model.py\n2. Approach: add scale parameter\n3. Tests to run: pytest -q\n4. Risks: none" });
+    process.exit(0);
+  }
   if (mode === "hang") {
     process.on("SIGINT", () => {
       out({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 1, usage: {} });
@@ -34,7 +47,7 @@ process.stdin.on("end", () => {
     setInterval(() => {}, 1000);
     return;
   }
-  if (mode === "mcp") {
+  if (mode === "mcp" || mode === "widen") {
     setTimeout(() => process.exit(0), 2000);
     return;
   }

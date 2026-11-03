@@ -16,9 +16,9 @@ import { ClaudeAdapter } from "./adapters/claude.mjs";
 import { CodexAdapter } from "./adapters/codex.mjs";
 import { createPlatformClient, LeaseLostError } from "./platform-client.mjs";
 import { acquireProfileLock, profileDir } from "./profiles.mjs";
-import { buildAgentPolicy, buildPrompt } from "./prompt.mjs";
+import { attemptMode, buildAgentPolicy, buildPrompt, MAX_PLAN_CHARS } from "./prompt.mjs";
 import { createLogger, Redactor, sanitizePayload, truncate } from "./sanitize.mjs";
-import { prepareWorkspace, removeWorkspace } from "./workspace.mjs";
+import { discardChanges, prepareWorkspace, removeWorkspace, workspaceChanges } from "./workspace.mjs";
 
 const EVENT_KINDS = new Set(["status", "message", "tool_call", "tool_result", "file_change", "test", "usage", "error"]);
 
@@ -136,6 +136,15 @@ function containsRegisteredSecret(change, redactor) {
   return false;
 }
 
+/** The plan sent with "plan_ready": the agent's final message, redacted,
+ * trimmed and capped at MAX_PLAN_CHARS. */
+export function extractPlan(finalMessage, redactor) {
+  const text = redactor.redact(String(finalMessage ?? "")).trim();
+  if (text.length <= MAX_PLAN_CHARS) return text;
+  const marker = "\n[truncated]";
+  return `${text.slice(0, MAX_PLAN_CHARS - marker.length).trimEnd()}${marker}`;
+}
+
 /**
  * Runs one claimed attempt end to end. Never throws; posts exactly one result
  * unless the lease was lost.
@@ -147,6 +156,7 @@ export async function runAttempt(work, ctx, { shutdownSignal } = {}) {
   for (const secret of ctx.baseSecrets ?? []) redactor.add(secret);
   const logger = createLogger(redactor, ctx.logWrite);
   const attemptId = work.attemptId;
+  const mode = attemptMode(work);
   const state = { leaseLost: false, cancelReason: null, lastHeartbeatOk: Date.now(), abort: new AbortController() };
   const tests = [];
   // Model actually reported by the agent (e.g. Claude init event), for provenance.
@@ -210,7 +220,7 @@ export async function runAttempt(work, ctx, { shutdownSignal } = {}) {
   let agentStartedAt = null;
 
   try {
-    sink.push("status", { phase: "claimed", provider: work.provider, modelId: work.modelId, baseCommitSha: work.baseCommitSha, workerId: config.workerId ?? null });
+    sink.push("status", { phase: "claimed", provider: work.provider, modelId: work.modelId, baseCommitSha: work.baseCommitSha, workerId: config.workerId ?? null, mode });
     // The claim's task snapshot and base SHA must be exactly what the platform
     // bound at attempt start (contracts: agentContextSnapshotSha256).
     if (await agentContextSnapshotSha256(work.task, work.baseCommitSha) !== work.contextSnapshotSha256) {
@@ -221,7 +231,7 @@ export async function runAttempt(work, ctx, { shutdownSignal } = {}) {
     const capabilities = adapter.capabilities();
     sink.push("status", { phase: "adapter", capabilities });
 
-    const policy = buildAgentPolicy(work.task, config);
+    const policy = buildAgentPolicy(work.task, config, { mode });
     const prompt = buildPrompt({ work, policy });
 
     workspace = await prepareWorkspace({ work, config, workRoot: config.workRoot, redactor });
@@ -294,14 +304,35 @@ export async function runAttempt(work, ctx, { shutdownSignal } = {}) {
     result = { ...result, sdkVersion: adapterResult.sdkVersion ?? "unknown", usage };
     if (state.leaseLost) return;
 
-    if (state.cancelReason === "budget") {
+    // Plan mode (FB2): the adapters run read-only; this is the backstop. Any
+    // change in the checkout is discarded and fails the attempt. Skipped when
+    // the run was force-stopped (it may still be writing).
+    let planEdited = null;
+    if (mode === "plan" && how !== "forced") {
+      const edited = await workspaceChanges(workspace);
+      if (edited.length) {
+        sink.push("error", { code: "PLAN_MODE_EDITED", paths: edited.slice(0, 50) });
+        await discardChanges(workspace, work.baseCommitSha);
+        planEdited = edited;
+      }
+    }
+
+    if (state.cancelReason === "platform") {
+      result = { ...result, outcome: "canceled", errorCode: undefined, errorMessage: undefined };
+    } else if (planEdited) {
+      result = { ...result, outcome: "failed", errorCode: "PLAN_MODE_EDITED", errorMessage: `plan mode must not change files; discarded changes to: ${planEdited.slice(0, 20).join(", ")}` };
+    } else if (state.cancelReason === "budget") {
       result = { ...result, outcome: "failed", errorCode: "BUDGET_EXCEEDED", errorMessage: `agent exceeded the ${policy.maxAgentMinutes}-minute budget` };
     } else if (state.cancelReason === "shutdown") {
       result = { ...result, outcome: "failed", errorCode: "WORKER_SHUTDOWN", errorMessage: "worker shut down during the attempt" };
-    } else if (state.cancelReason === "platform") {
-      result = { ...result, outcome: "canceled", errorCode: undefined, errorMessage: undefined };
     } else if (adapterResult.outcome !== "completed") {
       result = { ...result, outcome: adapterResult.outcome === "canceled" ? "canceled" : "failed", errorCode: adapterResult.errorCode ?? "AGENT_FAILED", errorMessage: adapterResult.errorMessage ?? "agent run failed" };
+    } else if (mode === "plan") {
+      const plan = extractPlan(adapter.finalMessage?.(attemptId), redactor);
+      sink.push("status", { phase: "plan_collected", chars: plan.length });
+      result = plan
+        ? { ...result, outcome: "plan_ready", errorCode: undefined, errorMessage: undefined, plan }
+        : { ...result, outcome: "failed", errorCode: "NO_PLAN", errorMessage: "the agent finished without returning a plan" };
     } else {
       const change = await adapter.collectChanges(attemptId);
       const verdict = evaluatePathPolicy(change.files.map((file) => file.path), work.task.allowedPaths ?? [], policy.protectedPaths);
@@ -368,11 +399,12 @@ async function postResult(work, result, tests, { client, redactor, logger, start
     tests,
     usage: sanitizePayload({ ...result.usage, attemptWallSeconds: Math.round((Date.now() - startedAt) / 1000) }, redactor),
   };
+  if (result.outcome === "plan_ready") request.plan = result.plan;
   if (result.errorCode) request.errorCode = result.errorCode;
   if (result.errorMessage) request.errorMessage = truncate(redactor.redact(String(result.errorMessage)), 1000);
   try {
     await client.result(request);
-    logger.info("result posted", { attemptId: work.attemptId, outcome: request.outcome, errorCode: request.errorCode ?? null, files: request.files.length });
+    logger.info("result posted", { attemptId: work.attemptId, outcome: request.outcome, errorCode: request.errorCode ?? null, files: request.files.length, ...(request.plan ? { planChars: request.plan.length } : {}) });
   } catch (error) {
     if (error instanceof LeaseLostError) logger.warn("lease lost before result; dropping it", { attemptId: work.attemptId });
     else logger.error("posting result failed", { attemptId: work.attemptId, error: error.message });

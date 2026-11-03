@@ -2,6 +2,11 @@
 //   new Codex({ env, config, codexPathOverride })   env replaces process.env
 //   codex.startThread({ model, sandboxMode, workingDirectory, skipGitRepoCheck,
 //                       networkAccessEnabled, webSearchMode, approvalPolicy })
+//   sandboxMode: SandboxMode = "read-only" | "workspace-write" | "danger-full-access"
+//   (passed through as `codex exec --sandbox <mode>`). Plan mode (FB2) uses
+//   "read-only". The SDK was not installed when plan mode was added, so this
+//   value follows the SandboxMode union of the 0.166.0 typings recorded in the
+//   README sources and the existing option mapping; it needs live validation.
 //   thread.runStreamed(input, { signal }) -> { events: AsyncGenerator<ThreadEvent> }
 // Auth: ChatGPT sign-in cache in CODEX_HOME=<profile>/codex (auth.json, file
 // store). Codex refreshes and rewrites auth.json in place during runs, so the
@@ -36,12 +41,13 @@ export function buildCodexEnv({ codexHome, homeDir, tmpDir, childPath }) {
   };
 }
 
-/** Thread options: workspace-write sandbox rooted at the checkout, no
- * network, no web search, never ask for approval (nobody can answer). */
-export function buildThreadOptions({ modelId, workspaceDir }) {
+/** Thread options: workspace-write sandbox rooted at the checkout (read-only
+ * in plan mode), no network, no web search, never ask for approval (nobody
+ * can answer, so a write in the read-only sandbox is simply refused). */
+export function buildThreadOptions({ modelId, workspaceDir, readOnly = false }) {
   return {
     ...(modelId ? { model: modelId } : {}),
-    sandboxMode: "workspace-write",
+    sandboxMode: readOnly ? "read-only" : "workspace-write",
     workingDirectory: workspaceDir,
     skipGitRepoCheck: false,
     networkAccessEnabled: false,
@@ -87,7 +93,8 @@ export class CodexAdapter extends BaseAdapter {
       config: CODEX_CONFIG_OVERRIDES,
       ...(this.codexPath ? { codexPathOverride: this.codexPath } : {}),
     });
-    const thread = codex.startThread(buildThreadOptions({ modelId: input.modelId, workspaceDir: input.workspace.repoDir }));
+    const readOnly = input.policy.mode === "plan" || input.policy.sandbox === "read-only";
+    const thread = codex.startThread(buildThreadOptions({ modelId: input.modelId, workspaceDir: input.workspace.repoDir, readOnly }));
     const { events } = await thread.runStreamed(input.prompt, { signal: state.abort.signal });
 
     let failure = null;
