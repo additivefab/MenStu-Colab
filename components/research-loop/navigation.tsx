@@ -11,8 +11,17 @@
 //   run            research-run-<runId>
 // Guidance notes on the student profile use #guidance-<noteId> (existing).
 
-import { createContext, useContext } from "react";
+import { createContext, useContext, useEffect, useRef } from "react";
+import type { TaskSummary } from "./api";
 import type { StageTarget } from "./stage-model";
+
+/** Change request as known to the panel (registered by ChangeRequestCard). */
+export type ChangeRequestRef = {
+  taskId: string;
+  /** Per-task number by creation order ("变更 #n"), null if not computable. */
+  number: number | null;
+  prNumber: number | null;
+};
 
 export type LoopNavigation = {
   /** Last navigation request; cards matching it open and scroll into view. */
@@ -24,6 +33,17 @@ export type LoopNavigation = {
   runRef: (runId: string) => { taskId: string; number: number } | null;
   /** Link to a guidance note, or null where guidance notes are not on the page. */
   guidanceHref: (noteId: number) => string | null;
+  // Optional additions (A3). Consumers must tolerate their absence.
+  /** Summary of a task loaded in this panel (null if not loaded). */
+  task?: (taskId: string) => TaskSummary | null;
+  /** Number/PR of a change request whose card has been rendered in this panel. */
+  changeRequestRef?: (changeRequestId: string) => ChangeRequestRef | null;
+  /** Called by ChangeRequestCard so lineage and titles can name the change. */
+  registerChangeRequest?: (item: { id: string; taskId: string; createdAt: string; prNumber: number | null }) => void;
+  /** Leaf cards (attempt/change request/run) call this before acting on a
+   * focus; true only for the first claim of a focus key, so a card that
+   * remounts later does not re-open or re-scroll for an old focus. */
+  claimFocus?: (key: number) => boolean;
 };
 
 const noop: LoopNavigation = {
@@ -46,3 +66,32 @@ export const anchorId = {
   changeRequest: (id: string) => `research-cr-${id}`,
   run: (id: string) => `research-run-${id}`,
 };
+
+type LeafKind = "attempt" | "changeRequest" | "run";
+
+function targetId(target: StageTarget): string {
+  switch (target.kind) {
+    case "task": return target.taskId;
+    case "attempt": return target.attemptId;
+    case "changeRequest": return target.changeRequestId;
+    case "run": return target.runId;
+  }
+}
+
+/** Opens a leaf card and scrolls it into view once per matching focus key.
+ * Returns the ref to attach to the card root. */
+export function useFocusedCard<T extends HTMLElement>(kind: LeafKind, id: string, setOpen: (open: boolean) => void) {
+  const { focus, claimFocus } = useLoopNavigation();
+  const ref = useRef<T>(null);
+  const key = focus && focus.kind === kind && targetId(focus) === id ? focus.key : null;
+  useEffect(() => {
+    if (key === null) return;
+    const timer = window.setTimeout(() => {
+      if (claimFocus && !claimFocus(key)) return;
+      setOpen(true);
+      window.requestAnimationFrame(() => ref.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [key, claimFocus, setOpen]);
+  return ref;
+}

@@ -1,7 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { getJson, newKey, postJson, type RunList, type TaskSummary } from "./api";
+import { anchorId, LoopNavigationContext, type ChangeRequestRef, type LoopNavigation } from "./navigation";
+import { sequenceNumbers } from "./numbering";
+import type { StageTarget } from "./stage-model";
 import { TaskCard } from "./task-card";
 import { emptyTaskContent, TaskForm, type TaskContentDraft } from "./task-form";
 import { ErrorNote, Notice } from "./ui";
@@ -28,11 +31,19 @@ export function ResearchLoopPanel({ studentId, mode, prefill, guidanceHref }: {
   /** Link to a guidance note where notes are on the same page (student profile). */
   guidanceHref?: (noteId: number) => string | null;
 }) {
-  void guidanceHref; // batch 1 (A3): fed into LoopNavigation
-  return <PanelContent key={studentId} studentId={studentId} mode={mode} prefill={prefill} />;
+  return <PanelContent key={studentId} studentId={studentId} mode={mode} prefill={prefill} guidanceHref={guidanceHref} />;
 }
 
-function PanelContent({ studentId, mode, prefill }: { studentId: string; mode: "staff" | "student"; prefill?: TaskPrefill }) {
+type RegisteredChangeRequest = { id: string; taskId: string; createdAt: string; prNumber: number | null };
+
+const isOpenTask = (task: TaskSummary) => task.status === "draft" || task.status === "confirmed";
+
+function PanelContent({ studentId, mode, prefill, guidanceHref }: {
+  studentId: string;
+  mode: "staff" | "student";
+  prefill?: TaskPrefill;
+  guidanceHref?: (noteId: number) => string | null;
+}) {
   const titleId = useId();
   const [data, setData] = useState<LoopData | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -42,6 +53,9 @@ function PanelContent({ studentId, mode, prefill }: { studentId: string; mode: "
   const [highlight, setHighlight] = useState<string | null>(null);
   const request = useRef<AbortController | null>(null);
   const handledPrefill = useRef<number | null>(null);
+  const [focus, setFocus] = useState<LoopNavigation["focus"]>(null);
+  const [changeRequests, setChangeRequests] = useState<ReadonlyMap<string, RegisteredChangeRequest>>(new Map());
+  const claimedFocus = useRef(new Set<number>());
 
   const reload = useCallback(() => {
     request.current?.abort();
@@ -80,16 +94,71 @@ function PanelContent({ studentId, mode, prefill }: { studentId: string; mode: "
     await reload();
   }
 
+  const navigate = useCallback((target: StageTarget) => {
+    const task = data?.tasks.find((item) => item.id === target.taskId);
+    if (!task) {
+      setNotice("要前往的任务不在当前列表中（可能尚未加载或无权查看）。");
+      return;
+    }
+    if (!isOpenTask(task)) setFilter("all");
+    setHighlight(target.taskId);
+    setFocus({ ...target, key: Date.now() });
+    if (target.kind === "task") {
+      window.setTimeout(() => document.getElementById(anchorId.task(target.taskId))?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    }
+  }, [data]);
+
+  const registerChangeRequest = useCallback((item: RegisteredChangeRequest) => {
+    setChangeRequests((current) => {
+      const known = current.get(item.id);
+      if (known && known.taskId === item.taskId && known.createdAt === item.createdAt && known.prNumber === item.prNumber) return current;
+      return new Map(current).set(item.id, item);
+    });
+  }, []);
+
+  const claimFocus = useCallback((key: number) => {
+    if (claimedFocus.current.has(key)) return false;
+    claimedFocus.current.add(key);
+    return true;
+  }, []);
+
+  const navigation = useMemo<LoopNavigation>(() => {
+    const taskList = data?.tasks ?? [];
+    const runList = data?.runs.runs ?? [];
+    const byTask = new Map<string, typeof runList>();
+    for (const run of runList) byTask.set(run.taskId, [...(byTask.get(run.taskId) ?? []), run]);
+    const runRefs = new Map<string, { taskId: string; number: number }>();
+    for (const [taskId, items] of byTask) for (const [runId, number] of sequenceNumbers(items)) runRefs.set(runId, { taskId, number });
+    const crByTask = new Map<string, RegisteredChangeRequest[]>();
+    for (const item of changeRequests.values()) crByTask.set(item.taskId, [...(crByTask.get(item.taskId) ?? []), item]);
+    const crRefs = new Map<string, ChangeRequestRef>();
+    for (const [taskId, items] of crByTask) {
+      const numbers = sequenceNumbers(items);
+      for (const item of items) crRefs.set(item.id, { taskId, number: numbers.get(item.id) ?? null, prNumber: item.prNumber });
+    }
+    return {
+      focus,
+      navigate,
+      taskTitle: (taskId) => taskList.find((task) => task.id === taskId)?.title ?? null,
+      runRef: (runId) => runRefs.get(runId) ?? null,
+      guidanceHref: (noteId) => guidanceHref?.(noteId) ?? null,
+      task: (taskId) => taskList.find((task) => task.id === taskId) ?? null,
+      changeRequestRef: (changeRequestId) => crRefs.get(changeRequestId) ?? null,
+      registerChangeRequest,
+      claimFocus,
+    };
+  }, [data, changeRequests, focus, navigate, guidanceHref, registerChangeRequest, claimFocus]);
+
   const tasks = data?.tasks ?? [];
-  const visible = filter === "open" ? tasks.filter((task) => task.status === "draft" || task.status === "confirmed") : tasks;
+  const visible = filter === "open" ? tasks.filter(isOpenTask) : tasks;
   const runs = data?.runs.runs ?? [];
   const options = data?.runs.options ?? { entrypoints: [], datasets: [] };
-  const openCount = tasks.filter((task) => task.status === "draft" || task.status === "confirmed").length;
-  return <section className={styles.panel} aria-labelledby={titleId}>
+  const openCount = tasks.filter(isOpenTask).length;
+  return <LoopNavigationContext.Provider value={navigation}><section className={styles.panel} aria-labelledby={titleId}>
     <header className={styles.panelHead}>
       <div>
-        <h2 id={titleId}>科研闭环</h2>
-        <p>{mode === "student" ? "把确认过的任务交给代理改代码，审阅后在实验室运行，结果由导师评审。" : "任务确认 → 代理修改 → 审阅发布 → 批准运行 → 评审结果。"}</p>
+        <h2 id={titleId}>代码与实验</h2>
+        <p>{mode === "student" ? "确认研究任务后，代理修改代码、你审阅发布，导师批准运行并评审结果。" : "研究任务 → 代理改代码 → 审阅发布 → 批准运行 → 评审结果。"}</p>
       </div>
       {!creating ? <button type="button" className={styles.primary} onClick={() => setCreating({ initial: emptyTaskContent, key: newKey() })}>新建研究任务</button> : null}
     </header>
@@ -113,5 +182,5 @@ function PanelContent({ studentId, mode, prefill }: { studentId: string; mode: "
         defaultOpen={highlight ? highlight === task.id : index === 0} onChanged={() => void reload()} />)}
       {!visible.length ? <p className={styles.empty}>{tasks.length ? "没有进行中的任务。可以查看全部任务。" : mode === "student" ? "还没有研究任务。可以自己新建，或请导师把指导意见转为任务。" : "还没有研究任务。可以新建，或在“指导”中把意见转为任务。"}</p> : null}
     </> : null}
-  </section>;
+  </section></LoopNavigationContext.Provider>;
 }
