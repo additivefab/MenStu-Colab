@@ -222,7 +222,36 @@ export type EgressPolicy = {
   allowImages: boolean;
   /** Outputs whose sha256 matches any dataset manifest entry are always rejected. */
   blockDatasetHashMatches: true;
+  /**
+   * Optional data-steward opt-in (R03). Held-by-default: apart from a
+   * `metrics.json` that passes `checkMetricsEgress`, an output leaves the lab
+   * only when its relative path matches one of these entries (see
+   * `validateAutoPublishPath` for what is allowed). Matched files still pass
+   * the extension, image, size and dataset-hash checks. Absent or empty means
+   * "metrics only"; the field is omitted when empty so older specs keep their hash.
+   */
+  autoPublishPaths?: string[];
 };
+
+/** Fixed path of the trusted metrics artifact, relative to `out/`. */
+export const METRICS_EGRESS_PATH = "metrics.json";
+
+/** Bounds for the only artifact that is published without an opt-in. */
+export const METRICS_EGRESS_LIMITS = {
+  /** Hard cap on the raw file, independent of the dataset policy. */
+  maxBytes: 32_768,
+  maxValues: 200,
+  /** Raw bytes may exceed the compact re-serialization only by this much
+   * (indentation/newlines): base + perValue × values. Duplicate keys, padded
+   * numbers or other hidden payloads blow this budget. */
+  slackBaseBytes: 256,
+  slackPerValueBytes: 16,
+} as const;
+
+export const MAX_AUTO_PUBLISH_PATHS = 20;
+
+/** Reason text for outputs held by the default policy (shown in the run card). */
+export const EGRESS_HELD_DEFAULT_REASON = "需数据持有方授权后外发（默认只自动外发校验通过的 metrics.json）";
 
 export type RunSpec = {
   schema: "tanyan.runspec/v1";
@@ -291,6 +320,39 @@ export function matchesPathPattern(path: string, pattern: string, options: { cas
   return globToRegExp(pattern, options.caseInsensitive ? "i" : "").test(path);
 }
 
+/**
+ * Validates one `EgressPolicy.autoPublishPaths` entry and returns it, or an
+ * error message. Allowed: an exact normalized relative path
+ * ("predictions.csv"), or a narrow glob whose only wildcard is `*` in the last
+ * segment beneath a literal directory ("logs/*.log"). Rejected: `**`, `?`,
+ * wildcards in directory segments, top-level globs ("*.csv"), and segments
+ * made only of wildcards and dots ("logs/*", "logs/*.*").
+ */
+export function validateAutoPublishPath(value: unknown): { ok: true; path: string } | { ok: false; error: string } {
+  if (typeof value !== "string" || !value || value.length > 200) return { ok: false, error: "自动外发路径需为 1–200 个字符" };
+  if (!/^[A-Za-z0-9._@/*-]+$/.test(value)) return { ok: false, error: `自动外发路径只能包含字母、数字和 . _ @ / - *：${value}` };
+  let path: string;
+  try { path = normalizeRepoPath(value); } catch { return { ok: false, error: `自动外发路径不规范：${value}` }; }
+  if (path.includes("**")) return { ok: false, error: `自动外发路径不能使用 **：${value}` };
+  const segments = path.split("/");
+  const last = segments[segments.length - 1];
+  if (segments.slice(0, -1).some((segment) => segment.includes("*"))) return { ok: false, error: `通配符只能出现在最后一段：${value}` };
+  if (last.includes("*")) {
+    if (segments.length < 2) return { ok: false, error: `通配路径必须位于明确的子目录下，例如 logs/*.log：${value}` };
+    if (!/[A-Za-z0-9_@-]/.test(last.replace(/\*/g, ""))) return { ok: false, error: `通配路径过宽：${value}` };
+  }
+  return { ok: true, path };
+}
+
+/** First `autoPublishPaths` entry that matches `relativePath` exactly
+ * (case-sensitive), or null. Entries are assumed validated. */
+export function matchAutoPublishPath(relativePath: string, policy: Pick<EgressPolicy, "autoPublishPaths">): string | null {
+  for (const pattern of policy.autoPublishPaths ?? []) {
+    if (typeof pattern === "string" && matchesPathPattern(relativePath, pattern)) return pattern;
+  }
+  return null;
+}
+
 export type PathPolicyResult = {
   paths: string[];
   outsideAllowed: string[];
@@ -334,6 +396,42 @@ export function validateMetricsFile(value: unknown): { ok: true; metrics: Metric
     if (typeof metric !== "number" || !Number.isFinite(metric)) return { ok: false, error: `指标值无效：${name}` };
   }
   return { ok: true, metrics: record as unknown as MetricsFile };
+}
+
+/**
+ * Egress check for the trusted metrics artifact (R03). Stricter than
+ * `validateMetricsFile`: the raw bytes are what leave the lab, so besides the
+ * schema it requires a small file, no fields beyond the four of
+ * `tanyan.metrics/v1`, a short identifier-like `split`, and raw bytes that are
+ * not much larger than the compact re-serialization (catches duplicate keys,
+ * long numeric literals and padding that carry hidden payloads). Shared by the
+ * runner's gate and the platform's re-check.
+ *
+ * This bounds, but cannot close, a covert channel: up to 200 float64 values
+ * can still encode ~1.6 KB chosen by the job. It is not a data-loss guarantee.
+ */
+export function checkMetricsEgress(bytes: Uint8Array): { ok: true; metrics: MetricsFile } | { ok: false; error: string } {
+  if (bytes.byteLength > METRICS_EGRESS_LIMITS.maxBytes) {
+    return { ok: false, error: `metrics.json 大小 ${bytes.byteLength} 超过可信指标上限 ${METRICS_EGRESS_LIMITS.maxBytes}` };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return { ok: false, error: "metrics.json 不是有效的 UTF-8 JSON" };
+  }
+  const checked = validateMetricsFile(parsed);
+  if (!checked.ok) return checked;
+  const record = parsed as Record<string, unknown>;
+  const extra = Object.keys(record).filter((key) => !["schema", "evaluationProtocolSha256", "split", "values"].includes(key));
+  if (extra.length) return { ok: false, error: `metrics.json 含有 tanyan.metrics/v1 以外的字段：${extra.slice(0, 5).join("、")}` };
+  if (!/^[A-Za-z0-9_.@/-]{1,64}$/.test(checked.metrics.split)) return { ok: false, error: "metrics.json 的 split 需为不超过 64 个字符的标识符" };
+  const count = Object.keys(checked.metrics.values).length;
+  if (count > METRICS_EGRESS_LIMITS.maxValues) return { ok: false, error: `metrics.json 指标数超过 ${METRICS_EGRESS_LIMITS.maxValues}` };
+  const budget = new TextEncoder().encode(JSON.stringify(parsed)).byteLength
+    + METRICS_EGRESS_LIMITS.slackBaseBytes + METRICS_EGRESS_LIMITS.slackPerValueBytes * count;
+  if (bytes.byteLength > budget) return { ok: false, error: "metrics.json 原始字节远大于其内容（疑似重复键、超长数字或夹带数据）" };
+  return checked;
 }
 
 // ---------------------------------------------------------------------------

@@ -157,6 +157,8 @@ export type EgressPolicy = {
   maxTotalBytes: number;
   allowImages: boolean;
   blockDatasetHashMatches: true;
+  /** R03 data-steward opt-in; absent means only metrics.json is auto-published. */
+  autoPublishPaths?: string[];
 };
 
 export type Entrypoint = {

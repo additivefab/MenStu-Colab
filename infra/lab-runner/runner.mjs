@@ -296,12 +296,16 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
   // -------------------------------------------------------------------------
 
   // Contract (RunManifest.metricsArtifactPath): the path is reported whenever
-  // metrics.json is a published regular file, even when it fails the runner's
-  // own check. The platform re-validates and records technical_validity
-  // "invalid" (T19); withholding the path would turn "invalid" into "unknown".
-  async function readMetrics(ctx, published) {
-    const entry = published.find((file) => file.relativePath === METRICS_RELATIVE_PATH);
-    if (!entry) return { path: null, note: "no published metrics.json" };
+  // metrics.json is a regular file, published or held (R03: the gate holds a
+  // metrics.json that fails the trusted-metrics check). The platform records
+  // technical_validity "invalid" for it (T19); withholding the path would turn
+  // "invalid" into "unknown".
+  async function readMetrics(ctx, gate) {
+    const artifact = gate.artifacts.find((item) => item.relativePath === METRICS_RELATIVE_PATH && item.sha256 !== "");
+    if (!artifact) return { path: null, note: "no metrics.json" };
+    if (artifact.egressDecision !== "published") return { path: METRICS_RELATIVE_PATH, note: `metrics.json not published: ${artifact.egressReason}` };
+    const entry = gate.published.find((file) => file.relativePath === METRICS_RELATIVE_PATH);
+    if (!entry) return { path: METRICS_RELATIVE_PATH, note: "metrics.json not published" };
     let parsed;
     try {
       parsed = JSON.parse(await readFile(entry.absolutePath, "utf8"));
@@ -339,7 +343,7 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
         maxArtifacts: config.limits.maxArtifacts,
       });
       if (gate.truncated) logger.warn("artifact list truncated to maxArtifacts", { runId: ctx.work.runId, omitted: gate.truncated });
-      const metrics = await readMetrics(ctx, gate.published);
+      const metrics = await readMetrics(ctx, gate);
       if (metrics.note) {
         logger.info(metrics.path ? "metrics.json failed the runner check; reported anyway so the platform marks it invalid" : "no metrics reported", { runId: ctx.work.runId, reason: metrics.note });
       }

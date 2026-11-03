@@ -168,7 +168,7 @@ Inside the container:
 
 The environment variables `TANYAN_RUN_ID`, `TANYAN_SRC_DIR`, `TANYAN_DATA_DIR` and `TANYAN_OUT_DIR` are passed as
 `APPTAINERENV_*`. The job's stdout and stderr go to `/out/logs/job.log`, which is
-subject to the egress gate like any other output.
+subject to the egress gate like any other output (held unless opted in).
 
 Seeds in the manifest come only from integer params named `seed` or `seed_*`.
 
@@ -220,37 +220,70 @@ Flags checked against the Apptainer docs (apptainer.org, `apptainer exec`, the n
 - **Shared runner account:** jobs run under the runner's Unix account. Cross-project
   isolation relies on the binds above, not on separate users.
 
-## Egress gate (D5)
+## Egress gate (D5, R03: held by default)
 
-For each entry under `out/`, using `lstat` and never following links:
+Data may be computed on but never copied out. Content scanning cannot tell a
+transformed copy of the data (base64/hex, split into parts, renamed, mixed into a
+log) from a legitimate output, so the gate does not try: **every output is held
+unless it has a basis to leave the lab**. There are exactly two bases:
+
+1. **Trusted metrics.** The top-level `out/metrics.json` (exact path), when its bytes
+   pass `checkMetricsEgress` in `lib/research-loop/contracts.ts`: at most
+   `METRICS_EGRESS_LIMITS.maxBytes` (32 KiB), valid UTF-8 JSON, `tanyan.metrics/v1`
+   per `validateMetricsFile`, no fields beyond `schema`, `evaluationProtocolSha256`,
+   `split`, `values`, `split` a short identifier (`[A-Za-z0-9_.@/-]{1,64}`), at most
+   200 finite numeric values with names of ≤ 80 identifier characters, and raw bytes
+   no larger than the compact re-serialization plus a small whitespace allowance
+   (catches duplicate keys, padded numbers and appended payloads). The gate checks
+   the same bytes it hashed.
+2. **Data-steward opt-in.** A relative path listed in the dataset policy's optional
+   `autoPublishPaths` (`tanyan.egress/v1`). Entries are exact paths
+   (`predictions.csv`) or narrow globs with `*` only in the last segment beneath a
+   literal directory (`logs/*.log`); `**`, `?`, top-level globs (`*.csv`) and
+   all-wildcard segments are refused. Only a superadmin (the data steward) can
+   register a dataset, and the policy is copied into the approved run spec, so the
+   opt-in is bound by the spec hash.
+
+For each entry under `out/`, using `lstat` and never following links, in order:
 
 | Condition | Decision |
 |---|---|
 | Symbolic link, FIFO, socket or device; name that is not a normalized relative path (backslash, control characters, `.git`); resolved path outside `out/` | `rejected` |
 | sha256 equals any dataset-manifest file hash, or the manifest hashes themselves | `rejected` (raw-data copy) |
 | Hard link (link count > 1) | `held` |
+| `metrics.json` failing `checkMetricsEgress` | `held` (`metrics.json 未通过可信指标校验…`) |
+| Any other path not matched by `autoPublishPaths` | `held` (`需数据持有方授权后外发（默认只自动外发校验通过的 metrics.json）`) |
 | Extension not in `allowedExtensions` (or no extension) | `held` |
 | Image (`EGRESS_IMAGE_EXTENSIONS` in `contracts.ts`: `.png .jpg .jpeg .gif .bmp .tif(f) .webp .svg .pdf .eps .ico .heic .heif .avif`, the same list the platform re-check uses) with `allowImages=false` | `held` |
 | Size > `maxFileBytes`, or > `LIMITS.maxPublishedArtifactBytes` | `held` |
 | Running total of published bytes would exceed `maxTotalBytes` (paths in sorted order) | `held` |
-| Otherwise | `published` |
+| Otherwise | `published`; the reason records the basis (`可信指标 metrics.json…` or `数据持有方授权外发：autoPublishPaths 命中 "<pattern>"…`) |
 
-- Only published files are sent inline (base64) in `complete`. Held and rejected
-  files stay on lab storage. Each artifact carries an opaque
-  `labLocator = lab://<runnerId>/<runId>/out/<path>`, which is not a URL.
+- Only published files are sent inline (base64) in `complete`, and only if their bytes
+  still hash to what the gate recorded. Held and rejected files stay on lab storage.
+  Each artifact carries an opaque `labLocator = lab://<runnerId>/<runId>/out/<path>`,
+  which is not a URL.
 - `kind` is derived from path and extension only.
 - Non-regular entries are reported with `sha256: ""` and `sizeBytes: 0`. The contract
   allows an empty hash only together with `egressDecision: "rejected"`; the platform
   records such entries and never publishes them.
-- The raw-copy check matches exact bytes only. A transformed or re-encoded copy of
-  data is not detected. That case is covered by the extension, image and size rules
-  and by human review of held outputs.
+- **Platform enforcement.** On `complete` the platform re-applies the same rule
+  (`planArtifacts` in `lib/run-registry-service.ts`): a `published` claim survives only
+  for `metrics.json` passing `checkMetricsEgress` on the uploaded bytes, or for a path
+  matched by the spec's `autoPublishPaths`, and then the extension, image, size and
+  hash checks. Anything else is downgraded to `held` (decisions only get stricter),
+  and the stored reason is the platform's own basis, not the runner's text.
+- **Limits of this defence.** The raw-copy check matches exact bytes only and is
+  defence in depth. The metrics checks bound, but cannot close, a covert channel:
+  200 float64 values can still carry about 1.6 KB chosen by the job. An opt-in path
+  is published on the steward's authority; nothing here inspects its content.
+  Neither the gate nor the platform is a data-loss guarantee.
 
-Metrics come only from a **published** `out/metrics.json`. Whenever that file is a
-published regular file, the runner reports `metricsArtifactPath: "metrics.json"`, even if
-it fails the runner's own check (`validateMetricsFile`, protocol hash equal to the
-spec's); the reason is logged and kept in `state.metricsNote`. The platform validates
-the file again and records `technical_validity = "invalid"` (T19). Without a published
+Metrics come only from `out/metrics.json`. Whenever that file is a regular file,
+published or held, the runner reports `metricsArtifactPath: "metrics.json"`, even if
+it fails the trusted-metrics check or the runner's own check (protocol hash equal to the
+spec's); the reason is logged and kept in `state.metricsNote`. The platform records
+`technical_validity = "invalid"` for a held or invalid file (T19). Without a regular
 `metrics.json` the path is `null` and the platform records `unknown`.
 
 ## Manifest

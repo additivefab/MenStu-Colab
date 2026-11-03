@@ -120,10 +120,15 @@ test("run registry: approval binding, lab lease protocol, egress and result revi
       entrypoint = (await admin(entry)).entrypoint;
       assert.equal(entrypoint.githubRepositoryId, 5001, "repository resolved server-side from the student's link");
 
-      const policy = { schema: "tanyan.egress/v1", allowedExtensions: [".json", ".txt", ".png", ".csv"], maxFileBytes: 1000, maxTotalBytes: 5000, allowImages: false, blockDatasetHashMatches: true };
+      // R03: held by default. The data steward opts these paths in so the
+      // re-check below still exercises extension/image/size/hash downgrades.
+      const policy = { schema: "tanyan.egress/v1", allowedExtensions: [".json", ".txt", ".png", ".csv"], maxFileBytes: 1000, maxTotalBytes: 5000, allowImages: false, blockDatasetHashMatches: true,
+        autoPublishPaths: ["tables/*.csv", "summary.json", "plot.png", "big.json", "weights.bin", "forged.txt"] };
       const ds = { action: "register_dataset", label: "合成数据 v1", runnerId: runner, manifestSha256: DATA_MANIFEST, splitManifestSha256: SPLIT_MANIFEST, egressPolicy: policy };
       await admin({ ...ds, egressPolicy: { ...policy, blockDatasetHashMatches: false } }, "root", 400);
       await admin({ ...ds, egressPolicy: { ...policy, allowedExtensions: ["JSON"] } }, "root", 400);
+      await admin({ ...ds, egressPolicy: { ...policy, autoPublishPaths: ["*.csv"] } }, "root", 400);
+      await admin({ ...ds, egressPolicy: { ...policy, autoPublishPaths: ["**/*.log"] } }, "root", 400);
       await admin({ ...ds, runnerId: "rnr_agentseed" }, "root", 400);
       await admin({ ...ds, manifestSha256: "short" }, "root", 400);
       dataset = (await admin(ds)).dataset;
@@ -464,13 +469,14 @@ test("run registry: approval binding, lab lease protocol, egress and result revi
         file("forged.txt", "real content", { sha: sha256("other content") }),
         file("held.json", "{}", { decision: "held" }),
         file("dataset-copy.csv", "raw", { decision: "rejected" }),
+        file("unlisted.json", "{}"),
       ];
       const done = await complete(work, items);
       const decisions = Object.fromEntries(done.artifacts.map((item) => [item.relativePath, item.egressDecision]));
       assert.deepEqual(decisions, {
         "metrics.json": "published", "summary.json": "published", "../escape.json": "rejected", "/etc/passwd.txt": "rejected",
         "a/./b.json": "rejected", "plot.png": "held", "big.json": "held", "weights.bin": "held", "forged.txt": "held",
-        "held.json": "held", "dataset-copy.csv": "rejected",
+        "held.json": "held", "dataset-copy.csv": "rejected", "unlisted.json": "held",
       });
       const stored = (await bucket.list({ prefix: `runs/${work.runId}/` })).objects.map((object) => object.key).sort();
       assert.deepEqual(stored, [`runs/${work.runId}/metrics.json`, `runs/${work.runId}/summary.json`]);
@@ -480,6 +486,9 @@ test("run registry: approval binding, lab lease protocol, egress and result revi
         await expectJson(await call(`/api/run-artifacts?artifactId=${artifact.id}`, { actor: "root" }), 404);
       }
       assert.match(view.artifacts.find((item) => item.relativePath === "plot.png").egressReason, /图片/);
+      // R03: a published claim without an opt-in is downgraded; the basis of a kept one is recorded.
+      assert.match(view.artifacts.find((item) => item.relativePath === "unlisted.json").egressReason, /平台复核：需数据持有方授权后外发/);
+      assert.match(view.artifacts.find((item) => item.relativePath === "summary.json").egressReason, /autoPublishPaths 命中 "summary\.json"/);
     });
 
     await t.test("contract: hashless entries only when rejected; unknown exit code is null and compared null-aware", async () => {
