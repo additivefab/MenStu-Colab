@@ -149,6 +149,8 @@ export async function runAttempt(work, ctx, { shutdownSignal } = {}) {
   const attemptId = work.attemptId;
   const state = { leaseLost: false, cancelReason: null, lastHeartbeatOk: Date.now(), abort: new AbortController() };
   const tests = [];
+  // Model actually reported by the agent (e.g. Claude init event), for provenance.
+  let observedModel = "";
   let adapter = null;
   let adapterStarted = false;
 
@@ -262,6 +264,7 @@ export async function runAttempt(work, ctx, { shutdownSignal } = {}) {
         if (event.test && tests.length < 100) {
           tests.push({ command: truncate(redactor.redact(String(event.test.command)), 1000), exitCode: event.test.exitCode, summary: truncate(redactor.redact(String(event.test.summary ?? "")), 1000) });
         }
+        if (typeof event.payload?.model === "string" && event.payload.model) observedModel = event.payload.model;
         sink.push(event.kind, event.payload);
       }
       return "done";
@@ -343,7 +346,7 @@ export async function runAttempt(work, ctx, { shutdownSignal } = {}) {
       } else {
         await sink.close().catch(() => {});
       }
-      if (!state.leaseLost) await postResult(work, result, tests, { client, redactor, logger, startedAt });
+      if (!state.leaseLost) await postResult(work, result, tests, { client, redactor, logger, startedAt, observedModel });
     } finally {
       if (adapter && adapterStarted) adapter.release?.(attemptId);
       if (workspace && !config.keepWorkspaces) await removeWorkspace(workspace.root).catch(() => {});
@@ -351,14 +354,14 @@ export async function runAttempt(work, ctx, { shutdownSignal } = {}) {
   }
 }
 
-async function postResult(work, result, tests, { client, redactor, logger, startedAt }) {
+async function postResult(work, result, tests, { client, redactor, logger, startedAt, observedModel }) {
   /** @type {import("../../lib/research-loop/contracts.ts").AgentResultRequest} */
   const request = {
     action: "result",
     attemptId: work.attemptId,
     leaseEpoch: work.leaseEpoch,
     outcome: result.outcome,
-    modelId: work.modelId,
+    modelId: truncate(redactor.redact(String(observedModel || work.modelId || "")), 200),
     sdkVersion: result.sdkVersion ?? "unknown",
     files: result.outcome === "change_ready" ? result.files : [],
     unifiedDiff: result.outcome === "change_ready" ? result.unifiedDiff : "",

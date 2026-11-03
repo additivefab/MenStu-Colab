@@ -456,7 +456,12 @@ export function createRunner({ config, token, logger = createLogger(), scheduler
     if (status && TERMINAL_RUN_STATUSES.includes(status)) return markTerminal(ctx, status);
     if (!job) {
       if (status === "canceled" || (!status && ctx.state.cancelRequested)) return markTerminal(ctx, "canceled");
-      // Proven absent: the platform moves the run back to dispatching and this lease submits.
+      // Proven absent: the platform moves the run back to dispatching and this lease submits,
+      // using the fresh read token it returns (reconcile-mode claims carry none).
+      if (response?.repository?.token) {
+        logger.addSecret(response.repository.token);
+        ctx.repository = response.repository;
+      }
       return execute(ctx);
     }
     await adopt(ctx, job);

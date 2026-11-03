@@ -395,3 +395,17 @@ test("claim whose task snapshot does not match contextSnapshotSha256 is refused 
   assert.deepEqual(result.files, []);
   assert.equal(fake.received.length, 0, "adapter never started");
 });
+
+test("the model the agent reports is recorded as the result's modelId for provenance", async (t) => {
+  const env = await setup(t);
+  const fake = new FakeAdapter({
+    script: async (ctx) => {
+      ctx.emit("status", { phase: "init", model: "claude-opus-5-5" });
+      await writeFile(path.join(ctx.workspaceDir, "src/model.py"), "changed\n");
+    },
+  });
+  await runAttempt(makeWork(env.repo), env.ctx({ codex: fake }));
+  const [result] = env.platform.byAction("result");
+  assert.equal(result.outcome, "change_ready");
+  assert.equal(result.modelId, "claude-opus-5-5");
+});

@@ -927,7 +927,13 @@ export async function reconcileRun(d1: D1Database, runner: LabRunner, body: Reco
   }));
   if (!ok) throw leaseLost();
   // A terminal status ends the lease now (contracts: ComputeReconcileResponse).
-  return { status: to ?? run.status, leaseExpiresAt: expires ?? now, cancelRequested: cancel };
+  const response: ComputeReconcileResponse = { status: to ?? run.status, leaseExpiresAt: expires ?? now, cancelRequested: cancel };
+  // The runner must (re)submit: it needs code access it may no longer hold.
+  if (to === "dispatching") {
+    const { spec } = await loadSpec(d1, run.run_spec_sha256);
+    response.repository = await mintReadAccess(d1, run.student_id, spec).catch(() => null);
+  }
+  return response;
 }
 
 // ---------------------------------------------------------------------------

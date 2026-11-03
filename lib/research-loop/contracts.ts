@@ -441,7 +441,15 @@ export type ComputeReconcileRequest = {
  * job exists and must submit under this lease (after another findByTag).
  * `cancelRequested` has the same meaning as in a heartbeat. For a terminal
  * status the lease has ended and `leaseExpiresAt` is the reconcile time. */
-export type ComputeReconcileResponse = { status: RunStatus; leaseExpiresAt: string; cancelRequested: boolean };
+export type ComputeReconcileResponse = {
+  status: RunStatus;
+  leaseExpiresAt: string;
+  cancelRequested: boolean;
+  /** Present when status is "dispatching" (job proven absent, runner must
+   * submit): a fresh read token, or null when the platform has no GitHub App
+   * configured and the runner must use its own read access. */
+  repository?: RepositoryReadAccess | null;
+};
 
 export type ComputeCompleteRequest = {
   action: "complete";
