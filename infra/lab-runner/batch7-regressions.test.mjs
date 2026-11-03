@@ -235,7 +235,11 @@ test("R05: lost submit response + delayed findByTag visibility never yields a se
   const repo = createRepo(root);
   const dataset = createDataset(root);
   const shim = installShim(root);
-  const config = makeConfig({ root, platformUrl: platform.url, dataset, shimPath: shim.path, gitReadFallback: { url: repo.repo } });
+  const baseConfig = makeConfig({ root, platformUrl: platform.url, dataset, shimPath: shim.path, gitReadFallback: { url: repo.repo } });
+  // A short reconcile window so a runner that waits for scheduler visibility
+  // (rather than resubmitting) finishes within the test timeout. Production
+  // defaults are minutes; the limits are ignored by runners that lack them.
+  const config = { ...baseConfig, limits: { ...baseConfig.limits, submitVisibilitySeconds: 1.5, submitVisibilityPollSeconds: 0.1 } };
   const { logger } = captureLogger(createLogger);
   const scheduler = lossyScheduler({ hiddenCalls: R05_HIDDEN_FIND_CALLS });
   const newRunner = () => createRunner({ config, token: RUNNER_TOKEN, logger, scheduler });
