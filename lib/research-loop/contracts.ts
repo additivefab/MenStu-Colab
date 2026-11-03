@@ -362,8 +362,23 @@ export type RunManifest = {
   runSpecSha256: string;
   approvalId: string;
   repository: { repositoryId: number; executedCommitSha: string };
-  inputs: { datasetVersionId: string; manifestSha256: string; splitManifestSha256: string; evaluationProtocolSha256: string; seeds: number[] };
-  environment: { imageDigest: string; driverVersion: string; gpuModel: string };
+  inputs: {
+    datasetVersionId: string; manifestSha256: string; splitManifestSha256: string; evaluationProtocolSha256: string; seeds: number[];
+    /** Batch 7 (R02): sha256 over the canonical per-file listing (path, size,
+     * sha256) of the input bytes the runner verified before submit; absent from
+     * older runners. */
+    dataDigest?: string;
+    /** How the input bytes were verified: every file re-hashed ("full"), or a
+     * sealed immutable snapshot whose seal was checked ("sealed_snapshot"). */
+    dataVerification?: "full" | "sealed_snapshot";
+  };
+  environment: {
+    imageDigest: string; driverVersion: string; gpuModel: string;
+    /** Batch 7 (G02): sha256 of the local SIF file actually executed (not the
+     * OCI digest — a different kind of digest), and its recorded provenance. */
+    imageFileSha256?: string;
+    imageSource?: string;
+  };
   execution: {
     runnerId: string;
     schedulerJobId: string;

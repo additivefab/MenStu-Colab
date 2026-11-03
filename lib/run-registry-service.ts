@@ -1253,6 +1253,14 @@ function parseManifest(value: unknown): RunManifest {
     if (typeof input !== "number" || !Number.isSafeInteger(input)) shapeError(`manifest 字段 ${label} 无效`);
     return input;
   };
+  const sha = (input: unknown, label: string) => {
+    if (typeof input !== "string" || !/^[0-9a-f]{64}$/.test(input)) shapeError(`manifest 字段 ${label} 无效`);
+    return input;
+  };
+  const oneOf = <T extends string>(input: unknown, allowed: readonly T[], label: string): T => {
+    if (typeof input !== "string" || !(allowed as readonly string[]).includes(input)) shapeError(`manifest 字段 ${label} 无效`);
+    return input as T;
+  };
   const repository = obj(m.repository, "repository");
   const inputs = obj(m.inputs, "inputs");
   const environment = obj(m.environment, "environment");
@@ -1297,11 +1305,15 @@ function parseManifest(value: unknown): RunManifest {
       splitManifestSha256: str(inputs.splitManifestSha256, "inputs.splitManifestSha256", 64),
       evaluationProtocolSha256: str(inputs.evaluationProtocolSha256, "inputs.evaluationProtocolSha256", 64),
       seeds: inputs.seeds.map((seed, index) => int(seed, `inputs.seeds[${index}]`)),
+      ...(inputs.dataDigest === undefined ? {} : { dataDigest: sha(inputs.dataDigest, "inputs.dataDigest") }),
+      ...(inputs.dataVerification === undefined ? {} : { dataVerification: oneOf(inputs.dataVerification, ["full", "sealed_snapshot"] as const, "inputs.dataVerification") }),
     },
     environment: {
       imageDigest: str(environment.imageDigest, "environment.imageDigest", 300),
       driverVersion: str(environment.driverVersion ?? "", "environment.driverVersion", 120),
       gpuModel: str(environment.gpuModel ?? "", "environment.gpuModel", 120),
+      ...(environment.imageFileSha256 === undefined ? {} : { imageFileSha256: sha(environment.imageFileSha256, "environment.imageFileSha256") }),
+      ...(environment.imageSource === undefined ? {} : { imageSource: str(environment.imageSource, "environment.imageSource", 300) }),
     },
     execution: {
       runnerId: str(execution.runnerId, "execution.runnerId", 80),
