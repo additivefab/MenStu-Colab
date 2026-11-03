@@ -491,3 +491,19 @@ test("stage model: long failure messages are shortened in summaries", () => {
   assert.ok(summary.length < 60, summary);
   assert.ok(summary.endsWith("…"));
 });
+
+test("a follow-up already created from the reviewed run settles the next stage", () => {
+  const base = {
+    task: { id: "task_1", studentId: "s", title: "t", status: "confirmed", currentVersion: 1, confirmedVersion: 1, sourceGuidanceNoteId: null, sourceRunId: null, parentTaskId: null, createdByUserId: 1, createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z" },
+    attempts: [], changeRequests: [],
+    runs: [{ id: "r1", attempt: 1, status: "completed", taskId: "task_1", studentId: "s", runSpecSha256: "a".repeat(64), approvalId: "apr", submitTag: "t", runnerId: null, exitCode: 0, failureReason: "", cancelRequestedAt: null, createdByUserId: 1, createdAt: "2026-11-01T00:00:10Z", queuedAt: null, startedAt: null, endedAt: null, executedCommitSha: "1".repeat(40), entrypointId: "ep", datasetVersionId: "ds", changeRequestId: null, technicalValidity: "valid", reviewState: "needs_followup" }],
+  };
+  const without = computeTaskStages(base);
+  assert.equal(without.stages.find((stage) => stage.key === "next").state, "active");
+  const withFollowup = computeTaskStages({ ...base, followupTaskIdByRun: { r1: "task_2" } });
+  const next = withFollowup.stages.find((stage) => stage.key === "next");
+  assert.equal(next.state, "done");
+  assert.equal(next.owner, null);
+  assert.match(next.summary, /运行 #1/);
+  assert.equal(withFollowup.next, null);
+});

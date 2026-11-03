@@ -59,6 +59,10 @@ export type StageInput = {
   changeRequests: StageChangeRequest[] | null;
   /** Runs of this task (any order). */
   runs: RunSummary[];
+  /** Follow-up tasks already created from a run's review: runId → follow-up taskId
+   * (tasks whose sourceRunId is that run). Optional; without it a reviewed run
+   * still asks for a decision even if a follow-up exists. */
+  followupTaskIdByRun?: Readonly<Record<string, string>>;
 };
 
 export type TaskStages = {
@@ -115,7 +119,8 @@ export const OWNER_LABELS: Record<Exclude<StageOwner, null>, string> = {
  *           it) and its summary says 技术无效 / 不能验收, so it never reads as success. Otherwise the newest
  *           reviewed run → done with its review wording. Validity and review are always worded
  *           separately; nothing here is a combined "success".
- * next    task closed → done. Newest run completed with a final review and no code/run stage
+ * next    task closed → done. A follow-up already created from the newest reviewed run
+ *           (followupTaskIdByRun) → done. Newest run completed with a final review and no code/run stage
  *           active or working → active · student (text names 学生或导师):
  *           needs_followup "转为下一轮任务" · accepted "决定：转为下一轮任务或完成并关闭" ·
  *           rejected "决定：修订任务、转为下一轮或关闭". Otherwise idle.
@@ -351,11 +356,14 @@ function resultStage(task: TaskSummary, runs: readonly RunSummary[], numbers: Ma
   return only(make("result", "idle", ""));
 }
 
-function nextStage(task: TaskSummary, runs: readonly RunSummary[], numbers: Map<string, number>, loopBusy: boolean): Derived {
+function nextStage(task: TaskSummary, runs: readonly RunSummary[], numbers: Map<string, number>, loopBusy: boolean,
+  followups: Readonly<Record<string, string>> | undefined): Derived {
   if (task.status === "closed") return only(make("next", "done", "任务已关闭"));
   const latest = runs.at(-1);
   if (!latest || loopBusy || latest.status !== "completed" || !FINAL_REVIEW.has(latest.reviewState ?? "")) return only(make("next", "idle", ""));
   const label = runLabel(numbers.get(latest.id) ?? null);
+  // A follow-up already created from this run's review settles the decision.
+  if (followups?.[latest.id]) return only(make("next", "done", `已由${label} 转为下一轮任务`));
   const target: StageTarget = { kind: "run", taskId: task.id, runId: latest.id };
   const [summary, text] = latest.reviewState === "needs_followup"
     ? ["转为下一轮任务", `${label} 需要后续实验，学生或导师可转为下一轮任务`]
@@ -375,7 +383,7 @@ export function computeTaskStages(input: StageInput): TaskStages {
   const run = runStage(task, runs, runNumbers, code.stage.state);
   const result = resultStage(task, runs, runNumbers);
   const loopBusy = [code, run].some((item) => item.stage.state === "active" || item.stage.state === "working");
-  let derived = [taskStage(task), code, run, result, nextStage(task, runs, runNumbers, loopBusy)];
+  let derived = [taskStage(task), code, run, result, nextStage(task, runs, runNumbers, loopBusy, input.followupTaskIdByRun)];
 
   const terminal = task.status === "closed" || task.status === "canceled";
   if (terminal) {
