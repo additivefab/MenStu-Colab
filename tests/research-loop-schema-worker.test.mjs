@@ -10,6 +10,7 @@ const LOOP_TABLES = [
   "github_webhook_deliveries", "lab_runners", "agent_credential_profiles", "agent_attempts", "agent_attempt_events",
   "change_requests", "registered_entrypoints", "dataset_versions", "dataset_grants", "run_specs", "run_approvals",
   "runs", "run_events", "run_artifacts", "run_results", "result_reviews", "result_comments",
+  "run_baselines", "result_interpretations", "review_delegations", "agent_attempt_plans", "loop_notifications",
 ];
 
 // Schema 26 tables are migration-owned: a version-25 database without 0026
@@ -37,8 +38,36 @@ test("research loop tables require migration 0026 before the runtime upgrades to
     await applyD1Migrations(mf, { from: "0026_" });
     const recovered = await (await mf.dispatchFetch("http://localhost/api/health/ready")).json();
     assert.equal(recovered.checks.find((check) => check.id === "schema")?.status, "pass", JSON.stringify(recovered));
-    assert.equal((await db.prepare("SELECT version FROM app_schema_meta WHERE id=1").first()).version, 26);
+    assert.equal((await db.prepare("SELECT version FROM app_schema_meta WHERE id=1").first()).version, 27);
     assert.equal((await db.prepare(`SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name IN (${placeholders})`).bind(...LOOP_TABLES).first()).n, LOOP_TABLES.length);
+    assert.deepEqual((await db.prepare("PRAGMA foreign_key_check").all()).results, []);
+  } finally { await mf.dispose(); }
+});
+
+// Schema 27 adds batch 4–5 tables, also migration-owned: a version-26 database
+// without 0027 stops at readiness and keeps version 26 until 0027 is applied.
+test("schema 27 tables require migration 0027 before the runtime upgrades from 26", { timeout: 120_000 }, async () => {
+  const root = fileURLToPath(new URL("../dist/server/", import.meta.url));
+  const files = (await readdir(root, { recursive: true })).filter((file) => file.endsWith(".js"));
+  const mf = new Miniflare({
+    modules: ["index.js", ...files.filter((file) => file !== "index.js")].map((path) => ({ type: "ESModule", path: root + path })),
+    modulesRoot: root, compatibilityDate: "2026-05-22", compatibilityFlags: ["nodejs_compat"],
+    d1Databases: { DB: "research-loop-schema-27" }, r2Buckets: ["FILES"],
+    outboundService: () => new Response("No external services in this test", { status: 502 }),
+  });
+  const added = ["run_baselines", "result_interpretations", "review_delegations", "agent_attempt_plans", "loop_notifications"];
+  try {
+    const db = await applyD1Migrations(mf, { before: "0027_" });
+    await db.prepare("UPDATE app_schema_meta SET version = 26 WHERE id = 1").run();
+    const failed = await mf.dispatchFetch("http://localhost/api/health/ready");
+    assert.equal(failed.status, 503);
+    assert.equal((await db.prepare("SELECT version FROM app_schema_meta WHERE id=1").first()).version, 26);
+    const placeholders = added.map(() => "?").join(",");
+    assert.equal((await db.prepare(`SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name IN (${placeholders})`).bind(...added).first()).n, 0);
+    await applyD1Migrations(mf, { from: "0027_" });
+    const recovered = await (await mf.dispatchFetch("http://localhost/api/health/ready")).json();
+    assert.equal(recovered.checks.find((check) => check.id === "schema")?.status, "pass", JSON.stringify(recovered));
+    assert.equal((await db.prepare("SELECT version FROM app_schema_meta WHERE id=1").first()).version, 27);
     assert.deepEqual((await db.prepare("PRAGMA foreign_key_check").all()).results, []);
   } finally { await mf.dispose(); }
 });

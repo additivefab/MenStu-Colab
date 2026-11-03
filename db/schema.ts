@@ -1398,3 +1398,88 @@ export const resultComments = sqliteTable("result_comments", {
 }, (table) => [
   index("idx_result_comments_run").on(table.runId, table.id),
 ]);
+
+// ---------------------------------------------------------------------------
+// Schema 27: research loop batches 4–5 (docs/科研闭环_前端优化方案 FA2–FA4,
+// FB1–FB3). Migration-owned like schema 26.
+// ---------------------------------------------------------------------------
+
+// FA2: comparison baseline for a run. Not part of the run spec or its approval
+// hash; changing the baseline never changes what was approved.
+export const runBaselines = sqliteTable("run_baselines", {
+  runId: text("run_id").primaryKey().references(() => runs.id),
+  baselineRunId: text("baseline_run_id").notNull().references(() => runs.id),
+  setByUserId: integer("set_by_user_id").notNull().references(() => appUsers.id),
+  setAt: text("set_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  check("run_baseline_not_self", sql`${table.runId} <> ${table.baselineRunId}`),
+]);
+
+// FA3: the student's own reading of a result, versioned, written before review.
+export const resultInterpretations = sqliteTable("result_interpretations", {
+  runId: text("run_id").notNull().references(() => runs.id),
+  version: integer("version").notNull(),
+  authorUserId: integer("author_user_id").notNull().references(() => appUsers.id),
+  whatItShows: text("what_it_shows").notNull(),
+  alternativeExplanations: text("alternative_explanations").notNull().default(""),
+  limitations: text("limitations").notNull().default(""),
+  proposedNextStep: text("proposed_next_step").notNull().default(""),
+  requestId: text("request_id").notNull().unique(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("idx_result_interpretations_pk").on(table.runId, table.version),
+  check("result_interpretation_version", sql`${table.version} >= 1`),
+]);
+
+// FB1: a mentor delegates routine code review (G2, non-protected changes) of a
+// student's agent changes to another platform user (e.g. a senior student).
+// Grants only that: viewing the student's research-loop tasks/changes and
+// publishing or rejecting non-protected change requests. Never run approval,
+// extra review of protected paths, or result review.
+export const reviewDelegations = sqliteTable("review_delegations", {
+  id: text("id").primaryKey(),
+  studentId: text("student_id").notNull().references(() => students.id),
+  reviewerUserId: integer("reviewer_user_id").notNull().references(() => appUsers.id),
+  delegatedByUserId: integer("delegated_by_user_id").notNull().references(() => appUsers.id),
+  active: integer("active").notNull().default(1),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  revokedAt: text("revoked_at"),
+  revokedByUserId: integer("revoked_by_user_id").references(() => appUsers.id),
+}, (table) => [
+  check("review_delegation_active", sql`${table.active} IN (0, 1)`),
+  index("idx_review_delegations_reviewer").on(table.reviewerUserId, table.active),
+  index("idx_review_delegations_student").on(table.studentId, table.active),
+]);
+
+// FB2: plan-first attempts. A row exists only for plan-first attempts; the
+// agent first returns a plan (no file changes), a human approves or rejects
+// it, and only an approved plan lets the worker proceed to edit code.
+export const agentAttemptPlans = sqliteTable("agent_attempt_plans", {
+  attemptId: text("attempt_id").primaryKey().references(() => agentAttempts.id),
+  planText: text("plan_text").notNull().default(""),
+  planSha256: text("plan_sha256").notNull().default(""),
+  decision: text("decision").notNull().default("awaiting_plan"),
+  submittedAt: text("submitted_at"),
+  decidedByUserId: integer("decided_by_user_id").references(() => appUsers.id),
+  decidedAt: text("decided_at"),
+  note: text("note").notNull().default(""),
+  version: integer("version").notNull().default(1),
+}, (table) => [
+  check("agent_attempt_plan_decision", sql`${table.decision} IN ('awaiting_plan', 'pending', 'approved', 'rejected')`),
+]);
+
+// FB3: idempotent loop notifications (Feishu bot), one row per event and
+// recipient. Content is a short summary and a link; never code, data or hashes.
+export const loopNotifications = sqliteTable("loop_notifications", {
+  eventKey: text("event_key").notNull(),
+  recipientUserId: integer("recipient_user_id").notNull().references(() => appUsers.id),
+  channel: text("channel").notNull().default("feishu"),
+  status: text("status").notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error").notNull().default(""),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  sentAt: text("sent_at"),
+}, (table) => [
+  uniqueIndex("idx_loop_notifications_pk").on(table.eventKey, table.recipientUserId, table.channel),
+  check("loop_notification_status", sql`${table.status} IN ('pending', 'sent', 'skipped', 'failed')`),
+]);

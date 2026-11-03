@@ -25,7 +25,7 @@ test('Workers HTTP flow: original account -> activation -> login -> scoped data 
     await applyD1Migrations(mf);
     await mf.dispatchFetch(origin+'/api/health/ready'); // Exercise version checks and runtime provisioning after deployment migrations.
     const db=await mf.getD1Database('DB');
-    assert.equal((await db.prepare('SELECT version FROM app_schema_meta').first()).version,26);
+    assert.equal((await db.prepare('SELECT version FROM app_schema_meta').first()).version,27);
     await db.prepare("INSERT INTO students(id,display_name,degree,grade_year,stage) VALUES ('student-001','测试学生一','博士',2024,'实验'),('student-002','测试学生二','硕士',2025,'实验')").run();
     await db.prepare("INSERT INTO app_users(id,feishu_open_id,display_name,role,student_id) VALUES (1,'old-feishu-id','测试学生一','student','student-001'),(2,'other-feishu-id','测试学生二','student','student-002'),(3,'superadmin-test','测试超管','superadmin',NULL)").run();
     await db.prepare("INSERT INTO app_sessions(token_hash,app_user_id,expires_at) VALUES (?,3,datetime('now','+1 day'))").bind(digest('admin-test-session')).run();

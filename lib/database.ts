@@ -9,7 +9,7 @@ import { provisionConfirmedRepositoryBindings } from "./confirmed-repository-bin
 
 const DAY = 24 * 60 * 60 * 1000;
 
-export const CURRENT_SCHEMA_VERSION = 26;
+export const CURRENT_SCHEMA_VERSION = 27;
 
 // These tables are owned exclusively by the hosted/local Drizzle migration.
 // Runtime bootstrap must never invent them or mark the schema upgraded before
@@ -26,6 +26,8 @@ export const MIGRATION_OWNED_RESEARCH_LOOP_TABLES = [
   "change_requests", "registered_entrypoints", "dataset_versions", "dataset_grants",
   "run_specs", "run_approvals", "runs", "run_events", "run_artifacts", "run_results",
   "result_reviews", "result_comments",
+  // Schema 27 (0027): baselines, interpretations, review delegation, plan-first attempts, loop notifications.
+  "run_baselines", "result_interpretations", "review_delegations", "agent_attempt_plans", "loop_notifications",
 ] as const;
 
 const REQUIRED_TABLES = [
@@ -164,7 +166,7 @@ async function prepareDatabase() {
   }
   const missingResearchLoopTables = MIGRATION_OWNED_RESEARCH_LOOP_TABLES.filter((name) => before.missingTables.includes(name));
   if (missingResearchLoopTables.length) {
-    throw new Error("科研闭环数据库迁移 0026 尚未应用，请先应用部署迁移");
+    throw new Error("科研闭环数据库迁移（0026/0027）尚未应用，请先应用部署迁移");
   }
   if (before.version !== null && before.version >= 23 && before.missingTables.length) {
     throw new Error(`数据库结构不完整：缺少 ${before.missingTables.join("、")}`);
@@ -191,6 +193,12 @@ export async function ensureDatabase() {
 
 async function migrateDatabase(previousVersion: number | null) {
   const d1 = getD1();
+  if (previousVersion === 26) {
+    // 0027 only adds migration-owned tables, verified complete before this point.
+    await d1.prepare("UPDATE app_schema_meta SET version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND version = 26")
+      .bind(CURRENT_SCHEMA_VERSION).run();
+    return;
+  }
   if (previousVersion === 25) {
     // 0026 only adds migration-owned tables, verified complete before this point.
     await ensureResearchOutputColumns();
