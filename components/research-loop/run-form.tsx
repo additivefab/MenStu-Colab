@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
-import { newKey, postJson, type ChangeRequest, type Dataset, type Entrypoint, type ParamSpec, type TaskBudget } from "./api";
+import { useEffect, useState, type FormEvent } from "react";
+import type { EvaluationBudgetView } from "../../lib/research-loop/results-contract.ts";
+import { getJson, newKey, postJson, type ChangeRequest, type Dataset, type Entrypoint, type ParamSpec, type TaskBudget } from "./api";
 import { shortSha } from "./labels";
+import { evaluationBudgetExhausted, evaluationBudgetLine, evaluationBudgetUrl } from "./research-validity";
 import { Blocked, ErrorNote } from "./ui";
 import styles from "./research-loop.module.css";
 
@@ -42,6 +44,23 @@ export function RunForm({ taskId, budget, changeRequests, entrypoints, datasets,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const entrypoint = entrypoints.find((item) => item.id === entrypointId);
+  // Batch 6 (pack 02 §9): formal evaluations left for this task version under
+  // the chosen entrypoint's evaluation protocol. Only fetched when the
+  // confirmed version sets a limit; the server enforces it either way.
+  const protocol = entrypoint?.evaluationProtocolSha256 ?? "";
+  const limited = budget.maxFormalEvaluations !== undefined;
+  const [evaluation, setEvaluation] = useState<{ protocol: string; view: EvaluationBudgetView | null } | null>(null);
+  const [evaluationRefresh, setEvaluationRefresh] = useState(0);
+  useEffect(() => {
+    if (!limited || !protocol) return;
+    const controller = new AbortController();
+    getJson<{ evaluationBudget: EvaluationBudgetView | null }>(evaluationBudgetUrl(taskId, protocol), "正式评测次数读取失败", controller.signal)
+      .then((payload) => { if (!controller.signal.aborted) setEvaluation({ protocol, view: payload.evaluationBudget }); }, () => undefined);
+    return () => controller.abort();
+  }, [limited, protocol, taskId, evaluationRefresh]);
+  const evaluationView = evaluation?.protocol === protocol ? evaluation.view : null;
+  const evaluationLine = evaluationBudgetLine(evaluationView);
+  const evaluationUsedUp = evaluationBudgetExhausted(evaluationView);
 
   if (!entrypoints.length || !datasets.length) {
     return <Blocked>{!entrypoints.length ? "管理员尚未为该学生的仓库登记运行入口。" : "该学生没有有效的数据集计算授权。"}请联系超级管理员在“系统管理 · 实验室”中配置。</Blocked>;
@@ -67,6 +86,8 @@ export function RunForm({ taskId, budget, changeRequests, entrypoints, datasets,
     } catch (failure) {
       setError(failure);
       setBusy(false);
+      // The count may have moved (e.g. a concurrent run used the last one).
+      setEvaluationRefresh((value) => value + 1);
     }
   }
 
@@ -95,9 +116,12 @@ export function RunForm({ taskId, budget, changeRequests, entrypoints, datasets,
       <label>内存（GB）<input type="number" min={1} max={2048} required value={resources.memoryGb} disabled={busy} onChange={(event) => setResources({ ...resources, memoryGb: event.target.value })} /></label>
     </div>
     {entrypoint ? <p className={styles.muted}>入口命令：<code>{entrypoint.argv.join(" ")}</code></p> : null}
+    {evaluationLine ? <p className={evaluationUsedUp ? styles.warning : styles.muted} role="status">
+      {evaluationLine}{evaluationUsedUp ? "。该评价协议下的正式评测次数已用完；如需继续，请与导师商量后修改任务并重新确认。" : "。被取消且未派发的运行不计入；失败和重跑都计入。"}
+    </p> : null}
     <ErrorNote error={error} />
     <div className={styles.actions}>
-      <button type="submit" className={styles.primary} disabled={busy}>{busy ? "正在登记…" : "登记运行（待批准）"}</button>
+      <button type="submit" className={styles.primary} disabled={busy || evaluationUsedUp}>{busy ? "正在登记…" : "登记运行（待批准）"}</button>
       <button type="button" disabled={busy} onClick={onCancel}>取消</button>
     </div>
   </form>;

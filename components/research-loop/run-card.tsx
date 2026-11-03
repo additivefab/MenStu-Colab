@@ -8,7 +8,8 @@ import {
 import { NavLink, ResultLineage } from "./lineage";
 import { anchorId, useFocusedCard, useLoopNavigation } from "./navigation";
 import { runLabel } from "./numbering";
-import { BaselinePanel, InterpretationSection, MetricsWithBaseline, ProgressDraftAction } from "./result-insights";
+import { BaselinePanel, InterpretationSection, MetricsWithBaseline, ProgressDraftAction, ReproductionPanel } from "./result-insights";
+import { evaluationBudgetExhausted, evaluationBudgetLine, withValidity } from "./research-validity";
 import { describeRunSpec } from "./spec-summary";
 import { TaskForm, type TaskContentDraft } from "./task-form";
 import { Blocked, ConfirmButton, CopyButton, ErrorNote, Field, Notice, Pill } from "./ui";
@@ -195,6 +196,7 @@ function ResultSection({ detail, taskContent, onReload, onChanged }: {
         <MetricsWithBaseline values={result.metrics.values} split={result.metrics.split} baseline={detail.baseline} />
       </> : result ? <p className={styles.muted}>没有通过校验的机器指标文件，不能作为正式指标。</p> : null}
       {result ? <BaselinePanel detail={detail} onReload={onReload} /> : null}
+      <ReproductionPanel reproduction={withValidity(detail).reproduction} />
       {artifacts.length ? <div className={styles.tableWrap}><table className={`${styles.table} ${styles.wideTable} ${rc.stackTable}`}>
         <caption>产物 {artifacts.length} 个</caption>
         <thead><tr><th scope="col">文件</th><th scope="col">类型</th><th scope="col">大小</th><th scope="col">去向</th></tr></thead>
@@ -340,6 +342,11 @@ export function RunCard({ run, number, taskContent, options, onChanged }: {
   const awaiting = current.status === "awaiting_approval";
   const taskId = detail?.spec.taskId || current.taskId;
   const rerun = () => void act({ action: "rerun", idempotencyKey: rerunKey }, "已按同一规范新建运行，需要重新批准。");
+  // Batch 6 (pack 02 §9): a rerun is a formal evaluation too; the server enforces the limit.
+  const evaluationBudget = detail ? withValidity(detail).evaluationBudget : null;
+  const budgetLine = evaluationBudgetLine(evaluationBudget);
+  const budgetUsedUp = evaluationBudgetExhausted(evaluationBudget);
+  const budgetNote = budgetLine ? <small className={styles.muted}>{budgetLine}{budgetUsedUp ? "，不能再按同一规范重跑" : ""}</small> : null;
   return <article className={styles.item} id={anchorId.run(run.id)} ref={rootRef}>
     <button type="button" className={styles.itemHead} aria-expanded={open} onClick={() => setOpen(!open)}>
       <span className={styles.itemTitle}>{runLabel(runNumber)} · 提交 {shortSha(current.executedCommitSha, 7)}{current.attempt > 1 ? ` · 第 ${current.attempt} 次执行` : ""}</span>
@@ -354,7 +361,8 @@ export function RunCard({ run, number, taskContent, options, onChanged }: {
     {open ? <div className={styles.itemBody}>
       {failed ? <div className={rc.nextSteps}>
         <strong>下一步</strong>
-        {permissions?.canRerun ? <button type="button" disabled={busy} onClick={rerun}>按同一规范重跑（需重新批准）</button> : null}
+        {permissions?.canRerun ? <button type="button" disabled={busy || budgetUsedUp} onClick={rerun}>按同一规范重跑（需重新批准）</button> : null}
+        {permissions?.canRerun ? budgetNote : null}
         <span>{permissions?.canRerun ? "或者调整代码、数据或资源：" : "如需调整代码、数据或资源，请"}<NavLink target={{ kind: "task", taskId }}>修改任务</NavLink>后重新发起运行。</span>
       </div> : null}
       {live && detail ? <p className={rc.pollNote}>状态每 {POLL_MS / 1000} 秒自动刷新</p> : null}
@@ -375,7 +383,8 @@ export function RunCard({ run, number, taskContent, options, onChanged }: {
         <div className={styles.actions}>
           {permissions?.canRevokeApproval ? <ConfirmButton label="撤销批准" confirmLabel="确认撤销" prompt="撤销后运行将被取消。" busy={busy} danger onConfirm={() => void act({ action: "revoke_approval" }, "批准已撤销。")} /> : null}
           {permissions?.canCancel ? <ConfirmButton label="取消运行" confirmLabel="确认取消" prompt={current.status === "awaiting_approval" || current.status === "queued" ? "将直接取消。" : "实验室执行器会在下次心跳时停止作业。"} busy={busy} onConfirm={() => void act({ action: "cancel" }, "已提交取消。")} /> : null}
-          {permissions?.canRerun && !failed ? <button type="button" disabled={busy} onClick={rerun}>按同一规范重跑（需重新批准）</button> : null}
+          {permissions?.canRerun && !failed ? <button type="button" disabled={busy || budgetUsedUp} onClick={rerun}>按同一规范重跑（需重新批准）</button> : null}
+          {permissions?.canRerun && !failed ? budgetNote : null}
         </div>
         {detail.events.length ? <details className={styles.subtle}><summary>状态记录 {detail.events.length} 条</summary><ol className={styles.timeline}>{detail.events.map((event) => <li key={event.sequence}>{dateLabel(event.createdAt)} · {event.fromStatus ? `${label(runStatusLabels, event.fromStatus)[0]} → ` : ""}{label(runStatusLabels, event.toStatus)[0]}<small> · {event.actorType === "user" ? "用户" : event.actorType === "runner" ? "执行器" : "系统"}</small></li>)}</ol></details> : null}
         {terminal || detail.result ? <ResultSection detail={detail} taskContent={taskContent} onReload={() => load()} onChanged={onChanged} /> : null}
