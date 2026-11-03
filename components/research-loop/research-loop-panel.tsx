@@ -21,7 +21,14 @@ function fetchLoop(studentId: string, signal: AbortSignal): Promise<LoopData> {
 
 /** Research loop: task → agent attempt → change request → run → result review.
  * `mode` only changes wording; every action is gated by server permissions. */
-export function ResearchLoopPanel({ studentId, mode, prefill }: { studentId: string; mode: "staff" | "student"; prefill?: TaskPrefill }) {
+export function ResearchLoopPanel({ studentId, mode, prefill, guidanceHref }: {
+  studentId: string;
+  mode: "staff" | "student";
+  prefill?: TaskPrefill;
+  /** Link to a guidance note where notes are on the same page (student profile). */
+  guidanceHref?: (noteId: number) => string | null;
+}) {
+  void guidanceHref; // batch 1 (A3): fed into LoopNavigation
   return <PanelContent key={studentId} studentId={studentId} mode={mode} prefill={prefill} />;
 }
 
