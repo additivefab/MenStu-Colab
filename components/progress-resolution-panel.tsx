@@ -57,6 +57,15 @@ function dateLabel(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(parsed);
 }
 
+async function requestResolutions(studentId: string | undefined, entryId: number | undefined) {
+  const params = new URLSearchParams(studentId ? { studentId } : { view: "completed" });
+  if (entryId !== undefined) params.set("entryId", String(entryId));
+  const response = await fetch(`/api/progress-resolutions?${params}`, { cache: "no-store" });
+  const result = await response.json() as ResolutionPayload;
+  if (!response.ok) throw new Error(result.error || "事项读取失败，请重试");
+  return result;
+}
+
 function Attachments({ files }: { files: ResolutionAttachment[] }) {
   if (!files.length) return null;
   return <ul className={styles.attachments}>{files.map((file) => <li key={file.id}>
@@ -80,37 +89,70 @@ export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, o
   const [focusRequest, setFocusRequest] = useState<{ itemKey?: string; key: number } | null>(null);
   const sequence = useRef(0);
   const confirmRequests = useRef(new Map<string, string>());
-  const handledOpenRequest = useRef<string | null>(null);
-  const handledFilterRequest = useRef<string | null>(null);
+  const [handledOpenRequest, setHandledOpenRequest] = useState<string | null>(null);
+  const [handledFilterRequest, setHandledFilterRequest] = useState<string | null>(null);
   const previousRefreshKey = useRef(refreshKey);
 
-  const load = useCallback(async () => {
+  // Starts a request; state changes only in the settled-request callbacks.
+  const fetchItems = useCallback(() => {
     const requestSequence = ++sequence.current;
-    setLoading(true);
-    setError("");
-    try {
-      const params = new URLSearchParams(studentId ? { studentId } : { view: "completed" });
-      if (entryId !== undefined) params.set("entryId", String(entryId));
-      const response = await fetch(`/api/progress-resolutions?${params}`, { cache: "no-store" });
-      const result = await response.json() as ResolutionPayload;
-      if (!response.ok) throw new Error(result.error || "事项读取失败，请重试");
+    return requestResolutions(studentId, entryId).then((result) => {
       if (sequence.current === requestSequence) setPayload(result);
-    } catch (failure) {
+    }, (failure: unknown) => {
       if (sequence.current === requestSequence) setError(failure instanceof Error ? failure.message : "事项读取失败，请重试");
-    } finally {
+    }).finally(() => {
       if (sequence.current === requestSequence) setLoading(false);
-    }
+    });
   }, [studentId, entryId]);
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true);
+    setError("");
+    return fetchItems();
+  }, [fetchItems]);
+
+  // A different student, entry or initial filter resets the panel during render
+  // (instead of in an effect), so no frame shows the previous student's items.
+  const resetKey = JSON.stringify([studentId ?? null, entryId ?? null, initialFilter]);
+  const [appliedResetKey, setAppliedResetKey] = useState(resetKey);
+  if (appliedResetKey !== resetKey) {
+    setAppliedResetKey(resetKey);
     setPayload(null);
     setNotice("");
     setEditor(null);
     setFilter(initialFilter);
     setFocusRequest(null);
-    void load();
+    setLoading(true);
+    setError("");
+  } else {
+    // External filter/open requests apply once per key. The filter request is
+    // handled first so an open request in the same update takes precedence.
+    const filterRequestKey = filterRequest ? `${studentId}:${filterRequest.key}` : null;
+    if (filterRequest && filterRequestKey !== handledFilterRequest) {
+      setHandledFilterRequest(filterRequestKey);
+      setFilter(filterRequest.filter);
+      setFocusRequest({ key: filterRequest.key });
+    }
+    const openRequestKey = openRequest ? `${studentId}:${openRequest.key}` : null;
+    if (openRequest && !loading && payload && openRequestKey !== handledOpenRequest) {
+      setHandledOpenRequest(openRequestKey);
+      const item = findProgressResolutionTarget(payload.items ?? [], openRequest);
+      setEditor(null);
+      if (!item) setNotice("事项已更新，请查看最新进展。");
+      else {
+        setNotice("");
+        const itemFilter = progressTaskFilter(item);
+        if (itemFilter !== "historical") setFilter(itemFilter);
+        setFocusRequest({ itemKey: item.key, key: openRequest.key });
+        if (item.current && studentId && mode === "student" && payload.canSubmit && (item.status === "open" || item.status === "changes_requested")) setEditor({ item, action: "submit" });
+      }
+    }
+  }
+
+  useEffect(() => {
+    void fetchItems();
     return () => { sequence.current += 1; };
-  }, [load, initialFilter]);
+  }, [fetchItems, initialFilter]);
 
   useEffect(() => {
     if (previousRefreshKey.current === refreshKey) return;
@@ -169,15 +211,6 @@ export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, o
   const activeFilter = allStudents ? "completed" : filter;
 
   useEffect(() => {
-    if (!filterRequest) return;
-    const requestKey = `${studentId}:${filterRequest.key}`;
-    if (handledFilterRequest.current === requestKey) return;
-    handledFilterRequest.current = requestKey;
-    setFilter(filterRequest.filter);
-    setFocusRequest({ key: filterRequest.key });
-  }, [filterRequest, studentId]);
-
-  useEffect(() => {
     if (!focusRequest || loading) return;
     const frame = requestAnimationFrame(() => {
       const card = focusRequest.itemKey ? Array.from(panelRef.current?.querySelectorAll<HTMLElement>("[data-task-key]") ?? []).find((element) => element.dataset.taskKey === focusRequest.itemKey) : null;
@@ -189,21 +222,6 @@ export function ProgressResolutionPanel({ studentId, mode, entryId, onChanged, o
     });
     return () => cancelAnimationFrame(frame);
   }, [focusRequest, loading, activeFilter]);
-
-  useEffect(() => {
-    if (!openRequest || loading || !payload) return;
-    const requestKey = `${studentId}:${openRequest.key}`;
-    if (handledOpenRequest.current === requestKey) return;
-    handledOpenRequest.current = requestKey;
-    const item = findProgressResolutionTarget(payload.items ?? [], openRequest);
-    setEditor(null);
-    if (!item) { setNotice("事项已更新，请查看最新进展。"); return; }
-    setNotice("");
-    const itemFilter = progressTaskFilter(item);
-    if (itemFilter !== "historical") setFilter(itemFilter);
-    setFocusRequest({ itemKey: item.key, key: openRequest.key });
-    if (item.current && studentId && mode === "student" && payload.canSubmit && (item.status === "open" || item.status === "changes_requested")) setEditor({ item, action: "submit" });
-  }, [openRequest, payload, loading, studentId, mode]);
 
   function renderItem(item: ResolutionItem) {
       const history = item.history;

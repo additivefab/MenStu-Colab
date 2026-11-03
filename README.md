@@ -8,7 +8,7 @@ Management、Moodle、OSIRIS、eLabFTW 和 OpenProject 的公开产品模式。
 
 ## V0.3 已实现
 
-- 26 名真实学生名册：12 名博士、14 名硕士（本地首次启动仍可生成匿名演示数据）
+- 26 名真实学生名册：12 名博士、14 名硕士（由超级管理员在“设置”中导入；本地空库不会自动生成演示数据）
 - 每人独立设置 7 / 14 / 21 / 30 天更新周期，最长 30 天
 - 管理员可代录文献、实验、算法、数据、论文、复现和项目进展；学生端保留“论文进度”和“项目进度”两个入口，其中论文按台账、阶段门、稿件版本、下一行动与导师反馈持续管理
 - 进展支持一次上传最多 5 个 PDF、Office、文本、图片或 ZIP 附件；文件内容存入 R2，D1 保存归属、大小和 SHA-256 指纹，下载时再次校验学生范围
@@ -35,22 +35,32 @@ Management、Moodle、OSIRIS、eLabFTW 和 OpenProject 的公开产品模式。
 
 新凭据关联原用户 ID 和学生 ID，不复制或重建历史数据。新开通的独立学生账号同样使用初始密码并强制首登改密；已开通账号忘记密码时，超级管理员可生成 24 小时有效的一次性密码设置链接。部署包含迁移 0023，以及仅执行一次的原学生账号初始化，保留已有个人密码和停用状态。操作说明见 [独立学生登录](docs/独立学生登录_2026-09-20.md)。
 
+## 科研闭环（开发中）
+
+`feature/research-loop` 分支正在实现“任务 → AI 代理 PR → 批准运行 → 实验室执行 → 结果评审”闭环。唯一契约见 [科研闭环实施规格 v1](docs/科研闭环_实施规格_v1.md)，现状审计见 [`docs/audit/`](docs/audit/baseline.md)。目前只提交了 schema 26 的表结构与共享契约代码，服务、执行器和界面尚未完成。
+
 ## 本地运行
 
-需要 Node.js 22.13 或更高版本：
+需要 Node.js 22.13 或更高版本。
 
 ```bash
-npm install
-npm run dev
+npm install                 # 安装依赖
+npm run db:migrate:local    # 将 drizzle/ 迁移应用到本地 D1
+npm run dev:admin           # 可选：创建本地超级管理员测试账号
+npm run dev                 # http://localhost:3000
 ```
 
-打开 `http://localhost:3000`。首次请求会在本地 D1 中创建匿名演示数据。
+- **证书**：如果 `npm install` 或其他联网命令报 `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` 等证书错误（例如 Homebrew 安装的 Node 默认 CA 库不完整），可以为该命令设置 `NODE_EXTRA_CA_CERTS=<系统或 Homebrew 的 ca-certificates/cert.pem 路径>`，不要关闭 TLS 校验。
+- **数据库**：应用不会在运行时创建迁移专属表，也不会生成演示数据。本地 D1 未迁移时，接口返回 503（“科研仓库数据库迁移尚未应用”等）。`db:migrate:local` 使用 `scripts/local-dev/wrangler.local.jsonc`，把迁移写入开发服务器使用的同一个本地 D1（`.wrangler/state`，绑定 `DB`）。脚本可以重复执行，只会应用尚未应用的迁移。迁移后 schema 为 24，首次请求时运行时校验通过后会升级到 26。迁移体系出现之前留下的旧本地库，可以删除 `.wrangler/state/v3/d1` 后重新迁移。
+- **本地管理员**：`dev:admin` 在本地 D1 中创建或修复用户名为 `local-admin` 的超级管理员（只存在于本机 `.wrangler/state`，不影响托管环境）。首次执行时随机生成密码，写入已被 gitignore 的 `.local-dev-admin.txt`（权限 0600），不会打印到终端。重复执行不会更换密码。在首页选择独立账号登录即可。
+- **名册**：空库中没有学生。`/api/health/ready` 会因为名册检查返回 503，这是正常现象，不影响登录和开发。
 
 ## 验证
 
 ```bash
+npm run typecheck
 npm run lint
-npm test
+npm test        # 先执行 vinext build，再运行全部 Node 测试（Miniflare 加载构建产物）
 ```
 
 ## 真实试用前还需配置
