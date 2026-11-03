@@ -23,15 +23,17 @@ it must run with `node --experimental-strip-types`.
 
 ```
 claim ──► verify contextSnapshotSha256 = sha256(canonicalJson({task, baseCommitSha})) (else CONTEXT_MISMATCH)
-      ──► work/<attemptId>/repo: git fetch exactly baseCommitSha (short-lived read token via
-          one-shot http.extraHeader env; never in argv/.git/config), verify HEAD, no remotes
+      ──► work/<attemptId>/git (trusted, outside the checkout): git fetch exactly baseCommitSha
+          (short-lived read token via one-shot http.extraHeader env; never in argv/.git/config);
+          work/<attemptId>/repo: the agent's checkout, objects via alternates; verify HEAD, no remotes
       ──► prompt + policy from the task snapshot and worker config only (repo text grants nothing)
       ──► per-profile lock (<profilesDir>/<id>/.run.lock, O_EXCL, stale-pid recovery)
       ──► adapter.start → streamEvents → sanitize (redact, cap 16 kB, monotonic sequence, ≤100/batch)
       ──► heartbeat every 30 s: cancelRequested → adapter.requestCancel; 409 LEASE_LOST → stop, no result
       ──► budget: task.budget.maxAgentMinutes (capped by limits.maxAgentMinutes) → cancel, then give up
           after cancelGraceSeconds (profile stays locked until the stray run ends)
-      ──► collect: restore trusted .git/config, drop hooks, `git add -A`, raw diff vs base → files
+      ──► collect: verify .git chain (R01), `git --git-dir=<attempt>/git --work-tree=repo add -A`,
+          raw diff vs base → files
           (base64 + sha256 + mode 100644/100755), `git diff --binary` → unifiedDiff
       ──► local evaluatePathPolicy: outside allowed → failed POLICY_VIOLATION (no files sent);
           protected touched → change_ready + status event (platform sets requires_extra_review)
@@ -103,7 +105,7 @@ adapter invocation and result are byte-for-byte what they were before FB2.
 |---|---|
 | `worker.mjs` | Config, main loop, `runAttempt`, event sink, result |
 | `platform-client.mjs` | `POST /api/lab/agent-attempts` (claim, heartbeat, events, result) and `LeaseLostError` |
-| `workspace.mjs` | Fetch and checkout, credential stripping, binary-safe change collection, plan-mode dirty check and discard |
+| `workspace.mjs` | Fetch into a trusted git dir and check out, credential stripping, `.git` tamper checks (R01), binary-safe change collection, plan-mode dirty check and discard |
 | `prompt.mjs` | `buildAgentPolicy`, `buildPrompt` and `buildPlanPrompt` (task snapshot + config only) |
 | `profiles.mjs` | Profile paths, permission checks, per-profile lock |
 | `sanitize.mjs` | Redactor (exact secrets + patterns), payload capping, redacting logger |
@@ -309,7 +311,8 @@ them as `failed`/`WORKER_SHUTDOWN`.
 | No network except the model | Codex `networkAccessEnabled:false` (workspace-write sandbox). Claude has no web tools, and Bash is limited to test prefixes, **but a test command such as `pytest` can still run arbitrary repository code** | **Partly assumed.** Needs an egress firewall |
 | No access to datasets | No data paths are mounted or passed | **Assumed.** Needs a dedicated user with no data mounts |
 | Bounded runtime | `maxAgentMinutes` budget, cancel and force-stop; Claude `--max-turns` | Real (tested, T16) |
-| Planted git filters and hooks don't run on the worker | Trusted `.git/config` restored, hooks dir removed, `--no-ext-diff --no-textconv`, `GIT_NO_REPLACE_OBJECTS` | Real (tested) |
+| Planted git filters and hooks don't run on the worker | Worker git runs only against the trusted git directory outside the checkout (R01), `core.hooksPath=/dev/null`, `--no-ext-diff --no-textconv`, `GIT_NO_REPLACE_OBJECTS` | Real (tested) |
+| Collection never reads or writes outside the workspace through the agent's `.git` (R01) | The checkout's `.git` is never written or used; it is lstat-checked and symlinks, hard links, wrong types or a replaced `.git` refuse with `WORKSPACE_TAMPERED` | Real (tested, `workspace-safety.test.mjs`) |
 
 Required OS measures (recommended deployment):
 
@@ -324,6 +327,41 @@ Required OS measures (recommended deployment):
    `work/<attemptId>` and that one profile mounted. This closes the gap
    above where an agent shell command could read another profile's files.
    The current worker does not do this.
+
+### Git metadata and R01
+
+The agent can rewrite everything under `repo/.git`, including turning
+`config`, `info` or `hooks` into symlinks or hard links to files outside the
+workspace. The worker therefore never writes there and never uses it:
+
+- `prepareWorkspace` fetches into a trusted git directory, `<attempt>/git`
+  (empty template: no hooks, no `info/`; `gc.auto=0`). The checkout's own
+  `.git` reads objects from it through `objects/info/alternates`, so nothing
+  is copied or fetched twice.
+- Every worker-side git command (collection, plan-mode status and discard)
+  runs as `git --git-dir=<attempt>/git --work-tree=<attempt>/repo`. Git skips
+  any entry named `.git` in the work tree, so the agent's config, hooks,
+  `info/attributes`, index (e.g. `skip-worktree` bits) and refs are inert.
+- Before and after each such git command the worker re-checks, with `lstat`
+  and `O_NOFOLLOW` only: the attempt dir, the trusted dir and the checkout's
+  `.git` are real directories with the same `(dev, ino)` as at checkout;
+  the trusted config is byte-identical to the snapshot, singly linked, and
+  the trusted dir has no `hooks/` or `info/`; the checkout's `.git/config`
+  is a regular file with one link, and `.git/hooks`, `.git/info`,
+  `.git/info/attributes` are absent or of the right type. Any mismatch fails
+  the attempt with `WORKSPACE_TAMPERED`.
+- Because nothing is written into an agent-writable directory, the earlier
+  plan of "temp file + O_EXCL/O_NOFOLLOW + fsync + rename" over
+  `.git/config` is not needed: there is no write left to race.
+
+Residual risk: the trusted directory is only as safe as its location. It is
+outside the checkout and outside the Codex sandbox's writable roots, but an
+agent that can write `<attempt>/` (e.g. Claude Bash without an OS sandbox)
+could swap it between the check and git's own path lookup. The before/after
+checks detect such a swap but cannot prevent a planted filter from running
+in that window, because Node has no `openat`-style API to pin git to a
+directory handle. Closing that needs the dedicated-user isolation below
+(G01).
 
 ## Subscription terms caveat
 
