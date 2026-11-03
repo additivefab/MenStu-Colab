@@ -107,7 +107,8 @@ export const OWNER_LABELS: Record<Exclude<StageOwner, null>, string> = {
  * code    attempts or changeRequests null → partial: a run used a change request → done,
  *           other runs → skipped, otherwise idle (details unknown, nothing claimed)
  *         oldest CR pending_review: extra review outstanding → active · mentor, else active · student
- *         a queued/running/waiting_approval/cancel_requested attempt → working · agent
+ *         a waiting_approval attempt (plan-first: plan submitted) → active · student/mentor
+ *         a queued/running/cancel_requested attempt → working · agent
  *         a CR publishing → working · agent
  *         newest settled attempt (canceled attempts without a CR are passed over):
  *           CR open/merged → done "PR #n 已开启/已合并"; CR rejected/failed/closed → failed · student;
@@ -139,7 +140,7 @@ export const OWNER_LABELS: Record<Exclude<StageOwner, null>, string> = {
 
 type Derived = { stage: Stage; next: NextStep | null };
 
-const BUSY_ATTEMPT = new Set(["queued", "running", "waiting_approval", "cancel_requested"]);
+const BUSY_ATTEMPT = new Set(["queued", "running", "cancel_requested"]);
 const INFLIGHT_RUN = new Set(["queued", "dispatching", "running", "collecting", "cancel_requested", "reconciling"]);
 const FINAL_REVIEW = new Set(["accepted", "rejected", "needs_followup"]);
 
@@ -218,6 +219,17 @@ function codeStage(
     return {
       stage: make("code", "active", "变更待审阅发布", "student"),
       next: { text: `学生需审阅并发布${name(pending.attemptId)} 的变更`, owner: "student", target: crTarget(pending) },
+    };
+  }
+
+  // Plan-first (FB2): waiting_approval only happens when the agent submitted a
+  // plan; a human (the student or a reviewing mentor, not the requester) decides.
+  const planPending = ordered.filter((attempt) => attempt.status === "waiting_approval").at(-1);
+  if (planPending) {
+    const label = name(planPending.id);
+    return {
+      stage: { ...make("code", "active", `${label} 的修改计划待审阅`, "student"), coOwner: "mentor" },
+      next: { text: `审阅${label} 的修改计划（发起人以外的学生或导师）`, owner: "student", coOwner: "mentor", target: attemptTarget(planPending) },
     };
   }
 

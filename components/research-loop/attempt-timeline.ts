@@ -31,6 +31,7 @@ const MILESTONE_KINDS = new Set(["status", "test", "error"]);
 
 const outcomeLabels: Record<string, [string, MilestoneTone]> = {
   change_ready: ["已产出修改", "good"],
+  plan_ready: ["已提交计划", "good"],
   completed: ["已完成", "good"],
   failed: ["失败", "bad"],
   canceled: ["已取消", "neutral"],

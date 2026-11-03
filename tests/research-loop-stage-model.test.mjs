@@ -87,9 +87,9 @@ const cases = [
     next: { text: "等待代理 #2 完成代码修改", owner: "agent", target: { kind: "attempt", taskId: "task_1", attemptId: "a2" } },
   },
   {
-    name: "waiting_approval attempt counts as agent busy",
+    name: "waiting_approval attempt (plan-first: plan submitted) asks a human to review the plan",
     input: input({ attempts: [attempt("a1", 1, "waiting_approval")] }),
-    shape: { code: "working/agent" },
+    shape: { code: "active/student" },
   },
   {
     name: "cancel_requested attempt → working",
@@ -601,8 +601,21 @@ test("coOwner: invariants across every table case", () => {
       assert.equal(s.coOwner, "mentor", `${item.name}: ${s.key}`);
       assert.equal(s.state, "active", `${item.name}: ${s.key} coOwner on a ${s.state} stage`);
       assert.equal(s.owner, "student", `${item.name}: ${s.key} primary owner`);
-      assert.ok(["task", "next"].includes(s.key), `${item.name}: ${s.key} should not be shared`);
+      // Shared decisions: task confirmation, plan review (plan-first) and the next round.
+      assert.ok(["task", "code", "next"].includes(s.key), `${item.name}: ${s.key} should not be shared`);
     }
     if (result.next) assert.equal(result.next.coOwner, stage(result, result.current).coOwner, `${item.name}: next coOwner matches its stage`);
   }
+});
+
+test("a submitted plan (waiting_approval) asks a human to review it, not the agent", () => {
+  const task = { id: "task_1", studentId: "s", title: "t", status: "confirmed", currentVersion: 1, confirmedVersion: 1, sourceGuidanceNoteId: null, sourceRunId: null, parentTaskId: null, createdByUserId: 1, createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z" };
+  const attempt = { id: "att_1", taskVersion: 1, provider: "codex", modelId: "", status: "waiting_approval", baseCommitSha: "1".repeat(40), errorCode: "", errorMessage: "", requestedByUserId: 1, createdAt: "2026-11-01T00:00:01Z", startedAt: null, endedAt: null, updatedAt: "2026-11-01T00:00:02Z" };
+  const result = computeTaskStages({ task, attempts: [attempt], changeRequests: [], runs: [] });
+  const code = result.stages.find((stage) => stage.key === "code");
+  assert.equal(code.state, "active");
+  assert.equal(code.owner, "student");
+  assert.equal(code.coOwner, "mentor");
+  assert.match(code.summary, /修改计划待审阅/);
+  assert.deepEqual(result.next.target, { kind: "attempt", taskId: "task_1", attemptId: "att_1" });
 });
