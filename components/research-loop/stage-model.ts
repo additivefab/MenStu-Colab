@@ -25,6 +25,9 @@ export type Stage = {
   /** One short Chinese phrase, e.g. "第 2 版已确认" / "变更待额外审查". */
   summary: string;
   owner: StageOwner;
+  /** Optional second role that may equally act (e.g. a mentor may also confirm
+   * a student's task). Display only; `owner` stays the primary role. (batch 2) */
+  coOwner?: StageOwner;
 };
 
 export type StageTarget =
@@ -37,6 +40,8 @@ export type NextStep = {
   /** Chinese sentence naming the action and the actor, e.g. "等待导师批准运行 #3". */
   text: string;
   owner: StageOwner;
+  /** Optional second role that may equally act (batch 2). */
+  coOwner?: StageOwner;
   /** Card the next step refers to, for "前往" links and auto-focus. */
   target: StageTarget | null;
 };
